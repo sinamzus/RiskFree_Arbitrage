@@ -3,429 +3,410 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>اسکنر آربیتراژ بین‌روزی صندوق‌های درآمد ثابت</title>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
-
+<title>اسکنر آربیتراژ — صندوق‌های درآمد ثابت</title>
+<!-- TradingView Lightweight Charts v4 -->
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
+/* ── reset & vars ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg:      #0f1117;
-  --surface: #1a1d27;
-  --surface2:#212435;
-  --border:  #2a2d3e;
-  --text:    #e0e0e0;
-  --muted:   #7a7f99;
+  --bg:      #131722;
+  --surf:    #1e222d;
+  --surf2:   #262b3e;
+  --brd:     #2a2e39;
+  --txt:     #d1d4dc;
+  --muted:   #787b86;
   --green:   #26a69a;
   --red:     #ef5350;
-  --yellow:  #ffd54f;
-  --blue:    #42a5f5;
-  --accent:  #7c4dff;
-  --orange:  #ff7043;
+  --yellow:  #f0c040;
+  --blue:    #5b9cf6;
+  --purple:  #9b59b6;
+  --accent:  #5b9cf6;
 }
-* { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   background: var(--bg);
-  color: var(--text);
-  font-family: "Segoe UI", Tahoma, "Vazir", sans-serif;
+  color: var(--txt);
+  font-family: "Segoe UI", Tahoma, Arial, sans-serif;
   font-size: 13px;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── header ── */
 header {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 10px 16px;
+  height: 46px;
+  min-height: 46px;
+  background: var(--surf);
+  border-bottom: 1px solid var(--brd);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  padding: 0 12px;
+  flex-shrink: 0;
 }
-header h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
 #status-dot {
-  width: 9px; height: 9px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%;
   background: #555; flex-shrink: 0;
   transition: background .4s;
 }
-#status-dot.live  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+#status-dot.live  { background: var(--green); box-shadow: 0 0 5px var(--green); }
 #status-dot.stale { background: var(--yellow); }
-#last-scan { font-size: 11px; color: var(--muted); margin-right: auto; white-space: nowrap; }
-#sel-count {
-  font-size: 11px; color: var(--blue); display: none;
-  background: rgba(66,165,245,.12); padding: 2px 8px; border-radius: 12px;
-}
+header h1 { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.h-sep  { width: 1px; height: 20px; background: var(--brd); flex-shrink: 0; }
 
-/* ── layout ── */
-.layout {
-  display: grid;
-  grid-template-columns: 248px 1fr;
-  height: calc(100vh - 47px);
+/* TF pills */
+.tf-grp { display: flex; gap: 1px; background: var(--bg); border: 1px solid var(--brd); border-radius: 4px; padding: 2px; }
+.tf-btn {
+  background: transparent; border: none; color: var(--muted);
+  padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;
+  cursor: pointer; transition: all .12s;
+}
+.tf-btn:hover  { color: var(--txt); background: rgba(255,255,255,.06); }
+.tf-btn.on     { background: var(--accent); color: #fff; }
+
+/* Source + chart type toggles */
+.tog-grp { display: flex; gap: 1px; background: var(--bg); border: 1px solid var(--brd); border-radius: 4px; padding: 2px; }
+.tog-btn {
+  background: transparent; border: none; color: var(--muted);
+  padding: 2px 9px; border-radius: 3px; font-size: 11px;
+  cursor: pointer; transition: all .12s;
+}
+.tog-btn:hover { color: var(--txt); background: rgba(255,255,255,.06); }
+.tog-btn.on    { background: var(--surf2); color: var(--txt); }
+
+/* checkboxes */
+.chk-lbl {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+.chk-lbl input { cursor: pointer; accent-color: var(--accent); }
+
+#last-scan { font-size: 11px; color: var(--muted); margin-right: auto; white-space: nowrap; }
+#sel-badge {
+  font-size: 10px; background: rgba(91,156,246,.15);
+  color: var(--blue); padding: 2px 8px; border-radius: 10px;
+  display: none; white-space: nowrap;
+}
+.scan-btn {
+  background: var(--accent); border: none; color: #fff;
+  padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600;
+  cursor: pointer; flex-shrink: 0;
+}
+.scan-btn:hover    { filter: brightness(1.15); }
+.scan-btn:disabled { opacity: .5; cursor: default; }
+
+/* ── body layout ── */
+.body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
 }
 
 /* ── fund list ── */
 .fund-list {
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  width: 232px;
+  min-width: 232px;
+  background: var(--surf);
+  border-left: 1px solid var(--brd);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.fund-list-header {
-  padding: 8px 12px 6px;
-  border-bottom: 1px solid var(--border);
+.fl-head {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--brd);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.fund-list-header span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
-#fund-items { overflow-y: auto; flex: 1; }
-
-.fund-item {
-  padding: 8px 12px;
-  cursor: pointer;
-  border-right: 3px solid transparent;
-  transition: background .12s;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
   gap: 6px;
-  border-bottom: 1px solid rgba(255,255,255,.03);
-}
-.fund-item:hover { background: rgba(255,255,255,.04); }
-.fund-item.active {
-  background: rgba(124,77,255,.12);
-  border-right-color: var(--accent);
-}
-.fund-item.multi-sel {
-  background: rgba(66,165,245,.08);
-  border-right-color: var(--blue);
-}
-.fi-left { display: flex; flex-direction: column; gap: 2px; }
-.fi-symbol { font-weight: 700; font-size: 14px; }
-.fi-price  { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.fi-right  { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-.fi-pd {
-  font-size: 12px; font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.fi-pd.pos  { color: var(--red); }
-.fi-pd.neg  { color: var(--green); }
-.fi-pd.zero { color: var(--muted); }
-
-.sig-badge {
-  font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700;
-}
-.sig-BUY  { background: rgba(38,166,154,.2); color: var(--green); }
-.sig-SELL { background: rgba(239,83,80,.2);  color: var(--red); }
-.sig-HOLD { background: rgba(122,127,153,.15); color: var(--muted); }
-
-/* ── main panel ── */
-.main-panel {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* ── controls ── */
-.controls {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 8px 14px;
-  display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
-
-/* timeframe pills */
-.tf-group {
-  display: flex;
-  gap: 2px;
+#fl-search {
+  flex: 1;
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 2px;
-}
-.tf-pill {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: background .12s, color .12s;
-}
-.tf-pill:hover  { background: rgba(255,255,255,.06); color: var(--text); }
-.tf-pill.active { background: var(--accent); color: #fff; }
-
-/* source toggle */
-.src-group {
-  display: flex;
-  gap: 2px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 2px;
-}
-.src-btn {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  padding: 3px 9px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background .12s, color .12s;
-}
-.src-btn:hover  { background: rgba(255,255,255,.06); color: var(--text); }
-.src-btn.active { background: var(--blue); color: #fff; }
-
-/* metric select */
-select, .ctrl-btn {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
+  border: 1px solid var(--brd);
+  color: var(--txt);
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 12px;
+  direction: rtl;
+}
+#fl-search::placeholder { color: var(--muted); }
+#fl-search:focus { outline: 1px solid var(--accent); }
+#fl-sort {
+  background: var(--bg);
+  border: 1px solid var(--brd);
+  color: var(--muted);
+  padding: 4px 4px;
+  border-radius: 4px;
+  font-size: 11px;
   cursor: pointer;
 }
-select:focus { outline: 2px solid var(--accent); }
+#fl-items { overflow-y: auto; flex: 1; }
 
-.ctrl-chk {
+.fi {
+  padding: 7px 10px;
+  cursor: pointer;
+  border-right: 3px solid transparent;
+  border-bottom: 1px solid rgba(255,255,255,.025);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  transition: background .1s;
+}
+.fi:hover { background: rgba(255,255,255,.04); }
+.fi.sel1  { border-right-color: var(--accent); background: rgba(91,156,246,.1); }
+.fi.selN  { border-right-color: var(--green);  background: rgba(38,166,154,.07); }
+.fi-sym  { font-weight: 700; font-size: 14px; }
+.fi-price{ font-size: 10px; color: var(--muted); margin-top: 2px; }
+.fi-right{ display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.fi-pd   { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fi-pd.pos  { color: var(--red); }
+.fi-pd.neg  { color: var(--green); }
+.fi-pd.zero { color: var(--muted); }
+.sig {
+  font-size: 9px; font-weight: 700;
+  padding: 1px 5px; border-radius: 2px;
+}
+.sig-BUY  { background: rgba(38,166,154,.2);  color: var(--green); }
+.sig-SELL { background: rgba(239,83,80,.2);   color: var(--red); }
+.sig-HOLD { background: rgba(120,123,134,.15); color: var(--muted); }
+
+/* ── main panel ── */
+.main { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+/* OHLCV info bar */
+.info-bar {
+  height: 28px;
+  min-height: 28px;
+  background: var(--surf);
+  border-bottom: 1px solid var(--brd);
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-}
-.ctrl-chk input { cursor: pointer; }
-
-.sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
-
-#compare-hint {
-  font-size: 10px; color: var(--muted);
-  margin-right: auto;
-}
-
-button.primary {
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  color: #fff;
-  padding: 4px 12px;
-  border-radius: 4px;
+  gap: 16px;
+  padding: 0 12px;
   font-size: 12px;
-  cursor: pointer;
-  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
-button.primary:hover   { filter: brightness(1.15); }
-button.primary:disabled { opacity: .6; cursor: default; }
+#info-sym   { font-weight: 700; color: var(--txt); }
+#info-time  { color: var(--muted); font-size: 11px; }
+.info-lbl   { color: var(--muted); }
+#info-o, #info-h, #info-l, #info-c, #info-nav, #info-vol, #info-prem { font-weight: 600; }
+#info-prem  { }
 
-/* ── chart ── */
-.chart-wrap {
+/* charts area */
+.charts {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   position: relative;
-  padding: 12px 14px 8px;
-  min-height: 0;
 }
-#main-chart { width: 100% !important; height: 100% !important; }
-
-/* ── bottom ── */
-.bottom {
-  display: grid;
-  grid-template-columns: 300px 1fr;
-  border-top: 1px solid var(--border);
-  height: 200px;
+#price-el {
+  flex: 65;
+  position: relative;
   overflow: hidden;
 }
-.stats-panel {
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  padding: 10px 14px;
+#prem-el {
+  flex: 25;
+  border-top: 2px solid var(--brd);
+  position: relative;
+  overflow: hidden;
+}
+.chart-label {
+  position: absolute;
+  top: 6px; right: 10px;
+  font-size: 10px; color: var(--muted);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* bootstrap notice */
+#boot-notice {
+  display: none;
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(30,34,45,.95);
+  border: 1px solid var(--yellow);
+  border-radius: 6px;
+  padding: 14px 20px;
+  text-align: center;
+  z-index: 10;
+  pointer-events: none;
+}
+#boot-notice b { color: var(--yellow); }
+#boot-notice code { background: var(--bg); padding: 2px 6px; border-radius: 3px; }
+
+/* ── bottom: stats + table ── */
+.bottom {
+  height: 170px;
+  min-height: 170px;
+  display: flex;
+  border-top: 2px solid var(--brd);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.stats {
+  width: 270px;
+  min-width: 270px;
+  background: var(--surf);
+  border-left: 1px solid var(--brd);
+  padding: 8px 12px;
   overflow-y: auto;
 }
-.stats-panel h3 { font-size: 11px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; }
-.stat-row {
+.stats h3 { font-size: 10px; color: var(--muted); text-transform: uppercase; margin-bottom: 7px; letter-spacing: .4px; }
+.sr {
   display: flex;
   justify-content: space-between;
   padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,.04);
   font-size: 12px;
 }
-.stat-val { font-weight: 600; font-variant-numeric: tabular-nums; }
-.stat-val.pos { color: var(--red); }
-.stat-val.neg { color: var(--green); }
-.z-warn { color: var(--yellow) !important; }
-
-.table-wrap { overflow: auto; }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
+.sv { font-weight: 600; font-variant-numeric: tabular-nums; }
+.sv.pos  { color: var(--red); }
+.sv.neg  { color: var(--green); }
+.sv.warn { color: var(--yellow); }
+.tbl-wrap { flex: 1; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th {
-  background: var(--surface);
+  background: var(--surf);
   color: var(--muted);
   padding: 5px 8px;
   text-align: right;
-  position: sticky; top: 0;
   font-weight: 500;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--border);
-}
-td {
-  padding: 4px 8px;
-  border-bottom: 1px solid rgba(255,255,255,.04);
-  font-variant-numeric: tabular-nums;
+  position: sticky; top: 0; z-index: 1;
+  border-bottom: 1px solid var(--brd);
   white-space: nowrap;
 }
+td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,.03); white-space: nowrap; font-variant-numeric: tabular-nums; }
 tr:hover td { background: rgba(255,255,255,.03); }
-.c-buy  { color: var(--green); font-weight: 600; }
-.c-sell { color: var(--red);   font-weight: 600; }
-.c-muted { color: var(--muted); }
+.cb { color: var(--green); font-weight: 600; }
+.cs { color: var(--red);   font-weight: 600; }
+.cm { color: var(--muted); }
 
-/* ── no-bootstrap notice ── */
-#no-bootstrap {
-  font-size: 11px; color: var(--yellow);
-  background: rgba(255,213,79,.07);
-  border: 1px solid rgba(255,213,79,.2);
-  padding: 4px 10px; border-radius: 4px;
-  display: none;
-}
-
-/* ── loading ── */
+/* ── loading overlay ── */
 #loading {
   position: fixed; inset: 0;
-  background: rgba(15,17,23,.85);
+  background: rgba(19,23,34,.9);
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  gap: 12px; z-index: 100;
+  gap: 12px; z-index: 999;
 }
-.spinner {
-  width: 32px; height: 32px;
-  border: 3px solid var(--border);
+.spin {
+  width: 30px; height: 30px;
+  border: 3px solid var(--brd);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 #loading.hidden { display: none; }
-
-.empty-chart {
-  position: absolute; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--muted); font-size: 14px; pointer-events: none;
-}
-.empty-chart.hidden { display: none; }
 </style>
 </head>
 <body>
 
-<div id="loading">
-  <div class="spinner"></div>
-  <span>در حال بارگذاری ...</span>
-</div>
+<div id="loading"><div class="spin"></div><span>در حال بارگذاری ...</span></div>
 
+<!-- ── Header ── -->
 <header>
   <div id="status-dot"></div>
   <h1>📈 آربیتراژ بین‌روزی — صندوق‌های درآمد ثابت</h1>
-  <span id="sel-count"></span>
+  <div class="h-sep"></div>
+
+  <!-- Timeframe -->
+  <div class="tf-grp">
+    <button class="tf-btn" data-d="7"   onclick="setDays(7)">۱W</button>
+    <button class="tf-btn on" data-d="30"  onclick="setDays(30)">۱M</button>
+    <button class="tf-btn" data-d="90"  onclick="setDays(90)">۳M</button>
+    <button class="tf-btn" data-d="180" onclick="setDays(180)">۶M</button>
+    <button class="tf-btn" data-d="365" onclick="setDays(365)">۱Y</button>
+  </div>
+
+  <div class="h-sep"></div>
+
+  <!-- Data source -->
+  <div class="tog-grp">
+    <button class="tog-btn on" id="src-daily" onclick="setSrc('daily')">روزانه</button>
+    <button class="tog-btn"    id="src-scan"  onclick="setSrc('scan')">اسکن‌ها</button>
+  </div>
+
+  <div class="h-sep"></div>
+
+  <!-- Chart type (only for single fund) -->
+  <div class="tog-grp" id="ctype-grp">
+    <button class="tog-btn on" id="ct-candle" onclick="setCType('candle')">🕯 شمعی</button>
+    <button class="tog-btn"    id="ct-line"   onclick="setCType('line')">📈 خطی</button>
+  </div>
+
+  <!-- Checkboxes -->
+  <label class="chk-lbl"><input type="checkbox" id="show-nav" checked onchange="redraw()"> NAV</label>
+  <label class="chk-lbl"><input type="checkbox" id="show-vol" checked onchange="redraw()"> حجم</label>
+  <label class="chk-lbl"><input type="checkbox" id="normalize" onchange="redraw()"> نرمال</label>
+
+  <span id="sel-badge"></span>
   <span id="last-scan">آخرین اسکن: —</span>
-  <div id="no-bootstrap">⚠ تاریخچه روزانه موجود نیست — <code>python main.py --bootstrap</code></div>
-  <button class="primary" onclick="triggerScan()">🔄 اسکن</button>
+  <button class="scan-btn" onclick="triggerScan()">🔄 اسکن</button>
 </header>
 
-<div class="layout">
+<!-- ── Body ── -->
+<div class="body">
 
-  <!-- ── Fund list ── -->
+  <!-- Fund list -->
   <aside class="fund-list">
-    <div class="fund-list-header">
-      <span>صندوق‌ها</span>
-      <span style="font-size:10px">Ctrl+کلیک: مقایسه</span>
+    <div class="fl-head">
+      <input id="fl-search" placeholder="🔍 جستجو ..." oninput="renderFundList()">
+      <select id="fl-sort" onchange="renderFundList()">
+        <option value="pd">صرف%</option>
+        <option value="price">قیمت</option>
+        <option value="vol">حجم</option>
+        <option value="sym">نماد</option>
+      </select>
     </div>
-    <div id="fund-items">
-      <div style="height:100px;display:flex;align-items:center;justify-content:center;color:var(--muted)">
-        هنوز داده‌ای نیست
-      </div>
-    </div>
+    <div id="fl-items"></div>
   </aside>
 
-  <!-- ── Main panel ── -->
-  <div class="main-panel">
+  <!-- Main panel -->
+  <div class="main">
 
-    <!-- Controls -->
-    <div class="controls">
-
-      <!-- Timeframe pills -->
-      <div class="tf-group" id="tf-group">
-        <button class="tf-pill" data-days="7"   onclick="setDays(7)">۱W</button>
-        <button class="tf-pill active" data-days="30"  onclick="setDays(30)">۱M</button>
-        <button class="tf-pill" data-days="90"  onclick="setDays(90)">۳M</button>
-        <button class="tf-pill" data-days="180" onclick="setDays(180)">۶M</button>
-        <button class="tf-pill" data-days="365" onclick="setDays(365)">۱Y</button>
-      </div>
-
-      <div class="sep"></div>
-
-      <!-- Data source -->
-      <div class="src-group">
-        <button class="src-btn active" id="src-daily" onclick="setSource('daily')">روزانه</button>
-        <button class="src-btn"        id="src-scan"  onclick="setSource('scan')">اسکن‌ها</button>
-      </div>
-
-      <div class="sep"></div>
-
-      <!-- Metric -->
-      <select id="metric-select" onchange="reloadChart()">
-        <option value="premium_discount_pct">صرف/تخفیف %</option>
-        <option value="price_nav">قیمت + NAV</option>
-        <option value="market_price">قیمت</option>
-        <option value="net_profit_pct">سود خالص %</option>
-      </select>
-
-      <!-- Checkboxes -->
-      <label class="ctrl-chk">
-        <input type="checkbox" id="normalize" onchange="reloadChart()">
-        نرمال‌سازی
-      </label>
-      <label class="ctrl-chk">
-        <input type="checkbox" id="show-bands" checked onchange="reloadChart()">
-        باند ±σ
-      </label>
-      <label class="ctrl-chk">
-        <input type="checkbox" id="show-threshold" checked onchange="reloadChart()">
-        آستانه
-      </label>
-
-      <span id="compare-hint">Ctrl+کلیک برای مقایسه چند نماد</span>
+    <!-- OHLCV info bar -->
+    <div class="info-bar">
+      <span id="info-sym">—</span>
+      <span id="info-time" class="info-lbl"></span>
+      <span class="info-lbl">O:</span><span id="info-o">—</span>
+      <span class="info-lbl">H:</span><span id="info-h">—</span>
+      <span class="info-lbl">L:</span><span id="info-l">—</span>
+      <span class="info-lbl">C:</span><span id="info-c">—</span>
+      <span class="info-lbl">NAV:</span><span id="info-nav">—</span>
+      <span class="info-lbl">حجم:</span><span id="info-vol">—</span>
+      <span class="info-lbl">صرف:</span><span id="info-prem">—</span>
     </div>
 
-    <!-- Chart -->
-    <div class="chart-wrap">
-      <canvas id="main-chart"></canvas>
-      <div id="chart-empty" class="empty-chart">
-        <span>یک صندوق را از فهرست انتخاب کنید</span>
+    <!-- Charts -->
+    <div class="charts">
+      <div id="price-el">
+        <div class="chart-label" id="price-lbl">قیمت + NAV</div>
+      </div>
+      <div id="prem-el">
+        <div class="chart-label">صرف / تخفیف %</div>
+      </div>
+      <div id="boot-notice">
+        <div style="margin-bottom:8px;font-size:14px">⚠ تاریخچه روزانه موجود نیست</div>
+        <div style="font-size:12px;color:var(--muted)">برای دانلود ۳۶۵ روز تاریخچه اجرا کنید:</div>
+        <div style="margin-top:8px"><code>python main.py --bootstrap</code></div>
       </div>
     </div>
 
     <!-- Bottom: stats + table -->
     <div class="bottom">
-
-      <div class="stats-panel" id="stats-panel">
-        <h3 id="stats-title">آمار میانگین‌گردانی</h3>
+      <div class="stats">
+        <h3 id="stats-sym">آمار</h3>
         <div id="stats-content">
-          <div style="height:60px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px">
-            صندوقی انتخاب نشده
-          </div>
+          <div style="color:var(--muted);font-size:11px;margin-top:8px">صندوقی انتخاب نشده</div>
         </div>
       </div>
-
-      <div class="table-wrap">
+      <div class="tbl-wrap">
         <table>
           <thead>
             <tr>
@@ -439,42 +420,128 @@ tr:hover td { background: rgba(255,255,255,.03); }
               <th>Z-score</th>
             </tr>
           </thead>
-          <tbody id="opp-tbody"></tbody>
+          <tbody id="tbl-body"></tbody>
         </table>
       </div>
-
     </div>
-  </div>
-</div>
+
+  </div><!-- .main -->
+</div><!-- .body -->
 
 <script>
-// ─── constants ───────────────────────────────────────────────────────────────
-const COLORS = [
-  '#7c4dff','#42a5f5','#26a69a','#ef5350','#ffd54f',
-  '#ab47bc','#26c6da','#d4e157','#ff7043','#66bb6a',
-  '#ec407a','#29b6f6','#8d6e63','#78909c','#5c6bc0',
-  '#e91e63','#00bcd4','#ff5722','#4caf50','#ffca28',
+// ═══════════════════════════════════════════════════════════════════════
+//  Constants
+// ═══════════════════════════════════════════════════════════════════════
+const { createChart, CrosshairMode, LineStyle, PriceScaleMode } = LightweightCharts;
+
+const TV = {
+  bg: '#131722', surface: '#1e222d', border: '#2a2e39',
+  text: '#d1d4dc', muted: '#787b86',
+};
+// Series colors for multi-fund
+const PALETTE = [
+  '#5b9cf6','#26a69a','#f0c040','#ef5350',
+  '#ab47bc','#ff7043','#26c6da','#66bb6a',
+  '#ec407a','#ffca28','#78909c','#7986cb',
 ];
 
-// ─── state ───────────────────────────────────────────────────────────────────
-let chart         = null;
-let selected      = new Set();   // currently shown symbols
-let latestFunds   = [];          // from /api/funds
-let allStats      = {};          // {symbol: stats}
-let cache         = {};          // "sym_days_src" → rows[]
-let days          = 30;
-let source        = 'daily';     // 'daily' | 'scan'
+// ═══════════════════════════════════════════════════════════════════════
+//  State
+// ═══════════════════════════════════════════════════════════════════════
+let priceChart  = null;
+let premChart   = null;
+let activeSeries = {};   // sym → { price|candle, nav, vol, prem }
+let latestFunds = [];
+let allStats    = {};
+let cache       = {};    // key → rows[]
+let selected    = new Set();
+let days        = 30;
+let src         = 'daily';   // 'daily' | 'scan'
+let ctype       = 'candle';  // 'candle' | 'line'
+let syncing     = false;
 
-// ─── boot ────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+//  Boot
+// ═══════════════════════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', () => {
+  buildCharts();
   initSSE();
   loadFunds();
   loadAllStats();
   setInterval(loadFunds, 60_000);
   setInterval(loadAllStats, 120_000);
+  window.addEventListener('resize', () => resizeCharts());
 });
 
-// ─── SSE ─────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+//  Chart construction
+// ═══════════════════════════════════════════════════════════════════════
+function chartOptions(el) {
+  return {
+    width:  el.clientWidth,
+    height: el.clientHeight,
+    layout: { background: { color: TV.bg }, textColor: TV.text },
+    grid:   { vertLines: { color: TV.border }, horzLines: { color: TV.border } },
+    crosshair: { mode: CrosshairMode.Normal },
+    rightPriceScale: { borderColor: TV.border },
+    timeScale: { borderColor: TV.border, timeVisible: false },
+    handleScroll: true, handleScale: true,
+  };
+}
+
+function buildCharts() {
+  const priceEl = document.getElementById('price-el');
+  const premEl  = document.getElementById('prem-el');
+
+  if (priceChart) { priceChart.remove(); priceChart = null; }
+  if (premChart)  { premChart.remove();  premChart  = null; }
+
+  priceChart = createChart(priceEl, chartOptions(priceEl));
+  premChart  = createChart(premEl,  {
+    ...chartOptions(premEl),
+    timeScale: { borderColor: TV.border, timeVisible: true },
+  });
+
+  // Synchronize time ranges
+  priceChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+    if (syncing || !range) return;
+    syncing = true;
+    premChart.timeScale().setVisibleRange(range);
+    syncing = false;
+  });
+  premChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+    if (syncing || !range) return;
+    syncing = true;
+    priceChart.timeScale().setVisibleRange(range);
+    syncing = false;
+  });
+
+  // Crosshair sync
+  priceChart.subscribeCrosshairMove(param => {
+    updateInfoBar(param);
+    if (param.time && Object.values(activeSeries)[0]?.prem) {
+      try { premChart.setCrosshairPosition(0, param.time, Object.values(activeSeries)[0].prem); }
+      catch(e) {}
+    }
+  });
+  premChart.subscribeCrosshairMove(param => {
+    if (param.time && Object.values(activeSeries)[0]?.price) {
+      try { priceChart.setCrosshairPosition(0, param.time, Object.values(activeSeries)[0].price); }
+      catch(e) {}
+    }
+  });
+}
+
+function resizeCharts() {
+  const priceEl = document.getElementById('price-el');
+  const premEl  = document.getElementById('prem-el');
+  if (priceChart) priceChart.resize(priceEl.clientWidth, priceEl.clientHeight);
+  if (premChart)  premChart.resize( premEl.clientWidth,  premEl.clientHeight);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SSE
+// ═══════════════════════════════════════════════════════════════════════
 function initSSE() {
   const dot = document.getElementById('status-dot');
   const es  = new EventSource('/api/stream');
@@ -486,375 +553,496 @@ function initSSE() {
       document.getElementById('last-scan').textContent =
         'آخرین اسکن: ' + new Date(d.timestamp).toLocaleTimeString('fa-IR');
       latestFunds = d.funds || [];
-      renderFundList(latestFunds);
+      cache = {};
+      renderFundList();
       renderTable(latestFunds);
-      invalidateCache();
-      reloadChart();
+      redraw();
     }
   };
   es.onerror = () => { dot.className = 'stale'; };
 }
 
-// ─── data loaders ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+//  Data loading
+// ═══════════════════════════════════════════════════════════════════════
 async function loadFunds() {
   const r = await fetch('/api/funds').catch(() => null);
-  if (!r || !r.ok) return;
+  if (!r?.ok) return;
   const d = await r.json();
   latestFunds = d.funds || [];
-  if (d.last_scan) {
+  if (d.last_scan)
     document.getElementById('last-scan').textContent =
       'آخرین اسکن: ' + new Date(d.last_scan + 'Z').toLocaleTimeString('fa-IR');
-  }
-  renderFundList(latestFunds);
+  renderFundList();
   renderTable(latestFunds);
   document.getElementById('loading').classList.add('hidden');
   if (selected.size === 0 && latestFunds.length > 0) {
-    selectSingle(latestFunds[0].symbol);
-    reloadChart();
+    selected.add(latestFunds[0].symbol);
+    renderFundList();
+    redraw();
   }
 }
 
 async function loadAllStats() {
   const r = await fetch('/api/all_stats?days=' + days).catch(() => null);
-  if (!r || !r.ok) return;
+  if (!r?.ok) return;
   allStats = await r.json();
   renderTable(latestFunds);
   if (selected.size === 1) renderStats([...selected][0]);
 }
 
-async function fetchHistory(symbol, d, src) {
-  const key = `${symbol}_${d}_${src}`;
+async function fetchRows(sym) {
+  const key = `${sym}_${days}_${src}`;
   if (cache[key]) return cache[key];
-  let url, rows = [];
+  let rows = [];
   if (src === 'daily') {
-    const r = await fetch(`/api/daily_history?symbol=${enc(symbol)}&days=${d}`).catch(() => null);
-    if (r && r.ok) { const j = await r.json(); rows = j.history || []; }
-    // If empty, show bootstrap notice
-    if (!rows.length) document.getElementById('no-bootstrap').style.display = '';
-    else              document.getElementById('no-bootstrap').style.display = 'none';
+    const r = await fetch(`/api/daily_history?symbol=${enc(sym)}&days=${days}`).catch(() => null);
+    if (r?.ok) { const j = await r.json(); rows = j.history || []; }
   } else {
-    const r = await fetch(`/api/history?symbol=${enc(symbol)}&days=${d}`).catch(() => null);
-    if (r && r.ok) { const j = await r.json(); rows = j.history || []; }
+    const r = await fetch(`/api/history?symbol=${enc(sym)}&days=${days}`).catch(() => null);
+    if (r?.ok) { const j = await r.json(); rows = j.history || []; }
   }
   cache[key] = rows;
   return rows;
 }
 
-// ─── fund list ───────────────────────────────────────────────────────────────
-function renderFundList(funds) {
-  const el = document.getElementById('fund-items');
+// ═══════════════════════════════════════════════════════════════════════
+//  Fund list
+// ═══════════════════════════════════════════════════════════════════════
+function renderFundList() {
+  const q   = (document.getElementById('fl-search').value || '').toLowerCase();
+  const srt = document.getElementById('fl-sort').value;
+
+  let funds = [...latestFunds];
+  if (q) funds = funds.filter(f =>
+    f.symbol.includes(q) || (f.name || '').includes(q)
+  );
+  funds.sort((a, b) => {
+    if (srt === 'pd')    return Math.abs(b.premium_discount_pct||0) - Math.abs(a.premium_discount_pct||0);
+    if (srt === 'price') return (b.market_price||0) - (a.market_price||0);
+    if (srt === 'vol')   return (b.volume||0) - (a.volume||0);
+    return a.symbol.localeCompare(b.symbol);
+  });
+
+  const el = document.getElementById('fl-items');
   if (!funds.length) {
-    el.innerHTML = '<div style="padding:16px;color:var(--muted);text-align:center">هنوز داده‌ای نیست</div>';
+    el.innerHTML = '<div style="padding:16px;color:var(--muted);text-align:center">داده‌ای نیست</div>';
     return;
   }
   el.innerHTML = funds.map(f => {
     const pd  = f.premium_discount_pct || 0;
     const cls = pd > 0.05 ? 'pos' : pd < -0.05 ? 'neg' : 'zero';
     const sig = f.signal || 'HOLD';
-    const price = f.market_price ? formatNum(f.market_price) + ' ﷼' : '—';
-    const nav   = f.nav          ? formatNum(f.nav)           + ' ﷼' : '';
-    const active = selected.has(f.symbol)
-      ? (selected.size > 1 ? 'multi-sel' : 'active')
-      : '';
-    return `<div class="fund-item ${active}" onclick="handleClick(event,'${f.symbol}')">
-      <div class="fi-left">
-        <span class="fi-symbol">${f.symbol}</span>
-        <span class="fi-price">${price}${nav ? ' | ' + nav : ''}</span>
+    const price = f.market_price ? fmtP(f.market_price) + ' ﷼' : '—';
+    const nav   = f.nav          ? fmtP(f.nav)           + ' ﷼' : '';
+    const selCls = !selected.has(f.symbol) ? '' :
+                   selected.size === 1 ? 'sel1' : 'selN';
+    return `<div class="fi ${selCls}" onclick="handleClick(event,'${f.symbol}')">
+      <div>
+        <div class="fi-sym">${f.symbol}</div>
+        <div class="fi-price">${price}${nav ? ' <span style="color:var(--brd)">|</span> ' + nav : ''}</div>
       </div>
       <div class="fi-right">
-        <span class="fi-pd ${cls}">${pd >= 0 ? '+' : ''}${pd.toFixed(2)}%</span>
-        <span class="sig-badge sig-${sig}">${sigLabel(sig)}</span>
+        <span class="fi-pd ${cls}">${pd>=0?'+':''}${pd.toFixed(2)}%</span>
+        <span class="sig sig-${sig}">${sig==='BUY'?'خرید':sig==='SELL'?'فروش':'—'}</span>
       </div>
     </div>`;
   }).join('');
 }
 
-// ─── selection ───────────────────────────────────────────────────────────────
 function handleClick(ev, sym) {
   if (ev.ctrlKey || ev.metaKey) {
-    if (selected.has(sym)) selected.delete(sym);
-    else selected.add(sym);
+    if (selected.has(sym)) { selected.delete(sym); }
+    else { selected.add(sym); }
   } else {
     selected.clear();
     selected.add(sym);
   }
-  const cnt = document.getElementById('sel-count');
+  const badge = document.getElementById('sel-badge');
   if (selected.size > 1) {
-    cnt.style.display = '';
-    cnt.textContent = selected.size + ' نماد انتخاب';
+    badge.style.display = '';
+    badge.textContent = selected.size + ' نماد';
+    // Multi-fund: force line mode, hide candle toggle
+    document.getElementById('ctype-grp').style.opacity = '.4';
+    document.getElementById('ctype-grp').style.pointerEvents = 'none';
   } else {
-    cnt.style.display = 'none';
+    badge.style.display = 'none';
+    document.getElementById('ctype-grp').style.opacity = '';
+    document.getElementById('ctype-grp').style.pointerEvents = '';
   }
-  renderFundList(latestFunds);
-  reloadChart();
+  renderFundList();
   if (selected.size === 1) renderStats([...selected][0]);
+  redraw();
 }
 
-function selectSingle(sym) {
-  selected.clear();
-  selected.add(sym);
-}
-
-// ─── TF / source ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+//  Controls
+// ═══════════════════════════════════════════════════════════════════════
 function setDays(n) {
   days = n;
-  document.querySelectorAll('.tf-pill').forEach(b => {
-    b.classList.toggle('active', +b.dataset.days === n);
-  });
-  invalidateCache();
-  reloadChart();
+  document.querySelectorAll('.tf-btn').forEach(b =>
+    b.classList.toggle('on', +b.dataset.d === n)
+  );
+  cache = {};
   loadAllStats();
+  redraw();
 }
 
-function setSource(src) {
-  source = src;
-  document.getElementById('src-daily').classList.toggle('active', src === 'daily');
-  document.getElementById('src-scan' ).classList.toggle('active', src === 'scan');
-  // In scan mode, normalize makes less sense for premium%; in daily it's the default key
-  invalidateCache();
-  reloadChart();
+function setSrc(s) {
+  src = s;
+  document.getElementById('src-daily').classList.toggle('on', s === 'daily');
+  document.getElementById('src-scan' ).classList.toggle('on', s === 'scan');
+  cache = {};
+  redraw();
 }
 
-function invalidateCache() { cache = {}; }
-
-// ─── chart ───────────────────────────────────────────────────────────────────
-async function reloadChart() {
-  if (!selected.size) {
-    destroyChart();
-    document.getElementById('chart-empty').classList.remove('hidden');
-    return;
-  }
-  document.getElementById('chart-empty').classList.add('hidden');
-
-  const metric    = document.getElementById('metric-select').value;
-  const normalize = document.getElementById('normalize').checked;
-  const showBands = document.getElementById('show-bands').checked;
-  const showThr   = document.getElementById('show-threshold').checked;
-
-  const allRows = {};
-  for (const sym of selected) {
-    allRows[sym] = await fetchHistory(sym, days, source);
-  }
-
-  const datasets    = buildDatasets(allRows, metric, normalize);
-  const annotations = buildAnnotations(metric, allRows, showBands, showThr);
-
-  const yLabel = getYLabel(metric, normalize);
-  renderChart(datasets, yLabel, annotations);
+function setCType(t) {
+  ctype = t;
+  document.getElementById('ct-candle').classList.toggle('on', t === 'candle');
+  document.getElementById('ct-line'  ).classList.toggle('on', t === 'line');
+  redraw();
 }
 
-function buildDatasets(allRows, metric, normalize) {
-  const datasets = [];
+// ═══════════════════════════════════════════════════════════════════════
+//  Main draw
+// ═══════════════════════════════════════════════════════════════════════
+async function redraw() {
+  if (!priceChart) return;
+  // Clear old series
+  clearSeries();
+
+  if (!selected.size) return;
+
+  const showNav  = document.getElementById('show-nav').checked;
+  const showVol  = document.getElementById('show-vol').checked;
+  const doNorm   = document.getElementById('normalize').checked;
+  const multi    = selected.size > 1;
+
+  const bootNotice = document.getElementById('boot-notice');
+  bootNotice.style.display = 'none';
+
+  let anyData = false;
   let ci = 0;
 
-  for (const [sym, rows] of Object.entries(allRows)) {
-    if (!rows.length) continue;
-    const color = COLORS[ci % COLORS.length]; ci++;
+  for (const sym of selected) {
+    const rows = await fetchRows(sym);
+    if (!rows.length) {
+      if (src === 'daily') bootNotice.style.display = '';
+      continue;
+    }
+    anyData = true;
+    const color = PALETTE[ci % PALETTE.length]; ci++;
 
-    if (metric === 'price_nav') {
-      // Two lines: price (solid) + NAV (dashed)
-      const [priceKey, navKey] = source === 'daily'
-        ? ['close_price', 'yesterday_price']
-        : ['market_price', 'nav'];
-
-      datasets.push({
-        label: sym + ' قیمت',
-        data:  rows.map(r => ({ x: toDate(r, source), y: r[priceKey] || 0 })),
-        borderColor: color,
-        backgroundColor: color + '15',
-        borderWidth: 2,
-        pointRadius: rows.length > 120 ? 0 : 2,
-        fill: false,
-        order: 1,
-      });
-      datasets.push({
-        label: sym + ' NAV',
-        data:  rows.map(r => ({ x: toDate(r, source), y: r[navKey] || 0 })),
-        borderColor: color + 'aa',
-        borderDash: [5, 3],
-        borderWidth: 1.5,
-        pointRadius: 0,
-        fill: false,
-        order: 2,
-      });
-
+    if (multi) {
+      // ── Multi-fund: line chart only ────────────────────────────────
+      drawLineMulti(sym, rows, color, doNorm, showVol);
     } else {
-      const key = metricKey(metric, source);
-      let pts = rows.map(r => ({ x: toDate(r, source), y: r[key] ?? 0 }));
-
-      // Normalize price/nav to % change from first non-zero point
-      if (normalize && (metric === 'market_price' || metric === 'nav')) {
-        const base = pts.find(p => p.y > 0)?.y || 1;
-        pts = pts.map(p => ({ x: p.x, y: (p.y - base) / base * 100 }));
-      }
-
-      datasets.push({
-        label: sym,
-        data:  pts,
-        borderColor: color,
-        backgroundColor: color + '15',
-        borderWidth: 1.8,
-        pointRadius: pts.length > 120 ? 0 : 2,
-        tension: 0.15,
-        fill: false,
-      });
-
-      // Mean-reversion bands for premium (single or dual fund only)
-      if (metric === 'premium_discount_pct' &&
-          document.getElementById('show-bands').checked &&
-          selected.size <= 2) {
-        const st = allStats[sym];
-        if (st && st.std > 0) {
-          const { mean, std } = st;
-          datasets.push({
-            label: sym + ' +1σ',
-            data: pts.map(p => ({ x: p.x, y: mean + std })),
-            borderColor: color + '40', borderDash: [4,4], borderWidth: 1,
-            pointRadius: 0, fill: false,
-          });
-          datasets.push({
-            label: sym + ' −1σ',
-            data: pts.map(p => ({ x: p.x, y: mean - std })),
-            borderColor: color + '40', borderDash: [4,4], borderWidth: 1,
-            pointRadius: 0, fill: '-1', backgroundColor: color + '08',
-          });
-          datasets.push({
-            label: sym + ' μ',
-            data: pts.map(p => ({ x: p.x, y: mean })),
-            borderColor: color + '70', borderDash: [6,3], borderWidth: 1,
-            pointRadius: 0, fill: false,
-          });
-        }
+      // ── Single fund ────────────────────────────────────────────────
+      if (src === 'daily' && ctype === 'candle') {
+        drawCandle(sym, rows, color, showNav, showVol);
+      } else {
+        drawLine(sym, rows, color, showNav, showVol);
       }
     }
+    drawPrem(sym, rows, color);
   }
-  return datasets;
+
+  if (anyData) {
+    priceChart.timeScale().fitContent();
+    premChart.timeScale().fitContent();
+  }
 }
 
-function buildAnnotations(metric, allRows, showBands, showThr) {
-  const ann = {};
-  if (showThr && metric === 'premium_discount_pct') {
-    ann.buy  = { type:'line', scaleID:'y', value:-0.3, borderColor:'rgba(38,166,154,.7)', borderWidth:1.5, borderDash:[5,4],
-                 label:{display:true, content:'آستانه خرید −0.3%', position:'start', color:'#26a69a', backgroundColor:'transparent', font:{size:10}} };
-    ann.sell = { type:'line', scaleID:'y', value: 0.3, borderColor:'rgba(239,83,80,.7)', borderWidth:1.5, borderDash:[5,4],
-                 label:{display:true, content:'آستانه فروش +0.3%', position:'start', color:'#ef5350', backgroundColor:'transparent', font:{size:10}} };
-    ann.zero = { type:'line', scaleID:'y', value:0, borderColor:'rgba(255,255,255,.12)', borderWidth:1 };
-  }
-  return ann;
-}
-
-function renderChart(datasets, yLabel, annotations) {
-  const ctx = document.getElementById('main-chart').getContext('2d');
-  if (chart) { chart.destroy(); chart = null; }
-  if (!datasets.length) return;
-
-  const metric = document.getElementById('metric-select').value;
-
-  chart = new Chart(ctx, {
-    type: 'line',
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: {
-          type: 'time',
-          time: {
-            tooltipFormat: 'yyyy-MM-dd',
-            displayFormats: {
-              day: 'MM/dd', week: 'yy/MM/dd', month: 'yyyy/MM',
-            },
-          },
-          grid: { color: 'rgba(255,255,255,.04)' },
-          ticks: { color: '#7a7f99', maxTicksLimit: 8 },
-        },
-        y: {
-          title: { display: true, text: yLabel, color: '#7a7f99', font:{size:11} },
-          grid: { color: 'rgba(255,255,255,.04)' },
-          ticks: {
-            color: '#7a7f99',
-            callback: v => {
-              if (metric === 'price_nav' || metric === 'market_price' || metric === 'nav')
-                return v.toLocaleString('fa-IR');
-              return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-            },
-          },
-        },
-      },
-      plugins: {
-        legend: {
-          labels: {
-            color: '#e0e0e0',
-            font: { size: 11 },
-            filter: item => !item.text.match(/[σμ]/),  // hide band labels
-            boxWidth: 12,
-          },
-        },
-        tooltip: {
-          backgroundColor: '#1a1d27',
-          borderColor: '#2a2d3e', borderWidth: 1,
-          titleColor: '#e0e0e0', bodyColor: '#aaa',
-          callbacks: {
-            label: ctx => {
-              const v = ctx.parsed.y;
-              const lbl = ctx.dataset.label || '';
-              if (metric === 'price_nav' || metric === 'market_price' || metric === 'nav')
-                return ` ${lbl}: ${v.toLocaleString('fa-IR')} ریال`;
-              return ` ${lbl}: ${(v >= 0 ? '+' : '')}${v.toFixed(3)}%`;
-            },
-          },
-        },
-        annotation: { annotations },
-      },
-    },
+// ── candlestick (single, daily) ─────────────────────────────────────────
+function drawCandle(sym, rows, color, showNav, showVol) {
+  const cs = priceChart.addCandlestickSeries({
+    upColor:        '#26a69a', downColor:        '#ef5350',
+    borderUpColor:  '#26a69a', borderDownColor:  '#ef5350',
+    wickUpColor:    '#26a69a', wickDownColor:    '#ef5350',
   });
+  const data = rows.map(r => ({
+    time:  dailyStr(r.date),
+    open:  r.open_price  || r.market_price || 0,
+    high:  r.high_price  || r.market_price || 0,
+    low:   r.low_price   || r.market_price || 0,
+    close: r.close_price || r.market_price || 0,
+  })).filter(d => d.close > 0);
+  cs.setData(data);
+  activeSeries[sym] = { price: cs };
+
+  if (showNav) {
+    const navS = priceChart.addLineSeries({
+      color: 'rgba(240,192,64,.75)',
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const navData = rows.map(r => ({
+      time:  dailyStr(r.date),
+      value: r.yesterday_price || r.nav || 0,
+    })).filter(d => d.value > 0);
+    navS.setData(navData);
+    activeSeries[sym].nav = navS;
+  }
+
+  if (showVol) {
+    const volS = priceChart.addHistogramSeries({
+      color: 'rgba(91,156,246,.25)',
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'vol',
+    });
+    priceChart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+      visible: false,
+    });
+    const volData = rows.map(r => ({
+      time:  dailyStr(r.date),
+      value: r.volume || 0,
+      color: (r.close_price >= (r.open_price||r.close_price))
+             ? 'rgba(38,166,154,.35)' : 'rgba(239,83,80,.35)',
+    })).filter(d => d.value > 0);
+    volS.setData(volData);
+    activeSeries[sym].vol = volS;
+  }
+
+  document.getElementById('price-lbl').textContent = sym + ' — قیمت + NAV';
+  updateInfoDefault(sym, rows);
 }
 
-function destroyChart() { if (chart) { chart.destroy(); chart = null; } }
+// ── line (single or scan source) ────────────────────────────────────────
+function drawLine(sym, rows, color, showNav, showVol) {
+  const priceKey = src === 'daily' ? 'close_price'  : 'market_price';
+  const navKey   = src === 'daily' ? 'yesterday_price' : 'nav';
+  const timeKey  = src === 'daily' ? 'date'         : 'scanned_at';
 
-// ─── stats panel ─────────────────────────────────────────────────────────────
+  const ps = priceChart.addLineSeries({
+    color, lineWidth: 2, priceLineVisible: true,
+    lastValueVisible: true,
+  });
+  const data = rows.map(r => ({
+    time:  toTime(r[timeKey]),
+    value: r[priceKey] || 0,
+  })).filter(d => d.value > 0);
+  ps.setData(data);
+  activeSeries[sym] = { price: ps };
+
+  if (showNav) {
+    const ns = priceChart.addLineSeries({
+      color: 'rgba(240,192,64,.7)',
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    const navData = rows.map(r => ({
+      time:  toTime(r[timeKey]),
+      value: r[navKey] || 0,
+    })).filter(d => d.value > 0);
+    ns.setData(navData);
+    activeSeries[sym].nav = ns;
+  }
+
+  if (showVol && src === 'daily') {
+    const vs = priceChart.addHistogramSeries({
+      color: 'rgba(91,156,246,.22)',
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'vol',
+    });
+    priceChart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+      visible: false,
+    });
+    const volData = rows.map(r => ({
+      time:  toTime(r.date || r.scanned_at),
+      value: r.volume || 0,
+    })).filter(d => d.value > 0);
+    vs.setData(volData);
+    activeSeries[sym].vol = vs;
+  }
+
+  document.getElementById('price-lbl').textContent = sym + ' — قیمت';
+  updateInfoDefault(sym, rows);
+}
+
+// ── multi-fund line overlay ──────────────────────────────────────────────
+function drawLineMulti(sym, rows, color, doNorm, showVol) {
+  const priceKey = src === 'daily' ? 'close_price'  : 'market_price';
+  const timeKey  = src === 'daily' ? 'date'         : 'scanned_at';
+
+  let pts = rows.map(r => ({
+    time:  toTime(r[timeKey]),
+    value: r[priceKey] || 0,
+  })).filter(d => d.value > 0);
+
+  if (doNorm && pts.length > 0) {
+    const base = pts[0].value;
+    if (base > 0) pts = pts.map(p => ({ time: p.time, value: (p.value - base) / base * 100 }));
+  }
+
+  const ps = priceChart.addLineSeries({ color, lineWidth: 1.8, priceLineVisible: false });
+  ps.setData(pts);
+  if (!activeSeries[sym]) activeSeries[sym] = {};
+  activeSeries[sym].price = ps;
+
+  document.getElementById('price-lbl').textContent =
+    doNorm ? 'مقایسه — تغییر قیمت %' : 'مقایسه — قیمت';
+}
+
+// ── premium histogram ─────────────────────────────────────────────────────
+function drawPrem(sym, rows, color) {
+  const pKey  = src === 'daily' ? 'premium_pct'          : 'premium_discount_pct';
+  const tKey  = src === 'daily' ? 'date'                 : 'scanned_at';
+
+  const premS = premChart.addHistogramSeries({
+    priceLineVisible: false, lastValueVisible: false,
+    base: 0,
+  });
+
+  const data = rows.map(r => {
+    const v = r[pKey] || 0;
+    return {
+      time:  toTime(r[tKey]),
+      value: v,
+      color: v >= 0 ? 'rgba(239,83,80,.65)' : 'rgba(38,166,154,.65)',
+    };
+  });
+
+  // Zero line
+  premChart.addLineSeries({
+    color: 'rgba(255,255,255,.12)', lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false,
+  }).setData(data.map(d => ({ time: d.time, value: 0 })));
+
+  // Threshold lines (only single fund)
+  if (selected.size === 1) {
+    premChart.addLineSeries({
+      color: 'rgba(38,166,154,.5)', lineWidth: 1, lineStyle: LineStyle.Dashed,
+      priceLineVisible: false, lastValueVisible: false,
+    }).setData(data.map(d => ({ time: d.time, value: -0.3 })));
+    premChart.addLineSeries({
+      color: 'rgba(239,83,80,.5)', lineWidth: 1, lineStyle: LineStyle.Dashed,
+      priceLineVisible: false, lastValueVisible: false,
+    }).setData(data.map(d => ({ time: d.time, value: 0.3 })));
+  }
+
+  premS.setData(data);
+  if (!activeSeries[sym]) activeSeries[sym] = {};
+  activeSeries[sym].prem = premS;
+}
+
+function clearSeries() {
+  if (!priceChart || !premChart) return;
+  // Remove all series by rebuilding charts
+  buildCharts();
+  activeSeries = {};
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Crosshair info bar
+// ═══════════════════════════════════════════════════════════════════════
+function updateInfoBar(param) {
+  if (!param.time) { resetInfoBar(); return; }
+  const sym = [...selected][0];
+  if (!sym || !activeSeries[sym]) return;
+
+  const sp = activeSeries[sym];
+  let ohlcv = null, navV = null, premV = null;
+
+  if (sp.price) {
+    const d = param.seriesData?.get(sp.price);
+    if (d) ohlcv = d;
+  }
+  if (sp.nav) {
+    const d = param.seriesData?.get(sp.nav);
+    if (d) navV = d.value;
+  }
+  if (sp.prem) {
+    // prem is on premChart, can't get it from price crosshair directly
+  }
+
+  if (!ohlcv) { resetInfoBar(); return; }
+
+  document.getElementById('info-sym').textContent = sym;
+  document.getElementById('info-time').textContent = formatTime(param.time);
+
+  if (ohlcv.open !== undefined) {
+    // candlestick
+    const up = ohlcv.close >= ohlcv.open;
+    document.getElementById('info-o').textContent  = fmtP(ohlcv.open);
+    document.getElementById('info-h').textContent  = fmtP(ohlcv.high);
+    document.getElementById('info-l').textContent  = fmtP(ohlcv.low);
+    document.getElementById('info-c').style.color  = up ? 'var(--green)' : 'var(--red)';
+    document.getElementById('info-c').textContent  = fmtP(ohlcv.close);
+  } else {
+    document.getElementById('info-o').textContent = '—';
+    document.getElementById('info-h').textContent = '—';
+    document.getElementById('info-l').textContent = '—';
+    document.getElementById('info-c').textContent = fmtP(ohlcv.value);
+    document.getElementById('info-c').style.color = '';
+  }
+  if (navV)
+    document.getElementById('info-nav').textContent = fmtP(navV);
+}
+
+function resetInfoBar() {
+  ['info-o','info-h','info-l','info-c','info-nav','info-vol','info-prem'].forEach(id => {
+    document.getElementById(id).textContent = '—';
+    document.getElementById(id).style.color = '';
+  });
+  document.getElementById('info-time').textContent = '';
+}
+
+function updateInfoDefault(sym, rows) {
+  if (!rows.length) return;
+  const last = rows[rows.length - 1];
+  document.getElementById('info-sym').textContent = sym;
+  const price = last.close_price || last.market_price || 0;
+  const nav   = last.yesterday_price || last.nav || 0;
+  const vol   = last.volume || 0;
+  const prem  = last.premium_pct ?? last.premium_discount_pct ?? 0;
+  document.getElementById('info-c').textContent   = fmtP(price);
+  document.getElementById('info-nav').textContent = nav ? fmtP(nav) : '—';
+  document.getElementById('info-vol').textContent = vol ? fmtV(vol) : '—';
+  const premEl = document.getElementById('info-prem');
+  premEl.textContent = (prem >= 0 ? '+' : '') + prem.toFixed(3) + '%';
+  premEl.style.color = prem > 0.05 ? 'var(--red)' : prem < -0.05 ? 'var(--green)' : '';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Stats panel
+// ═══════════════════════════════════════════════════════════════════════
 function renderStats(sym) {
   const st = allStats[sym];
-  const el = document.getElementById('stats-content');
-  if (!st) {
-    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px">آمار موجود نیست — اسکن‌های بیشتری نیاز است</div>';
+  document.getElementById('stats-sym').textContent = 'آمار — ' + sym;
+  if (!st || !st.count) {
+    document.getElementById('stats-content').innerHTML =
+      '<div style="color:var(--muted);font-size:11px;margin-top:6px">آمار کافی نیست</div>';
     return;
   }
   const zAbs = Math.abs(st.z_score || 0);
-  const zCls = zAbs > 2 ? 'z-warn' : zAbs > 1.5 ? 'pos' : '';
-  document.getElementById('stats-title').textContent = `آمار میانگین‌گردانی — ${sym}`;
-  el.innerHTML = `
-    <div class="stat-row">
-      <span>میانگین (${st.days}روز)</span>
-      <span class="stat-val ${(st.mean||0)>0?'pos':'neg'}">${pct(st.mean)}</span>
-    </div>
-    <div class="stat-row">
-      <span>انحراف معیار</span>
-      <span class="stat-val">±${(st.std||0).toFixed(3)}%</span>
-    </div>
-    <div class="stat-row">
-      <span>وضعیت فعلی</span>
-      <span class="stat-val ${(st.current||0)>0?'pos':'neg'}">${pct(st.current)}</span>
-    </div>
-    <div class="stat-row">
-      <span>Z-score</span>
-      <span class="stat-val ${zCls}">${(st.z_score>=0?'▲':'▼')} ${(st.z_score||0).toFixed(2)}</span>
-    </div>
-    <div class="stat-row">
-      <span>فرصت‌های قابل اجرا</span>
-      <span class="stat-val ${st.actionable_count>0?'neg':''}">${st.actionable_count||0}</span>
-    </div>
-    ${zAbs > 1.5
-      ? `<div style="margin-top:6px;padding:5px 7px;background:rgba(255,213,79,.08);border-radius:4px;font-size:10px;color:var(--yellow)">
-           ⚠ انحراف بزرگ — احتمال بازگشت به میانگین بالاست</div>` : ''}
+  const zCls = zAbs > 2 ? 'warn' : zAbs > 1.5 ? 'pos' : '';
+  document.getElementById('stats-content').innerHTML = `
+    <div class="sr"><span>میانگین (${st.days}روز)</span>
+      <span class="sv ${(st.mean||0)>0?'pos':'neg'}">${pctStr(st.mean)}</span></div>
+    <div class="sr"><span>انحراف معیار</span>
+      <span class="sv">±${(st.std||0).toFixed(3)}%</span></div>
+    <div class="sr"><span>وضعیت فعلی</span>
+      <span class="sv ${(st.current||0)>0?'pos':'neg'}">${pctStr(st.current)}</span></div>
+    <div class="sr"><span>Z-score</span>
+      <span class="sv ${zCls}">${(st.z_score||0)>=0?'▲':'▼'} ${(st.z_score||0).toFixed(2)}</span></div>
+    <div class="sr"><span>نمونه‌ها</span>
+      <span class="sv">${(st.count||0).toLocaleString('fa-IR')}</span></div>
+    <div class="sr"><span>فرصت‌های قابل اجرا</span>
+      <span class="sv ${st.actionable_count>0?'neg':''}">${st.actionable_count||0}</span></div>
+    ${zAbs > 1.5 ? `<div style="margin-top:6px;padding:5px 8px;background:rgba(240,192,64,.08);border-radius:4px;font-size:10px;color:var(--yellow)">⚠ انحراف بزرگ — احتمال بازگشت به میانگین</div>` : ''}
   `;
 }
 
-// ─── opportunities table ──────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+//  Table
+// ═══════════════════════════════════════════════════════════════════════
 function renderTable(funds) {
-  const tbody = document.getElementById('opp-tbody');
+  const tbody = document.getElementById('tbl-body');
   if (!funds.length) { tbody.innerHTML = ''; return; }
   tbody.innerHTML = funds.map(f => {
     const pd  = f.premium_discount_pct || 0;
@@ -863,70 +1051,63 @@ function renderTable(funds) {
     const st  = allStats[f.symbol];
     const z   = st?.z_score;
     const zStr = z != null ? (z>=0?'+':'') + z.toFixed(2) : '—';
-    const price = f.market_price ? formatNum(f.market_price) : '—';
-    const nav   = f.nav           ? formatNum(f.nav)          : '—';
-    const sigHtml = sig === 'BUY'  ? `<span class="c-buy">🟢 خرید</span>`
-                  : sig === 'SELL' ? `<span class="c-sell">🔴 فروش</span>`
-                  : `<span class="c-muted">—</span>`;
-    return `<tr>
-      <td>${f.symbol}</td>
-      <td>${price}</td>
-      <td>${nav}</td>
-      <td class="${pd>0?'c-sell':pd<0?'c-buy':'c-muted'}">${(pd>=0?'+':'')}${pd.toFixed(3)}%</td>
-      <td class="${np>0?'c-buy':np<0?'c-sell':'c-muted'}">${(np>=0?'+':'')}${np.toFixed(3)}%</td>
-      <td class="c-muted">${(f.volume||0).toLocaleString('fa-IR')}</td>
+    const sigHtml = sig==='BUY'  ? `<span class="cb">🟢 خرید</span>`
+                  : sig==='SELL' ? `<span class="cs">🔴 فروش</span>`
+                  :                `<span class="cm">—</span>`;
+    return `<tr onclick="handleRowClick('${f.symbol}')" style="cursor:pointer">
+      <td style="font-weight:700">${f.symbol}</td>
+      <td>${f.market_price ? fmtP(f.market_price) : '—'}</td>
+      <td>${f.nav          ? fmtP(f.nav)           : '—'}</td>
+      <td class="${pd>0?'cs':pd<0?'cb':'cm'}">${(pd>=0?'+':'')}${pd.toFixed(3)}%</td>
+      <td class="${np>0?'cb':np<0?'cs':'cm'}">${(np>=0?'+':'')}${np.toFixed(3)}%</td>
+      <td class="cm">${(f.volume||0).toLocaleString('fa-IR')}</td>
       <td>${sigHtml}</td>
-      <td class="${zStr.startsWith('-')||zStr==='—'?'':'c-sell'}">${zStr}</td>
+      <td class="${Math.abs(z||0)>1.5?'cs':'cm'}">${zStr}</td>
     </tr>`;
   }).join('');
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
-function toDate(row, src) {
-  if (src === 'daily') {
-    // row.date is int like 20260524
-    const s = String(row.date);
-    return new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
+function handleRowClick(sym) {
+  selected.clear();
+  selected.add(sym);
+  renderFundList();
+  renderStats(sym);
+  redraw();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Helpers
+// ═══════════════════════════════════════════════════════════════════════
+function toTime(val) {
+  if (typeof val === 'number') {
+    // daily: 20260524 → '2026-05-24'
+    return dailyStr(val);
   }
-  // row.scanned_at is "2026-05-24 09:30:00" (stored as Iran local time)
-  return new Date(row.scanned_at + 'Z');
+  // scan: "2026-05-24 09:30:00" → unix sec (UTC)
+  return Math.floor(new Date(val + 'Z').getTime() / 1000);
 }
 
-function metricKey(metric, src) {
-  if (src === 'daily') {
-    return { premium_discount_pct:'premium_pct', market_price:'close_price',
-             nav:'yesterday_price', net_profit_pct:'premium_pct' }[metric] || metric;
-  }
-  return metric;  // scan column names match metric names
+function dailyStr(d) {
+  const s = String(d);
+  return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
 }
 
-function getYLabel(metric, normalize) {
-  if (metric === 'price_nav' || metric === 'market_price' || metric === 'nav')
-    return normalize ? 'تغییر قیمت %' : 'ریال';
-  if (metric === 'premium_discount_pct') return 'صرف / تخفیف %';
-  if (metric === 'net_profit_pct')       return 'سود خالص %';
-  return '';
+function formatTime(t) {
+  if (typeof t === 'string') return t;
+  if (typeof t === 'number' && t > 20000000) return dailyStr(t);
+  return new Date(t * 1000).toLocaleDateString('fa-IR');
 }
 
-function formatNum(v) {
-  return v ? Math.round(v).toLocaleString('fa-IR') : '—';
-}
-
-function pct(v) {
-  return (v >= 0 ? '+' : '') + (v || 0).toFixed(3) + '%';
-}
-
-function sigLabel(sig) {
-  return sig === 'BUY' ? 'خرید' : sig === 'SELL' ? 'فروش' : '—';
-}
-
-function enc(s) { return encodeURIComponent(s); }
+function fmtP(v) { return v ? Math.round(v).toLocaleString('fa-IR') : '—'; }
+function fmtV(v) { return v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v.toLocaleString('fa-IR'); }
+function pctStr(v) { return (v>=0?'+':'') + (v||0).toFixed(3) + '%'; }
+function enc(s)  { return encodeURIComponent(s); }
 
 async function triggerScan() {
-  const btn = document.querySelector('button.primary');
+  const btn = document.querySelector('.scan-btn');
   btn.disabled = true; btn.textContent = '⏳ ...';
   try { await fetch('/api/scan', { method:'POST' }); } catch(e) {}
-  setTimeout(() => { btn.disabled = false; btn.textContent = '🔄 اسکن'; }, 3000);
+  setTimeout(() => { btn.disabled = false; btn.textContent = '🔄 اسکن'; }, 4000);
 }
 </script>
 </body>
