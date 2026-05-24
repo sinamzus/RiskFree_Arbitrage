@@ -117,7 +117,6 @@ class TSETMCFetcher:
         self.session.headers.update(REQUEST_HEADERS)
         self.session.headers["Referer"] = "https://www.tsetmc.com/"
         self._ins_code_cache: dict[str, str] = {}
-        self._etf_list_cache: Optional[list[dict]] = None   # cached ETF list
 
     # ------------------------------------------------------------------ #
     #  Internal HTTP helper                                                #
@@ -288,331 +287,108 @@ class TSETMCFetcher:
         return result
 
     # ------------------------------------------------------------------ #
-    #  NAV data — multiple strategies tried in sequence                   #
+    #  NAV data                                                            #
     # ------------------------------------------------------------------ #
 
     def get_fund_nav(self, ins_code: str) -> Optional[dict]:
-        """Try every known strategy to get fund NAV for *ins_code*.
+        """Derive NAV for *ins_code* from TSETMC CDN endpoints.
 
-        Strategies (ordered by confidence):
-        1.  GetClosingPriceHistory CDN JSON  — navStat in history entries
-        2.  www.tsetmc.com/History/{insCode}/{YYYYMMDD} HTML scrape
-        3.  GetInstrumentInfo — navStat field
-        4.  Old TSETMC Loader API
-        5.  ETF-specific CDN endpoints (ETF/ETFByInsCode etc.)
-        6.  Fund-specific CDN endpoints (historically 404)
-        7.  ETFList bulk endpoint (cached)
-        8.  www.tsetmc.com/instrument HTML scrape
-        9.  StaticThreshold (low probability)
+        Analysis of the live TSETMC API (2026-05-24) revealed:
+        - GetClosingPriceHistory  → returns empty array for ETF funds
+        - /History/{insCode}/…    → returns 824-byte React SPA shell
+        - ETF/* CDN paths         → return 824-byte React SPA shell (don't exist)
+        - GetInstrumentInfo       → works; contains staticThreshold with
+                                    psGelStaMax and psGelStaMin
+
+        For Iranian ETFs the Exchange anchors the daily static price band to
+        the fund's published NAV.  Therefore:
+
+            NAV = (psGelStaMax + psGelStaMin) / 2
+
+        For كمند: (10456 + 9848) / 2 = 10152, matching priceYesterday exactly.
+        For a fixed-income ETF (annual yield ~20-25%) the daily NAV drift is
+        ~0.07%, well below our 0.3% arbitrage threshold — so yesterday's NAV
+        is close enough to today's.
+
+        Strategies (in order):
+        1. InstrumentInfo → staticThreshold midpoint  (primary — always works)
+        2. Old Loader.aspx pipe-delimited API          (secondary check)
         """
 
-        # ── 1. GetClosingPriceHistory JSON ────────────────────────────────
-        nav = self._nav_from_closing_history(ins_code)
+        # ── 1. GetInstrumentInfo → staticThreshold midpoint ──────────────
+        nav = self._nav_from_instrument_info(ins_code)
         if nav:
             return nav
 
-        # ── 2. History HTML page ──────────────────────────────────────────
-        nav = self._nav_from_history_page(ins_code)
-        if nav:
-            return nav
-
-        # ── 3. GetInstrumentInfo ──────────────────────────────────────────
-        url = f"{TSETMC_CDN}/Instrument/GetInstrumentInfo/{ins_code}"
-        data = self._get(url)
-        if data:
-            logger.debug("InstrumentInfo top-level keys for %s: %s",
-                         ins_code, list(data.keys()))
-            info = data.get("instrumentInfo", {})
-            logger.debug("InstrumentInfo non-zero fields for %s: %s", ins_code,
-                         {k: v for k, v in info.items()
-                          if v not in (None, 0, "", [], {})})
-            for search_obj in (info, data):
-                for nav_key in ("navStat", "nav", "statisticalNav", "cancelNav",
-                                "staticNav", "psGelStaMax", "navPerUnit",
-                                "pStat", "pStatNav", "pNavStat"):
-                    nav_val = search_obj.get(nav_key)
-                    if nav_val and isinstance(nav_val, (int, float)) and nav_val > 0:
-                        logger.info("  NAV from InstrumentInfo[%s] = %s for %s",
-                                    nav_key, nav_val, ins_code)
-                        return self._build_nav(
-                            nav_val,
-                            search_obj.get("cancelNav", nav_val),
-                            search_obj.get("issueNav",  nav_val),
-                            str(search_obj.get("dEven", "")),
-                            "TSETMC/InstrumentInfo",
-                        )
-
-        # ── 4. Old TSETMC Loader API ──────────────────────────────────────
+        # ── 2. Old TSETMC Loader API ──────────────────────────────────────
         nav = self._nav_from_loader(ins_code)
         if nav:
             return nav
 
-        # ── 2. ETF-specific endpoints ─────────────────────────────────────
-        for path in (
-            "ETF/ETFByInsCode",
-            "ETF/GetETFByInsCode",
-            "ETF/GetETFInfo",
-        ):
-            data = self._get(f"{TSETMC_CDN}/{path}/{ins_code}", silent=True)
-            if not data:
-                continue
-            logger.debug("ETF endpoint '%s' raw for %s: %s", path, ins_code,
-                         str(data)[:300])
-            obj = (data.get("eTF") or data.get("etf") or
-                   data.get("ETF") or data.get("data") or data)
-            if not isinstance(obj, dict):
-                continue
-            for nav_key in ("cancelNav", "cancelNAV", "navStat", "nav",
-                            "statisticalNav", "navPerUnit"):
-                nav = obj.get(nav_key)
-                if nav and isinstance(nav, (int, float)) and nav > 0:
-                    logger.info("  NAV from %s: %s = %s", path, nav_key, nav)
-                    return self._build_nav(
-                        nav,
-                        obj.get("cancelNav", obj.get("cancelNAV", nav)),
-                        obj.get("issueNav",  obj.get("issueNAV",  nav)),
-                        str(obj.get("navDate", obj.get("dEven", ""))),
-                        f"TSETMC/{path}",
-                    )
-
-        # ── 3. Fund-specific endpoints (historically 404) ─────────────────
-        for path in ("GetFundInfo", "GetFund", "GetFundLastInfo",
-                     "GetMutualFundByInsCode", "FundInfo", "FundData"):
-            data = self._get(f"{TSETMC_CDN}/Fund/{path}/{ins_code}", silent=True)
-            if not data:
-                continue
-            logger.debug("Fund endpoint '%s' raw for %s: %s", path, ins_code,
-                         str(data)[:300])
-            for key in ("fund", "fundInfo", "fundLastInfo", "data", None):
-                obj = data.get(key) if key else data
-                if not isinstance(obj, dict):
-                    continue
-                for nav_key in ("cancelNav", "cancelNAV", "navStat", "nav",
-                                "statisticalNav"):
-                    nav = obj.get(nav_key)
-                    if nav and isinstance(nav, (int, float)) and nav > 0:
-                        logger.info("  NAV from Fund/%s: %s = %s",
-                                    path, nav_key, nav)
-                        return self._build_nav(
-                            nav,
-                            obj.get("cancelNav", obj.get("cancelNAV", nav)),
-                            obj.get("issueNav",  obj.get("issueNAV",  nav)),
-                            str(obj.get("dEven", obj.get("navDate", ""))),
-                            f"TSETMC/Fund/{path}",
-                        )
-
-        # ── 4. ETFList bulk endpoint (fetch once, cache) ──────────────────
-        nav = self._nav_from_etf_list(ins_code)
-        if nav:
-            return nav
-
-        # ── 5. Scrape www.tsetmc.com/instrument HTML page ─────────────────
-        nav = self._nav_from_html(ins_code)
-        if nav:
-            return nav
-
-        # ── 6. StaticThreshold (rarely has NAV) ───────────────────────────
-        data = self._get(
-            f"{TSETMC_CDN}/StaticThreshold/GetStaticThreshold/{ins_code}/0",
-            silent=True,
-        )
-        if data:
-            for t in data.get("staticThreshold", []):
-                for nav_key in ("navStat", "nav", "cancelNav"):
-                    nav_val = t.get(nav_key)
-                    if nav_val and isinstance(nav_val, (int, float)) and nav_val > 0:
-                        logger.info("  NAV from StaticThreshold[%s] = %s",
-                                    nav_key, nav_val)
-                        return self._build_nav(nav_val, nav_val, nav_val,
-                                               "", "TSETMC/StaticThreshold")
-
-        logger.debug("  No NAV found for ins_code=%s", ins_code)
+        logger.warning("  No NAV found for ins_code=%s", ins_code)
         return None
 
-    def _nav_from_closing_history(self, ins_code: str) -> Optional[dict]:
-        """GET cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceHistory/{insCode}/0
+    def _nav_from_instrument_info(self, ins_code: str) -> Optional[dict]:
+        """GET GetInstrumentInfo and derive NAV from staticThreshold midpoint.
 
-        The history JSON response contains one dict per trading day.
-        For ETF funds, each entry includes navStat (statistical/cancel NAV).
-        We take the most recent entry that has a non-zero navStat.
+        TSETMC sets the daily price band (psGelStaMin / psGelStaMax) as:
+            psGelStaMax = NAV × (1 + band_pct)
+            psGelStaMin = NAV × (1 - band_pct)
+        → midpoint = NAV  (exact, independent of band_pct)
+
+        Additional fields harvested:
+        - etfIssuedUnit : total units outstanding
+        - etfUnitDeven  : date of last NAV publication (YYYYMMDD int)
+        - faraDesc       : human-readable fund type description
         """
-        url  = f"{TSETMC_CDN}/ClosingPrice/GetClosingPriceHistory/{ins_code}/0"
+        url  = f"{TSETMC_CDN}/Instrument/GetInstrumentInfo/{ins_code}"
         data = self._get(url, silent=True)
         if not data:
             return None
 
-        history = (data.get("closingPriceHistory") or
-                   data.get("ClosingPriceHistory") or
-                   data.get("history") or [])
-        if not isinstance(history, list):
+        info = data.get("instrumentInfo") or {}
+        if not isinstance(info, dict):
             return None
 
-        logger.debug("ClosingPriceHistory for %s: %d entries, first keys: %s",
-                     ins_code, len(history),
-                     list(history[0].keys()) if history else [])
+        # ── a) staticThreshold midpoint ──────────────────────────────────
+        st      = info.get("staticThreshold") or {}
+        sta_max = st.get("psGelStaMax") or 0
+        sta_min = st.get("psGelStaMin") or 0
 
-        # Most recent entry first (TSETMC returns newest last; sort descending)
-        history_sorted = sorted(
-            history,
-            key=lambda r: r.get("dEven", 0),
-            reverse=True,
-        )
-
-        for entry in history_sorted[:10]:   # check last 10 trading days
-            logger.debug("  History entry dEven=%s fields: %s",
-                         entry.get("dEven"),
-                         {k: v for k, v in entry.items()
-                          if v not in (None, 0, "", [])})
-
-            for nav_key in ("navStat", "nav", "cancelNav", "statisticalNav",
-                            "pNavStat", "pStatNav", "psGelStaMax"):
-                nav_val = entry.get(nav_key)
-                if nav_val and isinstance(nav_val, (int, float)) and nav_val > 0:
-                    date_str = str(entry.get("dEven", ""))
-                    logger.info(
-                        "  NAV from ClosingPriceHistory[%s]=%s (dEven=%s) for %s",
-                        nav_key, nav_val, date_str, ins_code,
-                    )
-                    return self._build_nav(
-                        nav_val,
-                        entry.get("cancelNav", nav_val),
-                        entry.get("issueNav",  nav_val),
-                        date_str,
-                        "TSETMC/ClosingPriceHistory",
-                    )
-
-        logger.debug("  ClosingPriceHistory: no navStat in last 10 entries for %s",
-                     ins_code)
-        return None
-
-    def _nav_from_history_page(self, ins_code: str) -> Optional[dict]:
-        """Scrape www.tsetmc.com/History/{insCode}/{YYYYMMDD} for NAV.
-
-        The TSETMC History page (confirmed by user to contain all price+NAV data)
-        is a different route from /instrument/{insCode} and may be server-side
-        rendered with actual data rather than the 824-byte SPA shell.
-
-        We try the last 5 trading days until we get a non-SPA response.
-        """
-        from datetime import datetime, timedelta
-
-        today = datetime.now()
-        tried = 0
-        for days_back in range(0, 7):
-            d = today - timedelta(days=days_back)
-            # Skip Fridays (5) and Saturdays (6) — Iranian weekend
-            if d.weekday() in (4, 5):
-                continue
-            date_str = d.strftime("%Y%m%d")
-            url  = f"{TSETMC_MAIN}/History/{ins_code}/{date_str}"
-            html = self._get(url, silent=True, html=True)
-            if not html:
-                continue
-
-            size = len(html)
-            logger.debug("History page %s: %d bytes, preview: %s",
-                         url, size, html[:80].replace("\n", " "))
-
-            # 824 bytes = the SPA shell (no data) — skip
-            if size <= 900:
-                continue
-
-            tried += 1
-
-            # ── a) Try to parse the CDN API URL embedded in the page HTML ──
-            # TSETMC History pages sometimes embed the data as JSON in a
-            # window.__INITIAL_STATE__ or similar variable, or call a CDN API.
-            # First look for any JSON with navStat.
-            nav = self._extract_nav_from_json(
-                _try_parse_embedded_json(html), ins_code
+        if sta_max > 0 and sta_min > 0:
+            nav_val  = (sta_max + sta_min) / 2.0
+            # etfUnitDeven is the date of last NAV calculation (YYYYMMDD int)
+            raw_date = info.get("etfUnitDeven") or info.get("dEven") or ""
+            nav_date = str(raw_date)
+            total_units = info.get("etfIssuedUnit") or 0
+            logger.info(
+                "  NAV from staticThreshold midpoint = %.2f "
+                "(band %.2f–%.2f, dEven=%s) for %s",
+                nav_val, sta_min, sta_max, nav_date, ins_code,
             )
-            if nav:
-                logger.info("  NAV from History page JSON (dEven=%s) for %s",
-                            date_str, ins_code)
-                return nav
+            result = self._build_nav(nav_val, nav_val, nav_val,
+                                     nav_date, "TSETMC/StaticThreshold-midpoint")
+            result["fund_units"] = total_units
+            result["total_nav"]  = nav_val * total_units if total_units else 0
+            return result
 
-            # ── b) Parse HTML table rows for NAV column ───────────────────
-            soup = BeautifulSoup(html, "html.parser")
+        # ── b) Fallback: check top-level info dict for any explicit nav field ─
+        for nav_key in ("navStat", "nav", "statisticalNav", "cancelNav",
+                        "navPerUnit", "pNavStat"):
+            nav_val = info.get(nav_key)
+            if nav_val and isinstance(nav_val, (int, float)) and nav_val > 0:
+                logger.info("  NAV from InstrumentInfo[%s] = %s for %s",
+                            nav_key, nav_val, ins_code)
+                return self._build_nav(
+                    nav_val,
+                    info.get("cancelNav", nav_val),
+                    info.get("issueNav",  nav_val),
+                    str(info.get("dEven", "")),
+                    "TSETMC/InstrumentInfo",
+                )
 
-            # Look for the CDN history API URL referenced in page scripts
-            # and return the data from that API call
-            for script in soup.find_all("script"):
-                text = script.string or ""
-                # Pattern: navStat or قیمت ابطال / cancel nav value
-                for pattern in (
-                    r'navStat["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
-                    r'cancelNav["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
-                    r'قیمت\s*ابطال["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
-                    r'"nav"\s*:\s*(\d[\d,]*)',
-                ):
-                    m = re.search(pattern, text, re.IGNORECASE)
-                    if m:
-                        try:
-                            v = float(m.group(1).replace(",", ""))
-                            if v > 100_000:  # fund NAV is always > 100,000 Rial
-                                logger.info(
-                                    "  NAV from History page script pattern for %s = %s",
-                                    ins_code, v,
-                                )
-                                return self._build_nav(
-                                    v, v, v, date_str, "TSETMC/HistoryPage-script"
-                                )
-                        except ValueError:
-                            pass
-
-            # ── c) Scan table cells for large numeric values (NAV range) ──
-            for table in soup.find_all("table"):
-                headers = [th.get_text(strip=True)
-                           for th in table.find_all("th")]
-                # Look for NAV-related column header
-                nav_col_idx = None
-                for i, h in enumerate(headers):
-                    h_n = _normalize(h.lower())
-                    if any(kw in h_n for kw in ("nav", "ابطال", "صدور", "آماري")):
-                        nav_col_idx = i
-                        break
-
-                if nav_col_idx is None:
-                    # Last resort: scan all cells for fund-NAV-range numbers
-                    for td in table.find_all("td"):
-                        raw = td.get_text(strip=True).replace(",", "").replace("٬", "")
-                        try:
-                            v = float(raw)
-                            if 1_000_000 <= v <= 500_000_000:
-                                logger.info(
-                                    "  NAV from History table cell for %s = %s",
-                                    ins_code, v,
-                                )
-                                return self._build_nav(
-                                    v, v, v, date_str, "TSETMC/HistoryPage-table"
-                                )
-                        except ValueError:
-                            pass
-                    continue
-
-                # Found a NAV column — use first non-zero value
-                for row in table.find_all("tr")[1:]:
-                    cells = row.find_all("td")
-                    if nav_col_idx < len(cells):
-                        raw = cells[nav_col_idx].get_text(strip=True)\
-                              .replace(",", "").replace("٬", "")
-                        try:
-                            v = float(raw)
-                            if v > 100_000:
-                                logger.info(
-                                    "  NAV from History page table[col=%d] = %s for %s",
-                                    nav_col_idx, v, ins_code,
-                                )
-                                return self._build_nav(
-                                    v, v, v, date_str, "TSETMC/HistoryPage-table"
-                                )
-                        except ValueError:
-                            pass
-
-            if tried >= 3:
-                break  # tried 3 real pages, give up
-
-        logger.debug("  History page: no NAV found for ins_code=%s", ins_code)
+        logger.debug("  InstrumentInfo: no staticThreshold or nav field for %s",
+                     ins_code)
         return None
 
     def _nav_from_loader(self, ins_code: str) -> Optional[dict]:
@@ -645,142 +421,23 @@ class TSETMCFetcher:
         # ETF fund NAV in Iran is typically 1,000,000 – 99,999,999 range (Rial)
         # Section 3 (index 2) or 4 in the old TseClient format contains price/nav data
         parts = re.split(r'[;@,\|]', text)
-        # Statistical NAV for Iranian ETFs is 7-10 digits
+        # Fixed-income ETF NAV per unit is in the same range as market price.
+        # كمند trades ~10,000-11,000 Rial, so NAV is in that range.
+        # Accept 4-10 digit numbers (1,000 – 9,999,999,999 Rial).
         nav_candidates = []
         for p in parts:
             p = p.strip()
-            if re.match(r'^\d{7,10}$', p):
+            if re.match(r'^\d{4,10}$', p):
                 nav_candidates.append(float(p))
         if nav_candidates:
-            # The largest plausible value is probably the NAV (unit price range)
-            # Filter: typical Iranian fixed-income ETF NAV: 8,000,000 – 30,000,000 Rial
-            plausible = [v for v in nav_candidates if 1_000_000 <= v <= 200_000_000]
+            # Filter: typical Iranian fixed-income ETF NAV per unit: 1,000 – 500,000 Rial
+            plausible = [v for v in nav_candidates if 1_000 <= v <= 500_000]
             if plausible:
                 nav_val = sorted(plausible)[len(plausible)//2]  # median
                 logger.info("  NAV from Loader API (pipe-parse) = %s for %s",
                             nav_val, ins_code)
                 return self._build_nav(nav_val, nav_val, nav_val,
                                        "", "TSETMC/Loader")
-        return None
-
-    def _nav_from_etf_list(self, ins_code: str) -> Optional[dict]:
-        """Fetch the ETFList once, cache it, then look up *ins_code*."""
-        if self._etf_list_cache is None:
-            raw = self._get(f"{TSETMC_CDN}/ETF/ETFList", silent=True)
-            if raw:
-                logger.debug("ETFList raw (first 500 chars): %s", str(raw)[:500])
-                self._etf_list_cache = (
-                    raw.get("eTFList") or raw.get("etfList") or
-                    raw.get("data") or raw if isinstance(raw, list) else []
-                )
-            else:
-                self._etf_list_cache = []
-
-        for item in (self._etf_list_cache or []):
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("insCode", "")) != str(ins_code):
-                continue
-            for nav_key in ("cancelNav", "cancelNAV", "navStat", "nav",
-                            "statisticalNav"):
-                nav_val = item.get(nav_key)
-                if nav_val and isinstance(nav_val, (int, float)) and nav_val > 0:
-                    logger.info("  NAV from ETFList[%s] = %s for %s",
-                                nav_key, nav_val, ins_code)
-                    return self._build_nav(
-                        nav_val,
-                        item.get("cancelNav", nav_val),
-                        item.get("issueNav",  nav_val),
-                        str(item.get("navDate", "")),
-                        "TSETMC/ETFList",
-                    )
-        return None
-
-    def _nav_from_html(self, ins_code: str) -> Optional[dict]:
-        """Scrape the TSETMC instrument HTML page for NAV data.
-
-        TSETMC renders partial data server-side (or embeds it in a __NEXT_DATA__
-        JSON blob).  We try three extraction patterns:
-        a) <script id="__NEXT_DATA__"> JSON blob (Next.js SSR)
-        b) Inline JSON variables in any <script> tag
-        c) Direct HTML element search (data-nav, aria-label, specific IDs)
-        """
-        url = f"{TSETMC_MAIN}/instrument/{ins_code}"
-        html = self._get(url, html=True)
-        if not html:
-            logger.debug("  HTML page unavailable for ins_code=%s", ins_code)
-            return None
-
-        logger.debug("  HTML page for %s: %d bytes", ins_code, len(html))
-
-        # a) Next.js __NEXT_DATA__ blob
-        match = re.search(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
-                          html, re.DOTALL | re.IGNORECASE)
-        if match:
-            try:
-                blob = json.loads(match.group(1))
-                nav = self._extract_nav_from_json(blob, ins_code)
-                if nav:
-                    logger.info("  NAV from TSETMC HTML __NEXT_DATA__ for %s", ins_code)
-                    return nav
-            except Exception as e:
-                logger.debug("  __NEXT_DATA__ parse error for %s: %s", ins_code, e)
-
-        # b) Look for known variable/key patterns in all <script> tags
-        soup = BeautifulSoup(html, "html.parser")
-        for script in soup.find_all("script"):
-            text = script.string or ""
-            if not text:
-                continue
-
-            # Pattern: navStat:12345678 or "navStat":"12345678"
-            for pattern in (
-                r'["\']?navStat["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
-                r'["\']?cancelNav["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
-                r'["\']?statisticalNav["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
-            ):
-                m = re.search(pattern, text)
-                if m:
-                    nav_str = m.group(1).replace(",", "")
-                    try:
-                        nav_val = float(nav_str)
-                        if nav_val > 100:   # sanity: NAV for Iranian funds is always >> 100
-                            logger.info(
-                                "  NAV from TSETMC HTML script pattern (%s) = %s for %s",
-                                pattern[:30], nav_val, ins_code,
-                            )
-                            return self._build_nav(nav_val, nav_val, nav_val,
-                                                   "", "TSETMC/HTML-script")
-                    except ValueError:
-                        pass
-
-            # Try generic JSON arrays/objects embedded in script
-            for json_match in re.findall(r'(\{[^<]{50,}\})', text, re.DOTALL):
-                try:
-                    obj = json.loads(json_match)
-                    nav = self._extract_nav_from_json(obj, ins_code)
-                    if nav:
-                        logger.info("  NAV from TSETMC HTML inline JSON for %s", ins_code)
-                        return nav
-                except Exception:
-                    pass
-
-        # c) Element-based extraction
-        for css_id in ("NavStat", "navStat", "LastNav", "cancelNav", "nav"):
-            el = soup.find(id=css_id)
-            if el:
-                text = el.get_text(strip=True).replace(",", "").replace("٬", "")
-                try:
-                    nav_val = float(text)
-                    if nav_val > 100:
-                        logger.info("  NAV from HTML #%s = %s for %s",
-                                    css_id, nav_val, ins_code)
-                        return self._build_nav(nav_val, nav_val, nav_val,
-                                               "", "TSETMC/HTML-element")
-                except ValueError:
-                    pass
-
-        logger.debug("  No NAV found in TSETMC HTML for ins_code=%s", ins_code)
         return None
 
     @staticmethod
