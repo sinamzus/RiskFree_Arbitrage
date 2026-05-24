@@ -1,0 +1,122 @@
+
+────────────────────────────────────────────────────────────────────────
+  A. صفحه fipiran.ir/mf/list
+────────────────────────────────────────────────────────────────────────
+  GET https://fipiran.ir/mf/list
+      → 200  1,532 bytes  Content-Type: text/html
+  Cookie jar: {}
+  Preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.png"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="theme-color" content="#000000"/><meta name="description" content="ÙØ§Ø­Ø¯ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ø§Ø·ÙØ§Ø¹Ø§Øª ÙØ§ÙÛ Ø§ÛØ±Ø§Ù
+
+────────────────────────────────────────────────────────────────────────
+  B. تست API endpoint های فیپیران
+────────────────────────────────────────────────────────────────────────
+  GET https://fund.fipiran.ir/api/v1/fund/fundcompare  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundcompare (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundcompare?TypeOfInvest=Fixed  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundcompare?TypeOfInvest=Fixed (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundcompare?typeOfFund=1  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundcompare?typeOfFund=1 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundlist  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundlist (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundlist?TypeOfFund=1  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundlist?TypeOfFund=1 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundlist?TypeOfInvest=Fixed  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundlist?TypeOfInvest=Fixed (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v2/fund/fundlist  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v2/fund/fundlist (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v2/fund/fundlist?TypeOfFund=1  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v2/fund/fundlist?TypeOfFund=1 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fipiran.ir/api/v1/fund/fundlist
+      → 403  548 bytes  Content-Type: text/html
+  GET https://fipiran.ir/api/v1/fund/fundcompare
+      → 403  548 bytes  Content-Type: text/html
+  GET https://fipiran.ir/DataService/FundCompare
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON, HTML size=1532
+  GET https://fipiran.ir/DataService/Funds
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON, HTML size=1532
+  GET https://fipiran.ir/MFBourse/FundList
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON, HTML size=1532
+  GET https://fipiran.ir/mf/FundList
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON, HTML size=1532
+  GET https://api.fipiran.ir/v1/fund/fundlist  → ERROR: HTTPSConnectionPool(host='api.fipiran.ir', port=443): Max retries exceeded with url: /v1/fund/fundlist (Caused by NameResolutionError("HTTPSConnection(host='api.fipiran.ir', port=443): Failed to resolve 'api.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://api.fipiran.ir/fund/list  → ERROR: HTTPSConnectionPool(host='api.fipiran.ir', port=443): Max retries exceeded with url: /fund/list (Caused by NameResolutionError("HTTPSConnection(host='api.fipiran.ir', port=443): Failed to resolve 'api.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+
+────────────────────────────────────────────────────────────────────────
+  C. تلاش با AJAX + referer headers
+────────────────────────────────────────────────────────────────────────
+  GET https://fipiran.ir/mf/MFundList
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON
+  GET https://fipiran.ir/mf/GetFundList
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON
+  GET https://fipiran.ir/mf/FundData
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON
+  GET https://fipiran.ir/DataService/FundCompare?fundType=1&isETF=true
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON
+  GET https://fipiran.ir/DataService/FundCompare?typeOfFund=%D8%AF%D8%B1%D8%A2%D9%85%D8%AF+%D8%AB%D8%A7%D8%A8%D8%AA
+      → 200  1,532 bytes  Content-Type: text/html
+  — not JSON
+
+────────────────────────────────────────────────────────────────────────
+  D. پارس HTML صفحه mf/list
+────────────────────────────────────────────────────────────────────────
+  GET https://fipiran.ir/mf/list
+      → 200  1,532 bytes  Content-Type: text/html
+  تعداد تگ script: 1
+
+  تعداد جدول: 0
+
+  div‌های دارای id: ['root']
+
+  — __NEXT_DATA__ یافت نشد
+
+────────────────────────────────────────────────────────────────────────
+  E. fund.fipiran.ir — تست endpoint های مختلف
+────────────────────────────────────────────────────────────────────────
+  GET https://fund.fipiran.ir/  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: / (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundcompare  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundcompare (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundcompare?TypeOfInvest=Fixed&ReturnType=1  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundcompare?TypeOfInvest=Fixed&ReturnType=1 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundcompare?typeOfFund=1  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundcompare?typeOfFund=1 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundlist  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundlist (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundlist?pageNumber=1&pageSize=200  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundlist?pageNumber=1&pageSize=200 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundlist?pageNumber=1&pageSize=200&typeOfFund=1  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundlist?pageNumber=1&pageSize=200&typeOfFund=1 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/fundlist?pageNumber=1&pageSize=200&isETF=true  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/fundlist?pageNumber=1&pageSize=200&isETF=true (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/chart/getfundnetasset  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/chart/getfundnetasset (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/treemap  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/treemap (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+  GET https://fund.fipiran.ir/api/v1/fund/treemap?typeOfFund=1  → ERROR: HTTPSConnectionPool(host='fund.fipiran.ir', port=443): Max retries exceeded with url: /api/v1/fund/treemap?typeOfFund=1 (Caused by NameResolutionError("HTTPSConnection(host='fund.fipiran.ir', port=443): Failed to resolve 'fund.fipiran.ir' ([Errno 11001] getaddrinfo failed)"))
+
+────────────────────────────────────────────────────────────────────────
+  F. تحلیل داده‌های JSON پیدا شده — صندوق‌های درآمد ثابت ETF
+────────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════════
+  مجموع صندوق‌های درآمد ثابت ETF پیدا شده: 0
+════════════════════════════════════════════════════════════════════════
+
+  هیچ صندوقی یافت نشد — احتمالاً باید داده را از HTML بگیریم.
+  خروجی HTML صفحه mf/list را در فایل زیر ببینید.
+
+────────────────────────────────────────────────────────────────────────
+  G. dump کامل اولین آیتم هر endpoint موفق
+────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────
+  H. تست TSETMC GetInstrumentSearch برای صندوق‌های یافت‌شده
+────────────────────────────────────────────────────────────────────────
+  صندوقی یافت نشده بود — تست TSETMC انجام نمی‌شود
+  برای تست دستی:
+  python -c "import requests; r=requests.get('https://cdn.tsetmc.com/api/Instrument/GetInstrumentSearch/درآمد ثابت'); print(r.text[:500])"
+
+────────────────────────────────────────────────────────────────────────
+  I. خروجی آماده برای config.py
+────────────────────────────────────────────────────────────────────────
+  داده‌ای برای تولید config.py یافت نشد.
+
+  ── دستورالعمل دستی ──
+  1. مرورگر را باز کنید: https://fipiran.ir/mf/list
+  2. DevTools → Network → XHR/Fetch را فیلتر کنید
+  3. درخواست‌های API را پیدا کنید
+  4. URL آنها را در اینجا گزارش دهید
+
+────────────────────────────────────────────────────────────────────────
+  DONE
+────────────────────────────────────────────────────────────────────────
