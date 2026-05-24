@@ -1,0 +1,102 @@
+============================================================
+  فیلدهای GetInstrumentSearch — dump کامل
+============================================================
+
+── جستجو «كمند» (صندوق ETF درآمد ثابت) ──
+{
+  "insCode2": "71516048161401340",
+  "insCode3": "60882187292927671",
+  "insCode4": "55266031060966810",
+  "insCode": "34718633636164421",
+  "lVal30": "صندوق س. با درآمد ثابت كمند",
+  "lVal18AFC": "كمند",
+  "flow": 1,
+  "cIsin": null,
+  "zTitad": 0.0,
+  "baseVol": 0,
+  "instrumentID": null,
+  "cgrValCot": "H1",
+  "cComVal": null,
+  "lastDate": 1,
+  "sourceID": 1,
+  "flowTitle": "بازار بورس",
+  "cgrValCotTitle": "بازار صندوق های قابل معامله"
+}
+{
+  "insCode2": "32976234316542440",
+  "insCode3": "21327658038871075",
+  "insCode4": "61028151804258859",
+  "insCode": "70309338813767186",
+  "lVal30": "گسترش قطعه سازي كمند",
+  "lVal18AFC": "فكمند",
+  "flow": 4,
+  "cIsin": null,
+  "zTitad": 0.0,
+  "baseVol": 0,
+  "instrumentID": null,
+  "cgrValCot": "P1",
+  "cComVal": null,
+  "lastDate": 1,
+  "sourceID": 2,
+  "flowTitle": "بازار پایه فرابورس",
+  "cgrValCotTitle": "بازار پایه زرد فرابورس"
+}
+{
+  "insCode2": "44963660560638760",
+  "insCode3": "38294891095078093",
+  "insCode4": "54139070070411876",
+  "insCode": "38294891095078093",
+  "lVal30": "ح. گسترش قطعه سازي كمند",
+  "lVal18AFC": "فكمندح",
+  "flow": 4,
+  "cIsin": null,
+  "zTitad": 0.0,
+  "baseVol": 0,
+  "instrumentID": null,
+  "cgrValCot": "P1",
+  "cComVal": null,
+  "lastDate": 1,
+  "sourceID": 2,
+  "flowTitle": "بازار پایه فرابورس",
+  "cgrValCotTitle": "بازار پایه زرد فرابورس"
+}
+
+── جستجو «وبملت» (سهام بانک) ──
+{
+  "insCode2": "66264163366013063",
+  "insCode3": "64007203906495070",
+  "insCode4": "49274298768587238",
+  "insCode": "778253364357513",
+  "lVal30": "بانك ملت",
+  "lVal18AFC": "وبملت",
+  "flow": 1,
+  "cIsin": null,
+  "zTitad": 0.0,
+  "baseVol": 0,
+  "instrumentID": null,
+  "cgrValCot": "N1",
+  "cComVal": null,
+  "lastDate": 1,
+  "sourceID": 1,
+  "flowTitle": "بازار بورس",
+  "cgrValCotTitle": ""
+}
+{
+  "insCode2": "36565392014451013",
+  "insCode3": "52221992657088244",
+  "insCode4": "46502743802746696",
+  "insCode": "25043059770705816",
+  "lVal30": "ح . بانك ملت",
+  "lVal18AFC": "وبملتح",
+  "flow": 1,
+  "cIsin": null,
+  "zTitad": 0.0,
+  "baseVol": 0,
+  "instrumentID": null,
+  "cgrValCot": "N1",
+  "cComVal": null,
+  "lastDate": 1,
+  "sourceID": 1,
+  "flowTitle": "بازار بورس",
+  "cgrValCotTitle": ""
+}
