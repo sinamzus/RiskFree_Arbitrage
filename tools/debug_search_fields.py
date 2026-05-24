@@ -26,14 +26,29 @@ log("=" * 60)
 log("  فیلدهای GetInstrumentSearch — dump کامل")
 log("=" * 60)
 
-# کمند (صندوق ETF درآمد ثابت)
-log("\n── جستجو «كمند» (صندوق ETF درآمد ثابت) ──")
+# کمند — flow=1 بورس ETF
+log("\n── «كمند» (ETF بورس، flow=1) ──")
 for item in search("كمند"):
     log(json.dumps(item, ensure_ascii=False, indent=2))
 
-# وبملت (سهام بانک)
-log("\n── جستجو «وبملت» (سهام بانک) ──")
-for item in search("وبملت")[:2]:
+# سام — flow=2 فرابورس ETF
+log("\n── «سام درآمد» (ETF فرابورس، flow=2) ──")
+for item in search("سام درآمد"):
+    log(json.dumps(item, ensure_ascii=False, indent=2))
+
+# اعتماد آفرین — flow=2
+log("\n── «اعتماد آفرين» (ETF فرابورس، flow=2) ──")
+for item in search("اعتماد آفرين"):
+    log(json.dumps(item, ensure_ascii=False, indent=2))
+
+# لبخند — flow=2
+log("\n── «لبخند» ──")
+for item in search("لبخند"):
+    log(json.dumps(item, ensure_ascii=False, indent=2))
+
+# وبملت — سهام بورس
+log("\n── «وبملت» (سهام بانک) ──")
+for item in search("وبملت")[:1]:
     log(json.dumps(item, ensure_ascii=False, indent=2))
 
 with open(OUT, "w", encoding="utf-8") as f:
