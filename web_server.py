@@ -20,6 +20,44 @@ import time
 from datetime import datetime
 from typing import Optional
 
+
+def _aggregate_ticks(ticks: list, interval_min: int) -> list:
+    """Aggregate tick rows into OHLCV bars of *interval_min* minutes.
+
+    Each tick dict has: seq, time (HHMMSS int), price, volume, canceled.
+    Returns list of bar dicts sorted ascending by bar_time (HHMM int).
+    """
+    bars: dict = {}
+    for t in sorted(ticks, key=lambda x: x.get("seq", 0)):
+        if t.get("canceled"):
+            continue
+        heven = t.get("time", 0)
+        h = heven // 10000
+        m = (heven % 10000) // 100
+        bar_m   = (m // interval_min) * interval_min
+        bar_key = h * 100 + bar_m          # HHMM int
+        price   = t.get("price",  0)
+        volume  = t.get("volume", 0)
+        if price <= 0:
+            continue
+        if bar_key not in bars:
+            bars[bar_key] = {
+                "time":   bar_key,
+                "open":   price,
+                "high":   price,
+                "low":    price,
+                "close":  price,
+                "volume": 0,
+                "count":  0,
+            }
+        b = bars[bar_key]
+        b["high"]   = max(b["high"], price)
+        b["low"]    = min(b["low"],  price)
+        b["close"]  = price
+        b["volume"] += volume
+        b["count"]  += 1
+    return sorted(bars.values(), key=lambda x: x["time"])
+
 from flask import Flask, jsonify, request, Response, send_from_directory
 from pathlib import Path
 
@@ -96,18 +134,51 @@ def create_app(db, scan_callback=None):
 
     @app.route("/api/daily_history")
     def api_daily_history():
-        """Daily OHLCV rows from the daily_history table (bootstrapped data).
-
-        Query params:
-          symbol  – fund symbol (required)
-          days    – how many days back (default 365)
-        """
         symbol = request.args.get("symbol", "")
         days   = int(request.args.get("days", 365))
         if not symbol:
             return jsonify({"error": "symbol required"}), 400
         history = db.get_daily_history(symbol, days)
         return jsonify({"symbol": symbol, "days": days, "history": history})
+
+    @app.route("/api/intraday_bars")
+    def api_intraday_bars():
+        """Aggregate intraday tick trades into OHLCV bars.
+
+        Query params:
+          symbol   – fund symbol (required)
+          date     – YYYYMMDD int (default: today)
+          interval – minutes per bar: 1, 5, 15, 30, 60 (default: 5)
+        """
+        symbol   = request.args.get("symbol", "")
+        interval = int(request.args.get("interval", 5))
+        date_int = request.args.get(
+            "date",
+            datetime.now().strftime("%Y%m%d"),
+        )
+        date_int = int(date_int)
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+        if interval not in (1, 2, 3, 5, 10, 15, 30, 60):
+            interval = 5
+
+        ticks = db.get_intraday_trades(symbol, date_int)
+        bars  = _aggregate_ticks(ticks, interval)
+        return jsonify({
+            "symbol":   symbol,
+            "date":     date_int,
+            "interval": interval,
+            "bars":     bars,
+        })
+
+    @app.route("/api/intraday_dates")
+    def api_intraday_dates():
+        """Return list of dates (YYYYMMDD) that have intraday tick data."""
+        symbol = request.args.get("symbol", "")
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+        dates = db.get_intraday_dates(symbol)
+        return jsonify({"symbol": symbol, "dates": dates})
 
     @app.route("/api/stream")
     def api_stream():
