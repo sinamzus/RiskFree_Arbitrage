@@ -38,9 +38,7 @@ Usage
 """
 
 import argparse
-import io
 import logging
-import os
 import sys
 import time
 import threading
@@ -48,9 +46,10 @@ from pathlib import Path
 from datetime import datetime, time as dtime, timedelta
 
 # Force UTF-8 stdout/stderr on Windows so Persian text and emoji work
-if sys.platform == "win32" and not os.environ.get("PYTHONUTF8"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 
 import jdatetime
 
