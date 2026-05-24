@@ -168,7 +168,9 @@ class TSETMCFetcher:
             "trade_count":     info.get("zTotTran", 0),
         }
 
-        # Log full info dict at DEBUG level so we can see every field name
+        # Log top-level response keys and sub-object non-zero fields at DEBUG
+        logger.debug("ClosingPriceInfo top-level keys for %s: %s",
+                     ins_code, list(data.keys()))
         logger.debug("ClosingPriceInfo fields for %s: %s", ins_code,
                      {k: v for k, v in info.items()
                       if not k.startswith("_") and v not in (None, 0, "", [])})
@@ -206,23 +208,34 @@ class TSETMCFetcher:
         url = f"{TSETMC_CDN}/Instrument/GetInstrumentInfo/{ins_code}"
         data = self._get(url)
         if data:
+            # Log top-level keys (might have nav at root, not just inside sub-object)
+            logger.debug("InstrumentInfo top-level keys for %s: %s",
+                         ins_code, list(data.keys()))
             info = data.get("instrumentInfo", {})
             logger.debug("InstrumentInfo non-zero fields for %s: %s", ins_code,
                          {k: v for k, v in info.items()
                           if v not in (None, 0, "", [], {})})
-            for nav_key in ("navStat", "nav", "statisticalNav", "cancelNav",
-                            "staticNav", "psGelStaMax", "navPerUnit"):
-                nav = info.get(nav_key)
-                if nav and isinstance(nav, (int, float)) and nav > 0:
-                    logger.info("  NAV from InstrumentInfo[%s] = %s for %s",
-                                nav_key, nav, ins_code)
-                    return self._build_nav(
-                        nav,
-                        info.get("cancelNav", nav),
-                        info.get("issueNav",  nav),
-                        str(info.get("dEven", "")),
-                        "TSETMC/InstrumentInfo",
-                    )
+            # Check both top-level and sub-object
+            for search_obj in (info, data):
+                for nav_key in ("navStat", "nav", "statisticalNav", "cancelNav",
+                                "staticNav", "psGelStaMax", "navPerUnit",
+                                "pStat", "pStatNav", "pNavStat"):
+                    nav = search_obj.get(nav_key)
+                    if nav and isinstance(nav, (int, float)) and nav > 0:
+                        logger.info("  NAV from InstrumentInfo[%s] = %s for %s",
+                                    nav_key, nav, ins_code)
+                        return self._build_nav(
+                            nav,
+                            search_obj.get("cancelNav", nav),
+                            search_obj.get("issueNav",  nav),
+                            str(search_obj.get("dEven", "")),
+                            "TSETMC/InstrumentInfo",
+                        )
+
+        # ── 1b. Old TSETMC Loader API (TseClient pipe-separated format) ──
+        nav = self._nav_from_loader(ins_code)
+        if nav:
+            return nav
 
         # ── 2. ETF-specific endpoints ─────────────────────────────────────
         for path in (
@@ -304,6 +317,54 @@ class TSETMCFetcher:
                                                "", "TSETMC/StaticThreshold")
 
         logger.debug("  No NAV found for ins_code=%s", ins_code)
+        return None
+
+    def _nav_from_loader(self, ins_code: str) -> Optional[dict]:
+        """Try the old TSETMC Loader API (ParTree=15131W) for NAV data.
+
+        This legacy TseClient API returns pipe-delimited instrument data and
+        historically included the statistical NAV for ETF/fund instruments.
+        URL: https://www.tsetmc.com/Loader.aspx?ParTree=15131W&i={insCode}
+        """
+        url = f"{TSETMC_MAIN}/Loader.aspx?ParTree=15131W&i={ins_code}"
+        text = self._get(url, silent=True, html=True)
+        if not text:
+            return None
+        text = text.strip()
+        logger.debug("Loader API for %s: %d bytes, preview: %s",
+                     ins_code, len(text), text[:100].replace("\n", " "))
+
+        # Format: semi-colon separated sections, each section has @-separated fields
+        # Known position for navStat varies; try JSON first in case it changed format
+        try:
+            obj = json.loads(text)
+            nav = self._extract_nav_from_json(obj, ins_code)
+            if nav:
+                logger.info("  NAV from Loader API (JSON) for %s", ins_code)
+                return nav
+        except Exception:
+            pass
+
+        # Pipe/semi-colon delimited: look for any 6-10 digit number that could be NAV
+        # ETF fund NAV in Iran is typically 1,000,000 – 99,999,999 range (Rial)
+        # Section 3 (index 2) or 4 in the old TseClient format contains price/nav data
+        parts = re.split(r'[;@,\|]', text)
+        # Statistical NAV for Iranian ETFs is 7-10 digits
+        nav_candidates = []
+        for p in parts:
+            p = p.strip()
+            if re.match(r'^\d{7,10}$', p):
+                nav_candidates.append(float(p))
+        if nav_candidates:
+            # The largest plausible value is probably the NAV (unit price range)
+            # Filter: typical Iranian fixed-income ETF NAV: 8,000,000 – 30,000,000 Rial
+            plausible = [v for v in nav_candidates if 1_000_000 <= v <= 200_000_000]
+            if plausible:
+                nav_val = sorted(plausible)[len(plausible)//2]  # median
+                logger.info("  NAV from Loader API (pipe-parse) = %s for %s",
+                            nav_val, ins_code)
+                return self._build_nav(nav_val, nav_val, nav_val,
+                                       "", "TSETMC/Loader")
         return None
 
     def _nav_from_etf_list(self, ins_code: str) -> Optional[dict]:
