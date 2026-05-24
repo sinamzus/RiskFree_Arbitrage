@@ -1,7 +1,7 @@
 """Configuration for fixed-income fund arbitrage scanner."""
 
 TSETMC_CDN = "https://cdn.tsetmc.com/api"
-FIPIRAN_WEB = "https://www.fipiran.ir"  # NOT fund.fipiran.ir (DNS fails on some networks)
+FIPIRAN_WEB = "https://www.fipiran.ir"
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -16,39 +16,47 @@ REQUEST_HEADERS = {
 
 REQUEST_TIMEOUT = 15
 
-# Known fixed-income ETF funds.
-# ins_code: TSETMC unique instrument ID — empty string "" means auto-discover via search.
-# Verified working codes are marked ✓ (returned HTTP 200 on ClosingPriceInfo).
-# All others are cleared to "" so they are auto-discovered at runtime.
+# Fixed-income ETF funds with TSETMC instrument codes.
+# ins_code verified from live run on 2026-05-24.
+# Alternative symbols: some funds appear under a different ticker on TSETMC
+# so we provide alt_symbols for the search fallback.
 FIXED_INCOME_ETFS = [
-    {"symbol": "کیان",   "name": "صندوق درآمد ثابت کیان",       "ins_code": "46348559193224090"},  # ✓
-    {"symbol": "پارند",  "name": "صندوق درآمد ثابت پارند",      "ins_code": "28320293733348826"},  # ✓
-    {"symbol": "سپهر",   "name": "صندوق درآمد ثابت سپهر",       "ins_code": "65883838195688438"},  # ✓
-    {"symbol": "اعتماد", "name": "صندوق درآمد ثابت اعتماد",     "ins_code": "7745894403636165"},   # ✓
-    {"symbol": "کمند",   "name": "صندوق درآمد ثابت کمند",       "ins_code": ""},
-    {"symbol": "افران",  "name": "صندوق درآمد ثابت افران",      "ins_code": ""},
-    {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت",      "ins_code": ""},
-    {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا",     "ins_code": ""},
-    {"symbol": "لبخند",  "name": "صندوق درآمد ثابت لبخند",      "ins_code": ""},
-    {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند",      "ins_code": ""},
-    {"symbol": "آساس",   "name": "صندوق درآمد ثابت آساس",       "ins_code": ""},
-    {"symbol": "همای",   "name": "صندوق درآمد ثابت همای",       "ins_code": ""},
-    {"symbol": "آفاق",   "name": "صندوق درآمد ثابت آفاق",       "ins_code": ""},
-    {"symbol": "گنجین",  "name": "صندوق درآمد ثابت گنجینه",     "ins_code": ""},
-    {"symbol": "خاتم",   "name": "صندوق درآمد ثابت خاتم",       "ins_code": ""},
-    {"symbol": "اوصتا",  "name": "صندوق درآمد ثابت اوصتا",      "ins_code": ""},
-    {"symbol": "فردا",   "name": "صندوق درآمد ثابت فردا",       "ins_code": ""},
-    {"symbol": "گوهر",   "name": "صندوق درآمد ثابت گوهر",       "ins_code": ""},
-    {"symbol": "سخند",   "name": "صندوق درآمد ثابت سخند",       "ins_code": ""},
-    {"symbol": "حکمت",   "name": "صندوق درآمد ثابت حکمت",       "ins_code": ""},
+    # --- verified ins_codes (returned HTTP 200 on ClosingPriceInfo) ---
+    {"symbol": "کیان",   "name": "صندوق درآمد ثابت کیان",       "ins_code": "46348559193224090"},
+    {"symbol": "پارند",  "name": "صندوق درآمد ثابت پارند",      "ins_code": "28320293733348826"},
+    {"symbol": "سپهر",   "name": "صندوق درآمد ثابت سپهر",       "ins_code": "65883838195688438"},
+    {"symbol": "اعتماد", "name": "صندوق درآمد ثابت اعتماد",     "ins_code": "7745894403636165"},
+    # --- auto-discovered ins_codes (from live TSETMC search 2026-05-24) ---
+    {"symbol": "کمند",   "name": "صندوق درآمد ثابت کمند",       "ins_code": "34718633636164421"},
+    {"symbol": "افران",  "name": "صندوق درآمد ثابت افران",      "ins_code": "3846143218462419"},
+    {"symbol": "لبخند",  "name": "صندوق درآمد ثابت لبخند",      "ins_code": "31569200988534548"},
+    {"symbol": "آساس",   "name": "صندوق درآمد ثابت آساس",       "ins_code": "66682662312253625"},
+    {"symbol": "آفاق",   "name": "صندوق درآمد ثابت آفاق",       "ins_code": "37073830945037165"},
+    {"symbol": "گنجین",  "name": "صندوق درآمد ثابت گنجینه",     "ins_code": "65640021232361587"},
+    {"symbol": "خاتم",   "name": "صندوق درآمد ثابت خاتم",       "ins_code": "18865325633315847"},
+    {"symbol": "اوصتا",  "name": "صندوق درآمد ثابت اوصتا",      "ins_code": "57761388729898548"},
+    {"symbol": "فردا",   "name": "صندوق درآمد ثابت فردا",       "ins_code": "65249046611427924"},
+    {"symbol": "گوهر",   "name": "صندوق درآمد ثابت گوهر",       "ins_code": "12390706505809150"},
+    {"symbol": "سخند",   "name": "صندوق درآمد ثابت سخند",       "ins_code": "59598536122397373"},
+    # --- not found on TSETMC by symbol; trying known alternative names ---
+    {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت",      "ins_code": "",
+     "alt_symbols": ["صیاقوت", "یاقوت1", "ثیاقوت"]},
+    {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا",     "ins_code": "",
+     "alt_symbols": ["فیروزه", "ثفیروزا", "صفیروزا"]},
+    {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند",      "ins_code": "",
+     "alt_symbols": ["ثصایند", "صاین", "صایند1"]},
+    {"symbol": "همای",   "name": "صندوق درآمد ثابت همای",       "ins_code": "",
+     "alt_symbols": ["ثهمای", "همای1", "صهمای"]},
+    {"symbol": "حکمت",   "name": "صندوق درآمد ثابت حکمت",       "ins_code": "",
+     "alt_symbols": ["ثحکمت", "حکمت1", "صحکمت"]},
 ]
 
 # Trading cost parameters
-BUYER_COMMISSION  = 0.00145   # 0.145% buyer commission
-SELLER_COMMISSION = 0.00145   # 0.145% seller commission
-SELLER_TAX        = 0.0       # fixed-income ETFs are exempt
-CREATION_FEE      = 0.001     # ~0.1% creation fee (varies per fund)
-REDEMPTION_FEE    = 0.001     # ~0.1% redemption fee (varies per fund)
+BUYER_COMMISSION  = 0.00145
+SELLER_COMMISSION = 0.00145
+SELLER_TAX        = 0.0
+CREATION_FEE      = 0.001
+REDEMPTION_FEE    = 0.001
 
 # Minimum thresholds
 MIN_PREMIUM_THRESHOLD  = 0.3   # %
