@@ -21,6 +21,23 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+def _normalize(text: str) -> str:
+    """Normalize Arabic-script characters to Persian equivalents.
+
+    TSETMC stores fund names using Arabic letters (e.g. Arabic ya ي U+064A,
+    Arabic kaf ك U+0643) while Python strings typically use the visually
+    identical Persian codepoints (ya ی U+06CC, kaf ک U+06A9).
+    A plain == comparison therefore fails even though the names look the same.
+    """
+    return (
+        text
+        .replace("ي", "ی")  # ي → ی  (Arabic ya → Persian ya)
+        .replace("ك", "ک")  # ك → ک  (Arabic kaf → Persian kaf)
+        .replace("ة", "ه")  # ة → ه  (ta marbuta → Persian he)
+        .strip()
+    )
+
+
 # =========================================================================== #
 #  TSETMC fetcher                                                              #
 # =========================================================================== #
@@ -86,18 +103,20 @@ class TSETMCFetcher:
                 [i.get("lVal18AFC", "").strip() for i in instruments[:5]],
             )
 
-            # Priority 1: exact ticker match
+            # Priority 1: exact ticker match (normalize both sides: TSETMC uses Arabic chars)
             for inst in instruments:
-                if inst.get("lVal18AFC", "").strip() == candidate:
+                tsetmc_symbol = _normalize(inst.get("lVal18AFC", ""))
+                if tsetmc_symbol == _normalize(candidate):
                     code = inst.get("insCode", "")
                     if code:
-                        logger.info("  ✓ ins_code for '%s': %s", candidate, code)
+                        logger.info("  ✓ ins_code for '%s': %s (TSETMC ticker: %s)",
+                                    candidate, code, inst.get("lVal18AFC", ""))
                         self._ins_code_cache[symbol] = code
                         return code
 
             # Priority 2: fund instrument (name contains صندوق + درآمد)
             for inst in instruments:
-                name = inst.get("lVal30", "")
+                name = _normalize(inst.get("lVal30", ""))
                 if "صندوق" in name and "درآمد" in name:
                     code = inst.get("insCode", "")
                     if code:
@@ -348,38 +367,59 @@ class FIPIRANFetcher:
     4. Fallback URL: /Fund/MFBourse (ETF-specific page)
     """
 
-    _ENDPOINTS = [
-        FIPIRAN_WEB + "/DataService/FundCompare",
-        FIPIRAN_WEB + "/Fund/MFBourse",
+    # FIPIRAN is a React/NextJS SPA — HTML endpoints return only the app shell.
+    # Data comes from JSON API routes; we try several known paths.
+    _API_ENDPOINTS = [
+        FIPIRAN_WEB + "/api/v1/fund/fundlist",      # returns 403 without session
+        "https://fipiran.ir/api/v1/fund/fundlist",   # bare domain
+        FIPIRAN_WEB + "/api/fund/fundcompare",
+        FIPIRAN_WEB + "/api/v1/fund/fundcompare",
+        "https://fipiran.ir/api/v1/fund/fundcompare",
     ]
-
-    # ASP.NET MVC AJAX endpoints typically require this header to return JSON
-    _AJAX_HEADERS = {
-        "X-Requested-With": "XMLHttpRequest",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-    }
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(REQUEST_HEADERS)
         self.session.headers["Referer"] = FIPIRAN_WEB + "/"
+        self._session_established = False
+
+    def _establish_session(self):
+        """Visit the FIPIRAN homepage to pick up any session cookies / CSRF tokens."""
+        if self._session_established:
+            return
+        try:
+            self.session.get(FIPIRAN_WEB + "/", timeout=REQUEST_TIMEOUT)
+            self._session_established = True
+            logger.debug("FIPIRAN session established")
+        except Exception as e:
+            logger.debug("FIPIRAN session establishment failed: %s", e)
 
     def _fetch(self, url: str) -> Optional[requests.Response]:
-        """Try fetching with AJAX headers first, then plain GET."""
-        for extra in (self._AJAX_HEADERS, {}):
+        """Fetch a FIPIRAN URL, trying several header combinations."""
+        header_variants = [
+            # 1. Plain JSON request with correct Origin (most likely to work for API routes)
+            {"Accept": "application/json", "Origin": FIPIRAN_WEB},
+            # 2. Same-origin AJAX style
+            {"X-Requested-With": "XMLHttpRequest",
+             "Accept": "application/json, text/javascript, */*; q=0.01"},
+            # 3. Bare request
+            {},
+        ]
+        for extra in header_variants:
             try:
                 resp = self.session.get(url, timeout=REQUEST_TIMEOUT,
                                         headers={**self.session.headers, **extra})
                 resp.raise_for_status()
                 logger.debug(
-                    "FIPIRAN %s [%s] → %d, Content-Type: %s, size: %d bytes, preview: %s",
-                    url, "AJAX" if extra else "plain",
-                    resp.status_code,
+                    "FIPIRAN %s → %d, Content-Type: %s, size: %d bytes, preview: %s",
+                    url, resp.status_code,
                     resp.headers.get("Content-Type", "?"),
                     len(resp.content),
-                    resp.text[:120].replace("\n", " "),
+                    resp.text[:150].replace("\n", " "),
                 )
                 return resp
+            except requests.exceptions.HTTPError as e:
+                logger.debug("FIPIRAN %s [%s] → %s", url, extra, e)
             except requests.exceptions.RequestException as e:
                 logger.warning("FIPIRAN request failed %s: %s", url, e)
         return None
@@ -390,7 +430,9 @@ class FIPIRANFetcher:
 
     def get_fixed_income_funds(self) -> list[dict]:
         """Return fixed-income ETF funds with their NAV data."""
-        for url in self._ENDPOINTS:
+        self._establish_session()
+
+        for url in self._API_ENDPOINTS:
             resp = self._fetch(url)
             if resp is None:
                 continue
@@ -407,15 +449,17 @@ class FIPIRANFetcher:
                 logger.info("FIPIRAN: %d fixed-income ETFs from %s (script JSON)", len(parsed), url)
                 return parsed
 
-            # ── attempt 3: HTML <table> ──
-            parsed = self._try_html_table(resp.text)
-            if parsed:
-                logger.info("FIPIRAN: %d fixed-income ETFs from %s (HTML table)", len(parsed), url)
-                return parsed
+            # ── attempt 3: HTML <table> (only useful if response is actual HTML with data) ──
+            ct = resp.headers.get("Content-Type", "")
+            if "html" in ct and len(resp.content) > 5000:
+                parsed = self._try_html_table(resp.text)
+                if parsed:
+                    logger.info("FIPIRAN: %d fixed-income ETFs from %s (HTML table)", len(parsed), url)
+                    return parsed
 
-            logger.warning("FIPIRAN: could not extract fund data from %s", url)
+            logger.debug("FIPIRAN: no usable data from %s (size=%d)", url, len(resp.content))
 
-        logger.warning("FIPIRAN: no usable data from any endpoint")
+        logger.warning("FIPIRAN: no usable data from any endpoint — NAV will be unavailable")
         return []
 
     # ------------------------------------------------------------------ #
