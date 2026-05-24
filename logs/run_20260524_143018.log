@@ -1,0 +1,215 @@
+2026-05-24 14:30:18 [INFO    ] __main__: Log file: C:\Users\Part Laptop\RiskFree_Arbitrage\logs\run_20260524_143018.log
+2026-05-24 14:30:18 [INFO    ] data_fetcher: Fetching price data from TSETMC...
+2026-05-24 14:30:18 [INFO    ] data_fetcher: [1/20] Fetching کیان ...
+2026-05-24 14:30:18 [DEBUG   ] urllib3.connectionpool: Starting new HTTPS connection (1): cdn.tsetmc.com:443
+2026-05-24 14:30:18 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/46348559193224090 HTTP/1.1" 200 None
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/46348559193224090 HTTP/1.1" 200 None
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/46348559193224090 HTTP/1.1" 404 0
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/46348559193224090 HTTP/1.1" 404 0
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/46348559193224090 HTTP/1.1" 404 0
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/46348559193224090 HTTP/1.1" 404 0
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/46348559193224090/0 HTTP/1.1" 200 824
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/46348559193224090 HTTP/1.1" 200 None
+2026-05-24 14:30:19 [INFO    ] data_fetcher: [2/20] Fetching پارند ...
+2026-05-24 14:30:19 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/28320293733348826 HTTP/1.1" 200 None
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/28320293733348826 HTTP/1.1" 200 None
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/28320293733348826 HTTP/1.1" 404 0
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/28320293733348826 HTTP/1.1" 404 0
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/28320293733348826 HTTP/1.1" 404 0
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/28320293733348826 HTTP/1.1" 404 0
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/28320293733348826/0 HTTP/1.1" 200 824
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/28320293733348826 HTTP/1.1" 200 None
+2026-05-24 14:30:20 [INFO    ] data_fetcher: [3/20] Fetching سپهر ...
+2026-05-24 14:30:20 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/65883838195688438 HTTP/1.1" 200 None
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/65883838195688438 HTTP/1.1" 200 None
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/65883838195688438 HTTP/1.1" 404 0
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/65883838195688438 HTTP/1.1" 404 0
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/65883838195688438 HTTP/1.1" 404 0
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/65883838195688438 HTTP/1.1" 404 0
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/65883838195688438/0 HTTP/1.1" 200 824
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/65883838195688438 HTTP/1.1" 200 None
+2026-05-24 14:30:21 [INFO    ] data_fetcher: [4/20] Fetching اعتماد ...
+2026-05-24 14:30:21 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/7745894403636165 HTTP/1.1" 200 None
+2026-05-24 14:30:22 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/7745894403636165 HTTP/1.1" 200 None
+2026-05-24 14:30:22 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/7745894403636165 HTTP/1.1" 404 0
+2026-05-24 14:30:22 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/7745894403636165 HTTP/1.1" 404 0
+2026-05-24 14:30:22 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/7745894403636165 HTTP/1.1" 404 0
+2026-05-24 14:30:22 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/7745894403636165 HTTP/1.1" 404 0
+2026-05-24 14:30:22 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/7745894403636165/0 HTTP/1.1" 200 824
+2026-05-24 14:30:22 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/7745894403636165 HTTP/1.1" 200 None
+2026-05-24 14:30:22 [INFO    ] data_fetcher: [5/20] Fetching کمند ...
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%DA%A9%D9%85%D9%86%D8%AF HTTP/1.1" 200 None
+2026-05-24 14:30:23 [INFO    ] data_fetcher:   ✓ ins_code discovered for کمند via fund-name match: 34718633636164421
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/34718633636164421 HTTP/1.1" 200 None
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/34718633636164421 HTTP/1.1" 200 None
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/34718633636164421 HTTP/1.1" 404 0
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/34718633636164421 HTTP/1.1" 404 0
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/34718633636164421 HTTP/1.1" 404 0
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/34718633636164421 HTTP/1.1" 404 0
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/34718633636164421/0 HTTP/1.1" 200 824
+2026-05-24 14:30:23 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/34718633636164421 HTTP/1.1" 200 None
+2026-05-24 14:30:24 [INFO    ] data_fetcher: [6/20] Fetching افران ...
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%A7%D9%81%D8%B1%D8%A7%D9%86 HTTP/1.1" 200 None
+2026-05-24 14:30:24 [INFO    ] data_fetcher:   ✓ ins_code discovered for افران: 3846143218462419
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/3846143218462419 HTTP/1.1" 200 None
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/3846143218462419 HTTP/1.1" 200 None
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/3846143218462419 HTTP/1.1" 404 0
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/3846143218462419 HTTP/1.1" 404 0
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/3846143218462419 HTTP/1.1" 404 0
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/3846143218462419 HTTP/1.1" 404 0
+2026-05-24 14:30:24 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/3846143218462419/0 HTTP/1.1" 200 824
+2026-05-24 14:30:25 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/3846143218462419 HTTP/1.1" 200 None
+2026-05-24 14:30:25 [INFO    ] data_fetcher: [7/20] Fetching یاقوت ...
+2026-05-24 14:30:25 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%DB%8C%D8%A7%D9%82%D9%88%D8%AA HTTP/1.1" 200 None
+2026-05-24 14:30:25 [WARNING ] data_fetcher:   Could not find ins_code for symbol: یاقوت
+2026-05-24 14:30:25 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%DB%8C%D8%A7%D9%82%D9%88%D8%AA HTTP/1.1" 200 None
+2026-05-24 14:30:25 [WARNING ] data_fetcher:   Could not find ins_code for symbol: یاقوت
+2026-05-24 14:30:26 [INFO    ] data_fetcher: [8/20] Fetching فیروزا ...
+2026-05-24 14:30:26 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D9%81%DB%8C%D8%B1%D9%88%D8%B2%D8%A7 HTTP/1.1" 200 None
+2026-05-24 14:30:26 [WARNING ] data_fetcher:   Could not find ins_code for symbol: فیروزا
+2026-05-24 14:30:26 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D9%81%DB%8C%D8%B1%D9%88%D8%B2%D8%A7 HTTP/1.1" 200 None
+2026-05-24 14:30:26 [WARNING ] data_fetcher:   Could not find ins_code for symbol: فیروزا
+2026-05-24 14:30:27 [INFO    ] data_fetcher: [9/20] Fetching لبخند ...
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D9%84%D8%A8%D8%AE%D9%86%D8%AF HTTP/1.1" 200 None
+2026-05-24 14:30:27 [INFO    ] data_fetcher:   ✓ ins_code discovered for لبخند: 31569200988534548
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/31569200988534548 HTTP/1.1" 200 None
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/31569200988534548 HTTP/1.1" 200 None
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/31569200988534548 HTTP/1.1" 404 0
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/31569200988534548 HTTP/1.1" 404 0
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/31569200988534548 HTTP/1.1" 404 0
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/31569200988534548 HTTP/1.1" 404 0
+2026-05-24 14:30:27 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/31569200988534548/0 HTTP/1.1" 200 824
+2026-05-24 14:30:28 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/31569200988534548 HTTP/1.1" 200 None
+2026-05-24 14:30:28 [INFO    ] data_fetcher: [10/20] Fetching صایند ...
+2026-05-24 14:30:28 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%B5%D8%A7%DB%8C%D9%86%D8%AF HTTP/1.1" 200 None
+2026-05-24 14:30:28 [WARNING ] data_fetcher:   Could not find ins_code for symbol: صایند
+2026-05-24 14:30:28 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%B5%D8%A7%DB%8C%D9%86%D8%AF HTTP/1.1" 200 None
+2026-05-24 14:30:28 [WARNING ] data_fetcher:   Could not find ins_code for symbol: صایند
+2026-05-24 14:30:29 [INFO    ] data_fetcher: [11/20] Fetching آساس ...
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%A2%D8%B3%D8%A7%D8%B3 HTTP/1.1" 200 None
+2026-05-24 14:30:29 [INFO    ] data_fetcher:   ✓ ins_code discovered for آساس: 66682662312253625
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/66682662312253625 HTTP/1.1" 200 None
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/66682662312253625 HTTP/1.1" 200 None
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/66682662312253625 HTTP/1.1" 404 0
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/66682662312253625 HTTP/1.1" 404 0
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/66682662312253625 HTTP/1.1" 404 0
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/66682662312253625 HTTP/1.1" 404 0
+2026-05-24 14:30:29 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/66682662312253625/0 HTTP/1.1" 200 824
+2026-05-24 14:30:30 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/66682662312253625 HTTP/1.1" 200 None
+2026-05-24 14:30:30 [INFO    ] data_fetcher: [12/20] Fetching همای ...
+2026-05-24 14:30:30 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D9%87%D9%85%D8%A7%DB%8C HTTP/1.1" 200 None
+2026-05-24 14:30:30 [WARNING ] data_fetcher:   Could not find ins_code for symbol: همای
+2026-05-24 14:30:30 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D9%87%D9%85%D8%A7%DB%8C HTTP/1.1" 200 None
+2026-05-24 14:30:30 [WARNING ] data_fetcher:   Could not find ins_code for symbol: همای
+2026-05-24 14:30:31 [INFO    ] data_fetcher: [13/20] Fetching آفاق ...
+2026-05-24 14:30:31 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%A2%D9%81%D8%A7%D9%82 HTTP/1.1" 200 None
+2026-05-24 14:30:31 [INFO    ] data_fetcher:   ✓ ins_code discovered for آفاق: 37073830945037165
+2026-05-24 14:30:31 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/37073830945037165 HTTP/1.1" 200 None
+2026-05-24 14:30:31 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/37073830945037165 HTTP/1.1" 200 None
+2026-05-24 14:30:31 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/37073830945037165 HTTP/1.1" 404 0
+2026-05-24 14:30:31 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/37073830945037165 HTTP/1.1" 404 0
+2026-05-24 14:30:31 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/37073830945037165 HTTP/1.1" 404 0
+2026-05-24 14:30:32 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/37073830945037165 HTTP/1.1" 404 0
+2026-05-24 14:30:32 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/37073830945037165/0 HTTP/1.1" 200 824
+2026-05-24 14:30:32 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/37073830945037165 HTTP/1.1" 200 None
+2026-05-24 14:30:32 [INFO    ] data_fetcher: [14/20] Fetching گنجین ...
+2026-05-24 14:30:32 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%DA%AF%D9%86%D8%AC%DB%8C%D9%86 HTTP/1.1" 200 None
+2026-05-24 14:30:32 [INFO    ] data_fetcher:   ✓ ins_code discovered for گنجین via fund-name match: 65640021232361587
+2026-05-24 14:30:32 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/65640021232361587 HTTP/1.1" 200 None
+2026-05-24 14:30:33 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/65640021232361587 HTTP/1.1" 200 None
+2026-05-24 14:30:33 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/65640021232361587 HTTP/1.1" 404 0
+2026-05-24 14:30:33 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/65640021232361587 HTTP/1.1" 404 0
+2026-05-24 14:30:33 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/65640021232361587 HTTP/1.1" 404 0
+2026-05-24 14:30:33 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/65640021232361587 HTTP/1.1" 404 0
+2026-05-24 14:30:33 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/65640021232361587/0 HTTP/1.1" 200 824
+2026-05-24 14:30:33 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/65640021232361587 HTTP/1.1" 200 None
+2026-05-24 14:30:33 [INFO    ] data_fetcher: [15/20] Fetching خاتم ...
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%AE%D8%A7%D8%AA%D9%85 HTTP/1.1" 200 None
+2026-05-24 14:30:34 [INFO    ] data_fetcher:   ✓ ins_code discovered for خاتم: 18865325633315847
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/18865325633315847 HTTP/1.1" 200 None
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/18865325633315847 HTTP/1.1" 200 None
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/18865325633315847 HTTP/1.1" 404 0
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/18865325633315847 HTTP/1.1" 404 0
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/18865325633315847 HTTP/1.1" 404 0
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/18865325633315847 HTTP/1.1" 404 0
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/18865325633315847/0 HTTP/1.1" 200 824
+2026-05-24 14:30:34 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/18865325633315847 HTTP/1.1" 200 None
+2026-05-24 14:30:35 [INFO    ] data_fetcher: [16/20] Fetching اوصتا ...
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%A7%D9%88%D8%B5%D8%AA%D8%A7 HTTP/1.1" 200 None
+2026-05-24 14:30:35 [INFO    ] data_fetcher:   ✓ ins_code discovered for اوصتا: 57761388729898548
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/57761388729898548 HTTP/1.1" 200 None
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/57761388729898548 HTTP/1.1" 200 None
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/57761388729898548 HTTP/1.1" 404 0
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/57761388729898548 HTTP/1.1" 404 0
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/57761388729898548 HTTP/1.1" 404 0
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/57761388729898548 HTTP/1.1" 404 0
+2026-05-24 14:30:35 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/57761388729898548/0 HTTP/1.1" 200 824
+2026-05-24 14:30:36 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/57761388729898548 HTTP/1.1" 200 None
+2026-05-24 14:30:36 [INFO    ] data_fetcher: [17/20] Fetching فردا ...
+2026-05-24 14:30:36 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D9%81%D8%B1%D8%AF%D8%A7 HTTP/1.1" 200 None
+2026-05-24 14:30:36 [INFO    ] data_fetcher:   ✓ ins_code discovered for فردا: 65249046611427924
+2026-05-24 14:30:36 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/65249046611427924 HTTP/1.1" 200 None
+2026-05-24 14:30:36 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/65249046611427924 HTTP/1.1" 200 None
+2026-05-24 14:30:36 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/65249046611427924 HTTP/1.1" 404 0
+2026-05-24 14:30:37 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/65249046611427924 HTTP/1.1" 404 0
+2026-05-24 14:30:37 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/65249046611427924 HTTP/1.1" 404 0
+2026-05-24 14:30:37 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/65249046611427924 HTTP/1.1" 404 0
+2026-05-24 14:30:37 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/65249046611427924/0 HTTP/1.1" 200 824
+2026-05-24 14:30:37 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/65249046611427924 HTTP/1.1" 200 None
+2026-05-24 14:30:37 [INFO    ] data_fetcher: [18/20] Fetching گوهر ...
+2026-05-24 14:30:37 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%DA%AF%D9%88%D9%87%D8%B1 HTTP/1.1" 200 None
+2026-05-24 14:30:37 [INFO    ] data_fetcher:   ✓ ins_code discovered for گوهر: 12390706505809150
+2026-05-24 14:30:37 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/12390706505809150 HTTP/1.1" 200 None
+2026-05-24 14:30:38 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/12390706505809150 HTTP/1.1" 200 None
+2026-05-24 14:30:38 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/12390706505809150 HTTP/1.1" 404 0
+2026-05-24 14:30:38 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/12390706505809150 HTTP/1.1" 404 0
+2026-05-24 14:30:38 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/12390706505809150 HTTP/1.1" 404 0
+2026-05-24 14:30:38 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/12390706505809150 HTTP/1.1" 404 0
+2026-05-24 14:30:38 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/12390706505809150/0 HTTP/1.1" 200 824
+2026-05-24 14:30:38 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/12390706505809150 HTTP/1.1" 200 None
+2026-05-24 14:30:39 [INFO    ] data_fetcher: [19/20] Fetching سخند ...
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%B3%D8%AE%D9%86%D8%AF HTTP/1.1" 200 None
+2026-05-24 14:30:39 [INFO    ] data_fetcher:   ✓ ins_code discovered for سخند: 59598536122397373
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/ClosingPrice/GetClosingPriceInfo/59598536122397373 HTTP/1.1" 200 None
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentInfo/59598536122397373 HTTP/1.1" 200 None
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundInfo/59598536122397373 HTTP/1.1" 404 0
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFund/59598536122397373 HTTP/1.1" 404 0
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetFundLastInfo/59598536122397373 HTTP/1.1" 404 0
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Fund/GetMutualFundByInsCode/59598536122397373 HTTP/1.1" 404 0
+2026-05-24 14:30:39 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/StaticThreshold/GetStaticThreshold/59598536122397373/0 HTTP/1.1" 200 824
+2026-05-24 14:30:40 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/BestLimits/59598536122397373 HTTP/1.1" 200 None
+2026-05-24 14:30:40 [INFO    ] data_fetcher: [20/20] Fetching حکمت ...
+2026-05-24 14:30:40 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%AD%DA%A9%D9%85%D8%AA HTTP/1.1" 200 None
+2026-05-24 14:30:40 [WARNING ] data_fetcher:   Could not find ins_code for symbol: حکمت
+2026-05-24 14:30:40 [DEBUG   ] urllib3.connectionpool: https://cdn.tsetmc.com:443 "GET /api/Instrument/GetInstrumentSearch/%D8%AD%DA%A9%D9%85%D8%AA HTTP/1.1" 200 None
+2026-05-24 14:30:40 [WARNING ] data_fetcher:   Could not find ins_code for symbol: حکمت
+2026-05-24 14:30:41 [INFO    ] data_fetcher: 20 fund(s) still missing NAV — fetching from FIPIRAN...
+2026-05-24 14:30:41 [DEBUG   ] urllib3.connectionpool: Starting new HTTPS connection (1): www.fipiran.ir:443
+2026-05-24 14:30:42 [DEBUG   ] urllib3.connectionpool: https://www.fipiran.ir:443 "GET /DataService/FundCompare HTTP/1.1" 200 None
+2026-05-24 14:30:42 [DEBUG   ] urllib3.connectionpool: https://www.fipiran.ir:443 "GET /api/v1/fund/fundlist HTTP/1.1" 403 None
+2026-05-24 14:30:42 [WARNING ] data_fetcher: FIPIRAN request failed for https://www.fipiran.ir/api/v1/fund/fundlist: 403 Client Error: Forbidden for url: https://www.fipiran.ir/api/v1/fund/fundlist
+2026-05-24 14:30:42 [DEBUG   ] urllib3.connectionpool: https://www.fipiran.ir:443 "GET /api/fund/fundcompare HTTP/1.1" 403 None
+2026-05-24 14:30:42 [WARNING ] data_fetcher: FIPIRAN request failed for https://www.fipiran.ir/api/fund/fundcompare: 403 Client Error: Forbidden for url: https://www.fipiran.ir/api/fund/fundcompare
+2026-05-24 14:30:42 [WARNING ] data_fetcher: FIPIRAN: no data from any endpoint
+2026-05-24 14:30:42 [WARNING ] data_fetcher: FIPIRAN returned no data
+2026-05-24 14:30:42 [WARNING ] __main__: 5 funds had no data: یاقوت, فیروزا, صایند, همای, حکمت
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze کیان: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze پارند: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze سپهر: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze اعتماد: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze کمند: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze افران: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze یاقوت: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze فیروزا: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze لبخند: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze صایند: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze آساس: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze همای: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze آفاق: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze گنجین: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze خاتم: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze اوصتا: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze فردا: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze گوهر: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze سخند: missing data
+2026-05-24 14:30:42 [WARNING ] arbitrage: Could not analyze حکمت: missing data
