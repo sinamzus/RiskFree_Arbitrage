@@ -88,7 +88,16 @@ class TSETMCFetcher:
     def discover_ins_code(self, symbol: str, alt_symbols: list[str] = None) -> Optional[str]:
         """Search TSETMC for the instrument code of a fund symbol.
 
-        Tries the primary symbol first, then any alt_symbols provided.
+        **Fund-first priority**: TSETMC search often returns both a regular
+        stock and an ETF fund with the same ticker (e.g. 'کیان' might hit a
+        steel company AND the کیان fixed-income ETF).  We must pick the fund,
+        not the stock.
+
+        Priority order:
+          P0 – exact ticker match AND lVal30 contains "صندوق"  ← best
+          P1 – any result whose lVal30 contains "صندوق" + ("درآمد" or "ثابت")
+          P2 – exact ticker match regardless of name  (last resort)
+
         Caches results to avoid redundant API calls.
         """
         candidates = [symbol] + (alt_symbols or [])
@@ -103,38 +112,63 @@ class TSETMCFetcher:
                 continue
 
             instruments = data.get("instrumentSearch", [])
-
             if not instruments:
                 logger.debug("  TSETMC search for '%s': no results", candidate)
                 continue
 
             logger.debug(
                 "  TSETMC search for '%s': %d results → %s",
-                candidate,
-                len(instruments),
-                [i.get("lVal18AFC", "").strip() for i in instruments[:5]],
+                candidate, len(instruments),
+                [(i.get("lVal18AFC", "").strip(), i.get("lVal30", "")[:20])
+                 for i in instruments[:6]],
             )
 
-            # Priority 1: exact ticker match (normalize both sides: TSETMC uses Arabic chars)
-            for inst in instruments:
-                tsetmc_symbol = _normalize(inst.get("lVal18AFC", ""))
-                if tsetmc_symbol == _normalize(candidate):
-                    code = inst.get("insCode", "")
-                    if code:
-                        logger.info("  ✓ ins_code for '%s': %s (TSETMC ticker: %s)",
-                                    candidate, code, inst.get("lVal18AFC", ""))
-                        self._ins_code_cache[symbol] = code
-                        return code
+            norm_cand = _normalize(candidate)
 
-            # Priority 2: fund instrument (name contains صندوق + درآمد)
-            for inst in instruments:
+            def _is_fund(inst: dict) -> bool:
                 name = _normalize(inst.get("lVal30", ""))
-                if "صندوق" in name and "درآمد" in name:
+                return "صندوق" in name
+
+            def _is_fixed_income(inst: dict) -> bool:
+                name = _normalize(inst.get("lVal30", ""))
+                return _is_fund(inst) and ("درآمد" in name or "ثابت" in name)
+
+            # P0: exact ticker + fund name
+            for inst in instruments:
+                if _normalize(inst.get("lVal18AFC", "")) == norm_cand and _is_fund(inst):
                     code = inst.get("insCode", "")
                     if code:
                         logger.info(
-                            "  ✓ ins_code for '%s' via fund-name match: %s (%s)",
-                            candidate, code, name,
+                            "  ✓ [P0] ins_code for '%s': %s (%s — %s)",
+                            candidate, code,
+                            inst.get("lVal18AFC", ""), inst.get("lVal30", ""),
+                        )
+                        self._ins_code_cache[symbol] = code
+                        return code
+
+            # P1: any fund (درآمد ثابت) in results
+            for inst in instruments:
+                if _is_fixed_income(inst):
+                    code = inst.get("insCode", "")
+                    if code:
+                        logger.info(
+                            "  ✓ [P1] ins_code for '%s' via fund-name: %s (%s — %s)",
+                            candidate, code,
+                            inst.get("lVal18AFC", ""), inst.get("lVal30", ""),
+                        )
+                        self._ins_code_cache[symbol] = code
+                        return code
+
+            # P2: exact ticker only (non-fund fallback — log a warning)
+            for inst in instruments:
+                if _normalize(inst.get("lVal18AFC", "")) == norm_cand:
+                    code = inst.get("insCode", "")
+                    if code:
+                        full_name = inst.get("lVal30", "")
+                        logger.warning(
+                            "  ⚠ [P2] ins_code for '%s': %s (%s) — "
+                            "name does NOT contain 'صندوق', may be wrong instrument!",
+                            candidate, code, full_name,
                         )
                         self._ins_code_cache[symbol] = code
                         return code

@@ -21,30 +21,32 @@ REQUEST_TIMEOUT = 15
 # Alternative symbols: some funds appear under a different ticker on TSETMC
 # so we provide alt_symbols for the search fallback.
 FIXED_INCOME_ETFS = [
-    # --- verified ins_codes (returned HTTP 200 on ClosingPriceInfo) ---
-    {"symbol": "کیان",   "name": "صندوق درآمد ثابت کیان",       "ins_code": "46348559193224090"},
-    {"symbol": "پارند",  "name": "صندوق درآمد ثابت پارند",      "ins_code": "28320293733348826"},
-    {"symbol": "سپهر",   "name": "صندوق درآمد ثابت سپهر",       "ins_code": "65883838195688438"},
-    {"symbol": "اعتماد", "name": "صندوق درآمد ثابت اعتماد",     "ins_code": "7745894403636165"},
-    # --- auto-discovered ins_codes (from live TSETMC search 2026-05-24) ---
-    {"symbol": "کمند",   "name": "صندوق درآمد ثابت کمند",       "ins_code": "34718633636164421"},
-    {"symbol": "افران",  "name": "صندوق درآمد ثابت افران",      "ins_code": "3846143218462419"},
-    {"symbol": "لبخند",  "name": "صندوق درآمد ثابت لبخند",      "ins_code": "31569200988534548"},
-    {"symbol": "آساس",   "name": "صندوق درآمد ثابت آساس",       "ins_code": "66682662312253625"},
-    {"symbol": "آفاق",   "name": "صندوق درآمد ثابت آفاق",       "ins_code": "37073830945037165"},
-    {"symbol": "گنجین",  "name": "صندوق درآمد ثابت گنجینه",     "ins_code": "65640021232361587"},
-    {"symbol": "خاتم",   "name": "صندوق درآمد ثابت خاتم",       "ins_code": "18865325633315847"},
-    {"symbol": "اوصتا",  "name": "صندوق درآمد ثابت اوصتا",      "ins_code": "57761388729898548"},
-    {"symbol": "فردا",   "name": "صندوق درآمد ثابت فردا",       "ins_code": "65249046611427924"},
-    {"symbol": "گوهر",   "name": "صندوق درآمد ثابت گوهر",       "ins_code": "12390706505809150"},
-    {"symbol": "سخند",   "name": "صندوق درآمد ثابت سخند",       "ins_code": "59598536122397373"},
-    # --- ins_codes discovered via TSETMC search (live run 2026-05-24) ---
-    {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت",      "ins_code": "1438514795814416"},
-    {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا",     "ins_code": "10795723506538053"},
-    {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند",      "ins_code": "45205530868811305"},
-    {"symbol": "همای",   "name": "صندوق درآمد ثابت همای",       "ins_code": "15494954332657697"},
-    # حکمت: TSETMC search returns 12 hits; the ETF fund ins_code is not confirmed
-    {"symbol": "حکمت",   "name": "صندوق درآمد ثابت حکمت",       "ins_code": "",
+    # All ins_codes must be confirmed to belong to the ETF FUND instrument, not
+    # a stock with the same ticker.  Discovery uses lVal30.contains("صندوق") as
+    # the primary selector (see TSETMCFetcher.discover_ins_code).
+    # ins_codes are populated at runtime via TSETMC search; leave empty here so
+    # they are always re-verified against the "صندوق" name filter.
+    {"symbol": "کیان",   "name": "صندوق درآمد ثابت کیان"},
+    {"symbol": "پارند",  "name": "صندوق درآمد ثابت پارند"},
+    {"symbol": "اعتماد", "name": "صندوق درآمد ثابت اعتماد"},
+    {"symbol": "کمند",   "name": "صندوق درآمد ثابت کمند"},
+    {"symbol": "افران",  "name": "صندوق درآمد ثابت افران"},
+    {"symbol": "لبخند",  "name": "صندوق درآمد ثابت لبخند"},
+    {"symbol": "آساس",   "name": "صندوق درآمد ثابت آساس"},
+    {"symbol": "آفاق",   "name": "صندوق درآمد ثابت آفاق"},
+    {"symbol": "گنجین",  "name": "صندوق درآمد ثابت گنجینه"},
+    {"symbol": "خاتم",   "name": "صندوق درآمد ثابت خاتم"},
+    {"symbol": "اوصتا",  "name": "صندوق درآمد ثابت اوصتا"},
+    {"symbol": "فردا",   "name": "صندوق درآمد ثابت فردا"},
+    {"symbol": "گوهر",   "name": "صندوق درآمد ثابت گوهر"},
+    {"symbol": "سخند",   "name": "صندوق درآمد ثابت سخند"},
+    # Funds whose ticker contains Persian characters not found by direct search
+    {"symbol": "سپهر",   "name": "صندوق سرمایه‌گذاری سپهر آتی"},
+    {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت"},
+    {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا"},
+    {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند"},
+    {"symbol": "همای",   "name": "صندوق درآمد ثابت همای"},
+    {"symbol": "حکمت",   "name": "صندوق درآمد ثابت حکمت",
      "alt_symbols": ["ثحکمت", "حکمت1", "صحکمت"]},
 ]
 
