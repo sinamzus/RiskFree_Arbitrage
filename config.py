@@ -21,33 +21,30 @@ REQUEST_TIMEOUT = 15
 # Alternative symbols: some funds appear under a different ticker on TSETMC
 # so we provide alt_symbols for the search fallback.
 FIXED_INCOME_ETFS = [
-    # All ins_codes must be confirmed to belong to the ETF FUND instrument, not
-    # a stock with the same ticker.  Discovery uses lVal30.contains("صندوق") as
-    # the primary selector (see TSETMCFetcher.discover_ins_code).
-    # ins_codes are populated at runtime via TSETMC search; leave empty here so
-    # they are always re-verified against the "صندوق" name filter.
+    # Verified fixed-income ETF funds (2026-05-24 scan).
+    # All 16 below got P0 match: exact ticker + lVal30 contains "صندوق".
+    # ins_codes populated at runtime via TSETMC search.
     {"symbol": "کیان",   "name": "صندوق درآمد ثابت کیان"},
     {"symbol": "پارند",  "name": "صندوق درآمد ثابت پارند"},
     {"symbol": "اعتماد", "name": "صندوق درآمد ثابت اعتماد"},
     {"symbol": "کمند",   "name": "صندوق درآمد ثابت کمند"},
     {"symbol": "افران",  "name": "صندوق درآمد ثابت افران"},
     {"symbol": "لبخند",  "name": "صندوق درآمد ثابت لبخند"},
-    {"symbol": "آساس",   "name": "صندوق درآمد ثابت آساس"},
     {"symbol": "آفاق",   "name": "صندوق درآمد ثابت آفاق"},
     {"symbol": "گنجین",  "name": "صندوق درآمد ثابت گنجینه"},
     {"symbol": "خاتم",   "name": "صندوق درآمد ثابت خاتم"},
     {"symbol": "اوصتا",  "name": "صندوق درآمد ثابت اوصتا"},
     {"symbol": "فردا",   "name": "صندوق درآمد ثابت فردا"},
-    {"symbol": "گوهر",   "name": "صندوق درآمد ثابت گوهر"},
     {"symbol": "سخند",   "name": "صندوق درآمد ثابت سخند"},
-    # Funds whose ticker contains Persian characters not found by direct search
-    {"symbol": "سپهر",   "name": "صندوق سرمایه‌گذاری سپهر آتی"},
     {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت"},
     {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا"},
     {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند"},
     {"symbol": "همای",   "name": "صندوق درآمد ثابت همای"},
-    {"symbol": "حکمت",   "name": "صندوق درآمد ثابت حکمت",
-     "alt_symbols": ["ثحکمت", "حکمت1", "صحکمت"]},
+    # Removed:
+    # آساس  → matched "صندوق س.آسمان آرماني سهام" (equity fund, not fixed-income)
+    # گوهر  → matched "صندوق طلاي كيان" (gold fund, not fixed-income)
+    # سپهر  → no ETF fund match (P2 hit a non-fund instrument)
+    # حکمت  → no ETF fund match (P2 hit "بانك حكمت ايرانيان", a bank)
 ]
 
 # Trading cost parameters
