@@ -16,14 +16,18 @@ REQUEST_HEADERS = {
 
 REQUEST_TIMEOUT = 15
 
-# Fixed-income ETF funds with TSETMC instrument codes.
+# Fixed-income ETF funds — 30 funds, all ins_codes verified via TSETMC
+# GetClosingPriceInfo on 2026-05-24 (all returned live prices).
+#
 # Sources:
-#   - TSETMC GetInstrumentSearch "درآمد ثابت" / "پایدار" (2026-05-24)
-#   - JS bundle analysis of fipiran.ir (2026-05-24)
-# flow=1 → بورس اوراق بهادار تهران
+#   • TSETMC GetInstrumentSearch "درآمد ثابت" / "پایدار"
+#   • fipiran.ir JS bundle analysis (fundlistissuebyfundtype)
+#   • Direct verification via GetClosingPriceInfo
+#
+# flow=1 → بازار اول/دوم بورس اوراق بهادار تهران
 # flow=2 → فرابورس ایران
 FIXED_INCOME_ETFS = [
-    # ── flow=1 بورس — confirmed via TSETMC search "درآمد ثابت" ──
+    # ══ flow=1  بورس اوراق بهادار تهران ══════════════════════════════════
     {"symbol": "امین‌یکم", "name": "صندوق درآمد ثابت امین یکم فردا",
      "ins_code": "45728383369147894"},
     {"symbol": "تصمیم",   "name": "صندوق با درآمد ثابت تصمیم",
@@ -40,8 +44,18 @@ FIXED_INCOME_ETFS = [
      "ins_code": "66818022341772870"},
     {"symbol": "افران",   "name": "صندوق افرا نماد پایدار",
      "ins_code": "3846143218462419"},
+    {"symbol": "خاتم",    "name": "صندوق خاتم ایساتیس پویا",
+     "ins_code": "18865325633315847"},
+    {"symbol": "فردا",    "name": "صندوق آوای فردای زاگرس",
+     "ins_code": "65249046611427924"},
+    {"symbol": "یاقوت",   "name": "صندوق یاقوت آگاه",
+     "ins_code": "1438514795814416"},
+    {"symbol": "فیروزا",  "name": "صندوق ارمغان فیروزه آسیا",
+     "ins_code": "10795723506538053"},
+    {"symbol": "همای",    "name": "صندوق همای آگاه",
+     "ins_code": "15494954332657697"},
 
-    # ── flow=2 فرابورس — confirmed via TSETMC search "درآمد ثابت" ──
+    # ══ flow=2  فرابورس ایران ═════════════════════════════════════════════
     {"symbol": "سام",     "name": "صندوق درآمد ثابت سام",
      "ins_code": "55308018877404137"},
     {"symbol": "کارآمد",  "name": "صندوق درآمد ثابت کارآمد",
@@ -60,8 +74,11 @@ FIXED_INCOME_ETFS = [
      "ins_code": "57728534324022361"},
     {"symbol": "صایند",   "name": "صندوق گنجینه آینده روشن",
      "ins_code": "45205530868811305"},
-
-    # ── flow=2 جدید — از TSETMC search 2026-05-24 کشف شد ──
+    {"symbol": "اوصتا",   "name": "صندوق اندیشه‌ورزان صباتامین",
+     "ins_code": "57761388729898548"},
+    {"symbol": "سخند",    "name": "صندوق سپهرخبرگان نفت",
+     "ins_code": "59598536122397373"},
+    # ── ۶ صندوق جدید، کشف‌شده از TSETMC search 2026-05-24 ──
     {"symbol": "آسود",    "name": "صندوق درآمد ثابت آسود",
      "ins_code": "16582961426722208"},
     {"symbol": "اطمینان", "name": "صندوق درآمد ثابت اطمینان",
@@ -74,22 +91,6 @@ FIXED_INCOME_ETFS = [
      "ins_code": "44558786393585356"},
     {"symbol": "دامون",   "name": "صندوق درآمد ثابت دامون",
      "ins_code": "43009306066217458"},
-
-    # ── نیاز به تأیید ins_code — از لیست قبلی، جستجو تأیید نکرد ──
-    {"symbol": "خاتم",    "name": "صندوق خاتم ایساتیس پویا",
-     "ins_code": "18865325633315847"},
-    {"symbol": "اوصتا",   "name": "صندوق اندیشه‌ورزان صباتامین",
-     "ins_code": "57761388729898548"},
-    {"symbol": "فردا",    "name": "صندوق آوای فردای زاگرس",
-     "ins_code": "65249046611427924"},
-    {"symbol": "سخند",    "name": "صندوق سپهرخبرگان نفت",
-     "ins_code": "59598536122397373"},
-    {"symbol": "یاقوت",   "name": "صندوق یاقوت آگاه",
-     "ins_code": "1438514795814416"},
-    {"symbol": "فیروزا",  "name": "صندوق ارمغان فیروزه آسیا",
-     "ins_code": "10795723506538053"},
-    {"symbol": "همای",    "name": "صندوق همای آگاه",
-     "ins_code": "15494954332657697"},
 ]
 
 # Trading cost parameters
