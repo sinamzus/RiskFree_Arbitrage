@@ -38,15 +38,12 @@ FIXED_INCOME_ETFS = [
     {"symbol": "فردا",   "name": "صندوق درآمد ثابت فردا",       "ins_code": "65249046611427924"},
     {"symbol": "گوهر",   "name": "صندوق درآمد ثابت گوهر",       "ins_code": "12390706505809150"},
     {"symbol": "سخند",   "name": "صندوق درآمد ثابت سخند",       "ins_code": "59598536122397373"},
-    # --- not found on TSETMC by symbol; trying known alternative names ---
-    {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت",      "ins_code": "",
-     "alt_symbols": ["صیاقوت", "یاقوت1", "ثیاقوت"]},
-    {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا",     "ins_code": "",
-     "alt_symbols": ["فیروزه", "ثفیروزا", "صفیروزا"]},
-    {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند",      "ins_code": "",
-     "alt_symbols": ["ثصایند", "صاین", "صایند1"]},
-    {"symbol": "همای",   "name": "صندوق درآمد ثابت همای",       "ins_code": "",
-     "alt_symbols": ["ثهمای", "همای1", "صهمای"]},
+    # --- ins_codes discovered via TSETMC search (live run 2026-05-24) ---
+    {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت",      "ins_code": "1438514795814416"},
+    {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا",     "ins_code": "10795723506538053"},
+    {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند",      "ins_code": "45205530868811305"},
+    {"symbol": "همای",   "name": "صندوق درآمد ثابت همای",       "ins_code": "15494954332657697"},
+    # حکمت: TSETMC search returns 12 hits; the ETF fund ins_code is not confirmed
     {"symbol": "حکمت",   "name": "صندوق درآمد ثابت حکمت",       "ins_code": "",
      "alt_symbols": ["ثحکمت", "حکمت1", "صحکمت"]},
 ]
