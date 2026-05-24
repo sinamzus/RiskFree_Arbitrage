@@ -2,13 +2,14 @@
 
 Endpoints
 ---------
-GET  /                        → serves the single-page UI
-GET  /api/funds               → latest snapshot for every tracked fund
-GET  /api/history             → ?symbol=X&days=30  time-series for chart
-GET  /api/stats               → ?symbol=X&days=30  mean-reversion stats
-GET  /api/all_stats           → ?days=30  stats for all symbols
-GET  /api/stream              → SSE stream: pushed on every new scan
-POST /api/scan                → trigger an immediate scan (optional manual)
+GET  /                              → serves the single-page UI
+GET  /api/funds                     → latest snapshot for every tracked fund
+GET  /api/history                   → ?symbol=X&days=30  scan-snapshot time-series
+GET  /api/daily_history             → ?symbol=X&days=365 daily OHLCV from daily_history table
+GET  /api/stats                     → ?symbol=X&days=30  mean-reversion stats
+GET  /api/all_stats                 → ?days=30  stats for all symbols
+GET  /api/stream                    → SSE stream: pushed on every new scan
+POST /api/scan                      → trigger an immediate scan (optional manual)
 """
 
 import json
@@ -92,6 +93,21 @@ def create_app(db, scan_callback=None):
     def api_all_stats():
         days = int(request.args.get("days", 30))
         return jsonify(db.get_all_stats(days))
+
+    @app.route("/api/daily_history")
+    def api_daily_history():
+        """Daily OHLCV rows from the daily_history table (bootstrapped data).
+
+        Query params:
+          symbol  – fund symbol (required)
+          days    – how many days back (default 365)
+        """
+        symbol = request.args.get("symbol", "")
+        days   = int(request.args.get("days", 365))
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+        history = db.get_daily_history(symbol, days)
+        return jsonify({"symbol": symbol, "days": days, "history": history})
 
     @app.route("/api/stream")
     def api_stream():
