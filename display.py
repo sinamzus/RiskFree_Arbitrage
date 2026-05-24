@@ -1,5 +1,13 @@
 """Display and reporting for arbitrage scan results."""
 
+import io
+import os
+import sys
+
+if sys.platform == "win32" and not os.environ.get("PYTHONUTF8"):
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
 import jdatetime
 from datetime import datetime
 from tabulate import tabulate
