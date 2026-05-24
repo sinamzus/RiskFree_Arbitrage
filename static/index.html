@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>اسکنر آربیتراژ بین‌روزی صندوق‌های درآمد ثابت</title>
+
+<!-- Chart.js + datetime adapter + annotation plugin -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+
+<style>
+  :root {
+    --bg:        #0f1117;
+    --surface:   #1a1d27;
+    --border:    #2a2d3e;
+    --text:      #e0e0e0;
+    --muted:     #7a7f99;
+    --green:     #26a69a;
+    --red:       #ef5350;
+    --yellow:    #ffd54f;
+    --blue:      #42a5f5;
+    --accent:    #7c4dff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", Tahoma, "Vazir", sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* ── header ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  #status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #555; flex-shrink: 0;
+    transition: background .4s;
+  }
+  #status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  #status-dot.stale { background: var(--yellow); }
+  #last-scan { font-size: 12px; color: var(--muted); margin-right: auto; }
+
+  /* ── layout ── */
+  .layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    grid-template-rows: 1fr;
+    height: calc(100vh - 55px);
+    gap: 0;
+  }
+
+  /* ── fund list (left panel) ── */
+  .fund-list {
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 10px 0;
+  }
+  .fund-list h2 {
+    font-size: 13px; color: var(--muted);
+    padding: 6px 14px 10px;
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .fund-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    border-right: 3px solid transparent;
+    transition: background .15s;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .fund-item:hover { background: rgba(255,255,255,.04); }
+  .fund-item.active {
+    background: rgba(124,77,255,.12);
+    border-right-color: var(--accent);
+  }
+  .fund-item.multi-selected {
+    background: rgba(66,165,245,.1);
+    border-right-color: var(--blue);
+  }
+  .fund-symbol { font-weight: 600; font-size: 15px; }
+  .fund-pd {
+    font-size: 13px; font-weight: 700;
+    min-width: 60px; text-align: left;
+  }
+  .fund-pd.pos  { color: var(--red); }
+  .fund-pd.neg  { color: var(--green); }
+  .fund-pd.zero { color: var(--muted); }
+  .signal-badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    font-weight: 600;
+  }
+  .signal-BUY  { background: rgba(38,166,154,.2); color: var(--green); }
+  .signal-SELL { background: rgba(239,83,80,.2); color: var(--red); }
+  .signal-HOLD { background: rgba(122,127,153,.15); color: var(--muted); }
+
+  /* ── right panel ── */
+  .main-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── controls bar ── */
+  .controls {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .controls label { font-size: 12px; color: var(--muted); }
+  select, button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  select:focus, button:focus { outline: 2px solid var(--accent); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  button.primary:hover { filter: brightness(1.15); }
+  #compare-hint { font-size: 11px; color: var(--muted); }
+
+  /* ── chart area ── */
+  .chart-container {
+    flex: 1;
+    position: relative;
+    padding: 16px;
+    min-height: 0;
+  }
+  #main-chart { width: 100% !important; height: 100% !important; }
+
+  /* ── stats + table section ── */
+  .bottom-section {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    border-top: 1px solid var(--border);
+    max-height: 220px;
+    overflow: hidden;
+  }
+
+  .stats-panel {
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    padding: 12px 16px;
+    overflow-y: auto;
+  }
+  .stats-panel h3 { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+    font-size: 13px;
+  }
+  .stat-row .val { font-weight: 600; }
+  .stat-row .val.pos  { color: var(--red); }
+  .stat-row .val.neg  { color: var(--green); }
+  .z-extreme { color: var(--yellow) !important; }
+
+  .opp-table-wrap { overflow-y: auto; padding: 0 8px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  th {
+    background: var(--surface);
+    color: var(--muted);
+    padding: 6px 8px;
+    text-align: right;
+    position: sticky; top: 0;
+    font-weight: 500;
+  }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  tr:hover td { background: rgba(255,255,255,.03); }
+  .td-buy  { color: var(--green); font-weight: 600; }
+  .td-sell { color: var(--red);   font-weight: 600; }
+
+  /* ── loading overlay ── */
+  #loading {
+    position: fixed; inset: 0;
+    background: rgba(15,17,23,.85);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-size: 16px; gap: 14px; z-index: 100;
+  }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading.hidden { display: none; }
+
+  /* ── empty state ── */
+  .empty-state {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100%; color: var(--muted); gap: 10px;
+    font-size: 14px;
+  }
+  .empty-state .icon { font-size: 40px; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <span>در حال بارگذاری داده‌ها ...</span>
+</div>
+
+<header>
+  <div id="status-dot"></div>
+  <h1>📈 اسکنر آربیتراژ بین‌روزی — صندوق‌های درآمد ثابت</h1>
+  <span id="last-scan">آخرین اسکن: —</span>
+  <button class="primary" onclick="triggerScan()">🔄 اسکن</button>
+</header>
+
+<div class="layout">
+
+  <!-- Fund list -->
+  <aside class="fund-list">
+    <h2>صندوق‌ها</h2>
+    <div id="fund-items">
+      <div class="empty-state" style="height:120px">
+        <span>هنوز داده‌ای نیست</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main panel -->
+  <div class="main-panel">
+
+    <!-- Controls -->
+    <div class="controls">
+      <label>بازه زمانی:</label>
+      <select id="days-select" onchange="reloadChart()">
+        <option value="1">۱ روز</option>
+        <option value="7">۷ روز</option>
+        <option value="30" selected>۳۰ روز</option>
+        <option value="90">۳ ماه</option>
+        <option value="180">۶ ماه</option>
+        <option value="365">۱ سال</option>
+      </select>
+      <label>نمایش:</label>
+      <select id="metric-select" onchange="reloadChart()">
+        <option value="premium_discount_pct" selected>صرف/تخفیف %</option>
+        <option value="market_price">قیمت بازار</option>
+        <option value="nav">NAV ابطال</option>
+        <option value="net_profit_pct">سود خالص %</option>
+      </select>
+      <label>
+        <input type="checkbox" id="show-bands" checked onchange="reloadChart()">
+        باندهای میانگین
+      </label>
+      <label>
+        <input type="checkbox" id="show-threshold" checked onchange="reloadChart()">
+        آستانه‌ها
+      </label>
+      <span id="compare-hint">Ctrl+کلیک برای مقایسه چند صندوق</span>
+    </div>
+
+    <!-- Chart -->
+    <div class="chart-container">
+      <canvas id="main-chart"></canvas>
+      <div id="chart-empty" class="empty-state hidden">
+        <span class="icon">📊</span>
+        <span>یک صندوق را از فهرست انتخاب کنید</span>
+      </div>
+    </div>
+
+    <!-- Stats + table -->
+    <div class="bottom-section">
+
+      <div class="stats-panel" id="stats-panel">
+        <h3>آمار بازگشت به میانگین</h3>
+        <div id="stats-content">
+          <div class="empty-state" style="height:80px; font-size:12px">
+            صندوقی انتخاب نشده
+          </div>
+        </div>
+      </div>
+
+      <div class="opp-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>نماد</th>
+              <th>صرف/تخفیف %</th>
+              <th>سود خالص %</th>
+              <th>حجم</th>
+              <th>سیگنال</th>
+              <th>Z-score</th>
+            </tr>
+          </thead>
+          <tbody id="opp-table-body"></tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── state ───────────────────────────────────────────────────────────────────
+let chart         = null;
+let selectedFunds = new Set();      // symbols currently shown on chart
+let allStats      = {};             // {symbol: {mean, std, z_score, ...}}
+let latestFunds   = [];             // current snapshot list
+let historyCache  = {};             // {symbol_days: {history, stats}}
+
+const FUND_COLORS = [
+  '#7c4dff','#42a5f5','#26a69a','#ef5350','#ffd54f',
+  '#ab47bc','#26c6da','#d4e157','#ff7043','#66bb6a',
+  '#ec407a','#29b6f6','#8d6e63','#78909c','#5c6bc0',
+  '#e91e63','#00bcd4','#9e9d24','#ff5722','#4caf50',
+];
+
+// ─── init ─────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  initSSE();
+  loadFunds();
+  loadAllStats();
+  setInterval(loadFunds, 60_000);
+  setInterval(loadAllStats, 120_000);
+});
+
+// ─── SSE ──────────────────────────────────────────────────────────────────
+function initSSE() {
+  const dot = document.getElementById('status-dot');
+  const src = new EventSource('/api/stream');
+
+  src.addEventListener('message', e => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'connected') {
+      dot.className = 'live';
+      return;
+    }
+    if (data.type === 'scan_complete') {
+      dot.className = 'live';
+      document.getElementById('last-scan').textContent =
+        'آخرین اسکن: ' + new Date(data.timestamp).toLocaleTimeString('fa-IR');
+      latestFunds = data.funds || [];
+      renderFundList(latestFunds);
+      updateOppTable(latestFunds);
+      // Invalidate chart cache for selected funds
+      selectedFunds.forEach(sym => { delete historyCache[sym + '_' + getDays()]; });
+      reloadChart();
+    }
+  });
+
+  src.onerror = () => { dot.className = 'stale'; };
+}
+
+// ─── data loading ─────────────────────────────────────────────────────────
+async function loadFunds() {
+  const res = await fetch('/api/funds');
+  if (!res.ok) return;
+  const data = await res.json();
+  latestFunds = data.funds || [];
+  if (data.last_scan) {
+    document.getElementById('last-scan').textContent =
+      'آخرین اسکن: ' + new Date(data.last_scan + 'Z').toLocaleTimeString('fa-IR');
+  }
+  renderFundList(latestFunds);
+  updateOppTable(latestFunds);
+  document.getElementById('loading').classList.add('hidden');
+  // Auto-select first fund if nothing selected
+  if (selectedFunds.size === 0 && latestFunds.length > 0) {
+    selectFund(latestFunds[0].symbol, false);
+  }
+}
+
+async function loadAllStats() {
+  const days = getDays();
+  const res = await fetch('/api/all_stats?days=' + days);
+  if (!res.ok) return;
+  allStats = await res.json();
+  updateOppTable(latestFunds);
+  // Refresh stats panel for selected fund
+  if (selectedFunds.size === 1) {
+    showStatsPanel([...selectedFunds][0]);
+  }
+}
+
+async function getHistory(symbol) {
+  const days = getDays();
+  const key = symbol + '_' + days;
+  if (historyCache[key]) return historyCache[key];
+  const res = await fetch(`/api/history?symbol=${encodeURIComponent(symbol)}&days=${days}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  historyCache[key] = data;
+  return data;
+}
+
+// ─── fund list rendering ──────────────────────────────────────────────────
+function renderFundList(funds) {
+  const container = document.getElementById('fund-items');
+  if (!funds.length) {
+    container.innerHTML = '<div class="empty-state" style="height:120px"><span>هنوز داده‌ای نیست</span></div>';
+    return;
+  }
+  container.innerHTML = funds.map(f => {
+    const pd  = f.premium_discount_pct || 0;
+    const cls = pd > 0.05 ? 'pos' : pd < -0.05 ? 'neg' : 'zero';
+    const sig = f.signal || 'HOLD';
+    const active = selectedFunds.has(f.symbol) ? 'active' : '';
+    return `<div class="fund-item ${active}" onclick="handleFundClick(event,'${f.symbol}')">
+      <span class="fund-symbol">${f.symbol}</span>
+      <span class="fund-pd ${cls}">${pd >= 0 ? '+' : ''}${pd.toFixed(2)}%</span>
+      <span class="signal-badge signal-${sig}">${
+        sig === 'BUY' ? 'خرید' : sig === 'SELL' ? 'فروش' : '—'
+      }</span>
+    </div>`;
+  }).join('');
+}
+
+// ─── fund selection ───────────────────────────────────────────────────────
+function handleFundClick(event, symbol) {
+  if (event.ctrlKey || event.metaKey) {
+    // Multi-select: toggle
+    if (selectedFunds.has(symbol)) selectedFunds.delete(symbol);
+    else selectedFunds.add(symbol);
+  } else {
+    selectFund(symbol, false);
+  }
+  renderFundList(latestFunds);
+  reloadChart();
+  if (selectedFunds.size === 1) showStatsPanel([...selectedFunds][0]);
+}
+
+function selectFund(symbol, multi = false) {
+  if (!multi) selectedFunds.clear();
+  selectedFunds.add(symbol);
+}
+
+// ─── chart ────────────────────────────────────────────────────────────────
+async function reloadChart() {
+  if (selectedFunds.size === 0) {
+    destroyChart();
+    document.getElementById('chart-empty').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('chart-empty').classList.add('hidden');
+
+  const metric    = document.getElementById('metric-select').value;
+  const showBands = document.getElementById('show-bands').checked;
+  const showThr   = document.getElementById('show-threshold').checked;
+  const datasets  = [];
+  const annotations = {};
+
+  let colorIdx = 0;
+  for (const symbol of selectedFunds) {
+    const data = await getHistory(symbol);
+    if (!data || !data.history.length) continue;
+
+    const color = FUND_COLORS[colorIdx % FUND_COLORS.length];
+    colorIdx++;
+
+    const points = data.history.map(r => ({
+      x: new Date(r.scanned_at + 'Z'),
+      y: r[metric] ?? 0,
+    }));
+
+    datasets.push({
+      label: symbol,
+      data: points,
+      borderColor: color,
+      backgroundColor: color + '18',
+      borderWidth: 1.5,
+      pointRadius: points.length > 200 ? 0 : 2,
+      tension: 0.2,
+      fill: false,
+    });
+
+    // Mean-reversion bands (only for premium_discount_pct and single fund)
+    if (showBands && metric === 'premium_discount_pct' && data.stats && selectedFunds.size <= 2) {
+      const { mean, std } = data.stats;
+      if (std > 0) {
+        // ±1 std band
+        const bandData = points.map(p => ({ x: p.x, y: mean + std }));
+        const bandDataLow = points.map(p => ({ x: p.x, y: mean - std }));
+        datasets.push({
+          label: symbol + ' +1σ',
+          data: bandData,
+          borderColor: color + '44',
+          borderDash: [4, 4],
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+        });
+        datasets.push({
+          label: symbol + ' −1σ',
+          data: bandDataLow,
+          borderColor: color + '44',
+          borderDash: [4, 4],
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '-1',
+          backgroundColor: color + '08',
+        });
+        // Mean line
+        datasets.push({
+          label: symbol + ' میانگین',
+          data: points.map(p => ({ x: p.x, y: mean })),
+          borderColor: color + '88',
+          borderDash: [6, 3],
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false,
+        });
+      }
+    }
+  }
+
+  // Threshold annotations for premium_discount_pct
+  if (showThr && metric === 'premium_discount_pct') {
+    annotations.buy = {
+      type: 'line', scaleID: 'y', value: -0.3,
+      borderColor: 'rgba(38,166,154,0.7)', borderWidth: 1.5,
+      borderDash: [5, 4],
+      label: { display: true, content: 'آستانه خرید −0.3%',
+               position: 'start', color: '#26a69a',
+               backgroundColor: 'transparent', font: { size: 11 } },
+    };
+    annotations.sell = {
+      type: 'line', scaleID: 'y', value: 0.3,
+      borderColor: 'rgba(239,83,80,0.7)', borderWidth: 1.5,
+      borderDash: [5, 4],
+      label: { display: true, content: 'آستانه فروش +0.3%',
+               position: 'start', color: '#ef5350',
+               backgroundColor: 'transparent', font: { size: 11 } },
+    };
+    annotations.zero = {
+      type: 'line', scaleID: 'y', value: 0,
+      borderColor: 'rgba(255,255,255,0.15)', borderWidth: 1,
+    };
+  }
+
+  const yLabel = {
+    premium_discount_pct: 'صرف/تخفیف %',
+    market_price: 'قیمت بازار (ریال)',
+    nav: 'NAV ابطال (ریال)',
+    net_profit_pct: 'سود خالص %',
+  }[metric] || '';
+
+  renderChart(datasets, yLabel, annotations);
+}
+
+function renderChart(datasets, yLabel, annotations) {
+  const canvas = document.getElementById('main-chart');
+  const ctx    = canvas.getContext('2d');
+
+  if (chart) { chart.destroy(); chart = null; }
+
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'yyyy-MM-dd HH:mm', displayFormats: {
+            hour: 'MM/dd HH:mm', day: 'MM/dd', week: 'yyyy/MM/dd', month: 'yyyy/MM',
+          }},
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#7a7f99', maxTicksLimit: 10 },
+        },
+        y: {
+          title: { display: true, text: yLabel, color: '#7a7f99' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#7a7f99' },
+        },
+      },
+      plugins: {
+        legend: {
+          labels: { color: '#e0e0e0', filter: item => !item.text.includes('σ') && !item.text.includes('میانگین') },
+        },
+        tooltip: {
+          backgroundColor: '#1a1d27',
+          borderColor: '#2a2d3e',
+          borderWidth: 1,
+          titleColor: '#e0e0e0',
+          bodyColor: '#aaa',
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              const m = document.getElementById('metric-select').value;
+              if (m.endsWith('_pct')) return ` ${ctx.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(3)}%`;
+              return ` ${ctx.dataset.label}: ${v.toLocaleString('fa-IR')}`;
+            },
+          },
+        },
+        annotation: { annotations },
+      },
+    },
+  });
+}
+
+function destroyChart() {
+  if (chart) { chart.destroy(); chart = null; }
+}
+
+// ─── stats panel ──────────────────────────────────────────────────────────
+function showStatsPanel(symbol) {
+  const st = allStats[symbol];
+  if (!st) {
+    document.getElementById('stats-content').innerHTML =
+      '<div class="empty-state" style="height:80px;font-size:12px">آمار موجود نیست</div>';
+    return;
+  }
+  const zAbs = Math.abs(st.z_score || 0);
+  const zCls = zAbs > 2 ? 'z-extreme' : zAbs > 1.5 ? 'pos' : '';
+  const zArrow = (st.z_score || 0) < 0 ? '▼' : '▲';
+  document.getElementById('stats-content').innerHTML = `
+    <div class="stat-row"><span>میانگین (${st.days} روز)</span>
+      <span class="val ${(st.mean||0)>0?'pos':'neg'}">${(st.mean>=0?'+':'') + (st.mean||0).toFixed(3)}%</span></div>
+    <div class="stat-row"><span>انحراف معیار</span>
+      <span class="val">±${(st.std||0).toFixed(3)}%</span></div>
+    <div class="stat-row"><span>وضعیت فعلی</span>
+      <span class="val ${(st.current||0)>0?'pos':'neg'}">${(st.current>=0?'+':'')+(st.current||0).toFixed(3)}%</span></div>
+    <div class="stat-row"><span>Z-score</span>
+      <span class="val ${zCls}">${zArrow} ${(st.z_score||0).toFixed(2)}</span></div>
+    <div class="stat-row"><span>تعداد نمونه‌ها</span>
+      <span class="val">${(st.count||0).toLocaleString('fa-IR')}</span></div>
+    <div class="stat-row"><span>فرصت‌های قابل اجرا</span>
+      <span class="val ${st.actionable_count>0?'neg':''}">${(st.actionable_count||0).toLocaleString('fa-IR')}</span></div>
+    ${zAbs > 1.5 ? `<div style="margin-top:8px;padding:6px;background:rgba(255,213,79,.1);
+      border-radius:4px;font-size:11px;color:var(--yellow);">
+      ⚠ انحراف بزرگ از میانگین — احتمال بازگشت به میانگین</div>` : ''}
+  `;
+}
+
+// ─── opportunities table ──────────────────────────────────────────────────
+function updateOppTable(funds) {
+  const tbody = document.getElementById('opp-table-body');
+  if (!funds.length) { tbody.innerHTML = ''; return; }
+
+  tbody.innerHTML = funds.map(f => {
+    const pd  = f.premium_discount_pct || 0;
+    const np  = f.net_profit_pct || 0;
+    const sig = f.signal || 'HOLD';
+    const z   = allStats[f.symbol]?.z_score;
+    const zStr = z != null ? (z >= 0 ? '+' : '') + z.toFixed(2) : '—';
+    const sigLabel = sig === 'BUY' ? '<span class="td-buy">🟢 خرید</span>'
+                   : sig === 'SELL' ? '<span class="td-sell">🔴 فروش</span>'
+                   : '—';
+    return `<tr>
+      <td>${f.symbol}</td>
+      <td class="${pd>0?'td-sell':pd<0?'td-buy':''}">${(pd>=0?'+':'')}${pd.toFixed(3)}%</td>
+      <td class="${np>0?'td-buy':np<0?'td-sell':''}">${(np>=0?'+':'')}${np.toFixed(3)}%</td>
+      <td>${(f.volume||0).toLocaleString('fa-IR')}</td>
+      <td>${sigLabel}</td>
+      <td>${zStr}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────
+function getDays() {
+  return parseInt(document.getElementById('days-select').value, 10);
+}
+
+async function triggerScan() {
+  const btn = document.querySelector('button.primary');
+  btn.disabled = true;
+  btn.textContent = '⏳ در حال اسکن ...';
+  try {
+    await fetch('/api/scan', { method: 'POST' });
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = '🔄 اسکن'; }, 3000);
+  }
+}
+</script>
+</body>
+</html>

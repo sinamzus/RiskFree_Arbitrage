@@ -7,47 +7,49 @@ HOW THIS WORKS
 --------------
 Fixed-income ETF funds on the Tehran Stock Exchange (TSE) have two prices:
   • Market price  — fluctuates continuously during trading hours
-  • NAV           — calculated once per day by the fund manager and published
-                    after market close (or early the next morning)
+  • NAV           — published once per day by the fund manager
 
 When market price diverges from NAV a riskless profit is possible:
+  DISCOUNT  (market < NAV):  Buy on exchange → redeem at cancel_nav (T+2..T+4)
+  PREMIUM   (market > NAV):  Create at issue_nav → sell on exchange (T+1..T+3)
 
-  DISCOUNT  (market < NAV):
-    Buy units on the exchange → submit redemption request to fund
-    → receive cash at cancel_nav.  Settlement: T+2 to T+4 days.
+This is INTER-DAY arbitrage: you enter today, position closes over the next
+several trading days via creation/redemption.  It is NOT intra-day HFT.
 
-  PREMIUM   (market > NAV):
-    Submit creation request at issue_nav → receive new units
-    → sell on the exchange.  Settlement: T+1 to T+3 days.
+"High frequency" here means scanning the market price every ~15 minutes during
+trading hours to catch the moment the discount/premium crosses the threshold.
 
-This is **inter-day** arbitrage: you enter today, the position closes over the
-next several trading days.  It is *not* intraday momentum/HFT.
+Usage
+-----
+    # Single scan, terminal output
+    python main.py
 
-"High frequency" here means scanning the market price multiple times during
-the trading session (e.g. every 15 minutes) to catch the moment the
-discount/premium crosses the minimum threshold.
+    # Monitor every 15 min, terminal output
+    python main.py --watch 15
 
-Usage:
-    python main.py                    # Single scan, full report
-    python main.py --summary          # Single scan, table only
-    python main.py --watch 15         # Monitor every 15 minutes
-    python main.py --watch 15 --csv   # Monitor + export CSV on each scan
-    python main.py --discover         # Search for new funds not in config
-    python main.py --csv              # Single scan + export CSV
+    # Web UI with live chart + history  (http://localhost:5000)
+    python main.py --serve
+
+    # Web UI + scan every 15 min
+    python main.py --serve --watch 15
+
+    # Discover new funds
+    python main.py --discover
 """
 
 import argparse
 import logging
-import os
 import sys
 import time
+import threading
 from pathlib import Path
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 
 import jdatetime
 
 from data_fetcher import DataAggregator
 from arbitrage import scan_all, filter_actionable, ArbitrageOpportunity
+from database import Database
 from display import (
     print_summary_table,
     print_detailed_report,
@@ -58,149 +60,145 @@ from display import (
 
 LOG_DIR = Path("logs")
 
-# Tehran Stock Exchange trading hours (local time, UTC+3:30)
+# Tehran Stock Exchange trading hours (local Iran time, UTC+3:30)
 MARKET_OPEN  = dtime(9, 0)
 MARKET_CLOSE = dtime(12, 30)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Logging
+# ─────────────────────────────────────────────────────────────────────────────
+
 def setup_logging(verbose: bool = False) -> Path:
-    """Configure logging to both console and a timestamped log file."""
     LOG_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = LOG_DIR / f"run_{timestamp}.log"
-
-    level = logging.DEBUG if verbose else logging.INFO
+    log_file  = LOG_DIR / f"run_{timestamp}.log"
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
     fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S"
     )
 
     console = logging.StreamHandler(sys.stdout)
-    console.setLevel(level)
+    console.setLevel(logging.DEBUG if verbose else logging.INFO)
     console.setFormatter(fmt)
     root.addHandler(console)
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    )
-    root.addHandler(file_handler)
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(fh)
 
     return log_file
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Single-scan helpers
+#  Core scan
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_scan(aggregator: DataAggregator,
-             use_fipiran: bool = True) -> list[ArbitrageOpportunity]:
-    """Fetch data and return opportunity list (empty list on failure)."""
+             db: Database,
+             use_nav: bool = True) -> list[ArbitrageOpportunity]:
+    """Fetch data, analyse, save to DB, return opportunities."""
     logger = logging.getLogger(__name__)
+    scanned_at = datetime.now()
+
+    # ── NAV cache: if today's NAV is already in DB, pass it to the aggregator
+    #    so it skips the expensive FIPIRAN/Rahavard fetch for cached funds.
+    today = scanned_at.strftime("%Y-%m-%d")
+    for fund in aggregator.tsetmc._ins_code_cache.keys():
+        pass  # cache keys populated after first discovery run
+
     try:
-        fund_data = aggregator.fetch_all(use_fipiran_fallback=use_fipiran)
+        fund_data = aggregator.fetch_all(
+            use_fipiran_fallback=use_nav,
+            nav_cache=db,              # DataAggregator checks DB for today's NAV
+        )
     except KeyboardInterrupt:
         raise
     except Exception as e:
         logger.error("Scan failed: %s", e)
         return []
 
-    failed = [f for f in fund_data if not f.get("price_data") and not f.get("nav_data")]
+    failed = [f for f in fund_data
+              if not f.get("price_data") and not f.get("nav_data")]
     if failed:
         logger.warning("%d funds had no data: %s",
                        len(failed), ", ".join(f["symbol"] for f in failed))
 
-    return scan_all(fund_data)
+    opps = scan_all(fund_data)
 
+    # Save to DB
+    if opps:
+        db.save_scan(opps, scanned_at)
+        # Cache any newly fetched NAVs
+        for fd in fund_data:
+            if fd.get("nav_data") and fd["nav_data"].get("nav_per_unit", 0) > 0:
+                db.cache_nav(fd["symbol"], fd["nav_data"], today)
+
+    return opps
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Display helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 def print_scan_header(scan_number: int | None = None):
     now = datetime.now()
     jalali_now = jdatetime.datetime.fromgregorian(datetime=now)
-    ts = jalali_now.strftime("%Y/%m/%d %H:%M:%S")
+    ts    = jalali_now.strftime("%Y/%m/%d %H:%M:%S")
     label = f"اسکن شماره {scan_number}" if scan_number else "اسکن"
     print(f"\n{'═' * 100}")
     print(f"  {label} — {ts}")
     print(f"{'═' * 100}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Watch-mode helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _opportunity_key(o: ArbitrageOpportunity) -> str:
-    return f"{o.symbol}:{o.signal}"
-
-
 def print_delta(prev: list[ArbitrageOpportunity],
                 curr: list[ArbitrageOpportunity]) -> None:
-    """Print a brief diff between two consecutive scans.
-
-    Shows:
-    • New opportunities that just became actionable
-    • Opportunities that just disappeared
-    • Large moves (>0.1 pp change in premium/discount)
-    """
     if not prev:
         return
+    prev_map = {o.symbol: o for o in prev if o.actionable}
+    curr_map = {o.symbol: o for o in curr if o.actionable}
 
-    prev_map = {_opportunity_key(o): o for o in prev if o.actionable}
-    curr_map = {_opportunity_key(o): o for o in curr if o.actionable}
+    new_syms  = set(curr_map) - set(prev_map)
+    gone_syms = set(prev_map) - set(curr_map)
+    changed   = []
+    for sym in set(curr_map) & set(prev_map):
+        delta = curr_map[sym].premium_discount_pct - prev_map[sym].premium_discount_pct
+        if abs(delta) >= 0.10:
+            changed.append((curr_map[sym], prev_map[sym].premium_discount_pct))
 
-    new_keys  = set(curr_map) - set(prev_map)
-    gone_keys = set(prev_map) - set(curr_map)
-
-    # Opportunities with meaningful premium/discount change
-    changed = []
-    for key in set(curr_map) & set(prev_map):
-        old_pd = prev_map[key].premium_discount_pct
-        new_pd = curr_map[key].premium_discount_pct
-        if abs(new_pd - old_pd) >= 0.10:
-            changed.append((curr_map[key], old_pd))
-
-    if not new_keys and not gone_keys and not changed:
-        print("  ↔  وضعیت نسبت به اسکن قبلی بدون تغییر قابل توجه است.")
+    if not new_syms and not gone_syms and not changed:
+        print("  ↔  بدون تغییر قابل توجه نسبت به اسکن قبلی")
         return
-
-    for key in new_keys:
-        o = curr_map[key]
-        print(f"  🆕 فرصت جدید: {o.symbol} — {o.signal}  "
-              f"({o.premium_discount_pct:+.2f}%  سود خالص {o.net_profit_pct:+.2f}%)")
-
-    for key in gone_keys:
-        o = prev_map[key]
-        print(f"  ❌ فرصت بسته شد: {o.symbol} — {o.signal}")
-
+    for sym in new_syms:
+        o = curr_map[sym]
+        print(f"  🆕 فرصت جدید: {o.symbol}  {o.signal}  "
+              f"({o.premium_discount_pct:+.2f}%  سود {o.net_profit_pct:+.2f}%)")
+    for sym in gone_syms:
+        print(f"  ❌ فرصت بسته شد: {sym}")
     for o, old_pd in changed:
-        direction = "▲" if o.premium_discount_pct > old_pd else "▼"
-        print(f"  {direction}  تغییر: {o.symbol}  "
-              f"{old_pd:+.2f}% → {o.premium_discount_pct:+.2f}%")
+        arrow = "▲" if o.premium_discount_pct > old_pd else "▼"
+        print(f"  {arrow} تغییر: {o.symbol}  {old_pd:+.2f}% → {o.premium_discount_pct:+.2f}%")
 
 
 def is_market_open() -> bool:
-    """Return True if current local time is within TSE trading hours."""
     now = datetime.now().time()
     return MARKET_OPEN <= now <= MARKET_CLOSE
 
 
 def seconds_until_open() -> int:
-    """Seconds until MARKET_OPEN (same day or tomorrow if already past close)."""
-    now = datetime.now()
+    now    = datetime.now()
     target = now.replace(hour=MARKET_OPEN.hour, minute=MARKET_OPEN.minute,
                          second=0, microsecond=0)
     if now.time() > MARKET_CLOSE:
-        # After today's close — next open is tomorrow
-        from datetime import timedelta
         target += timedelta(days=1)
-    delta = (target - now).total_seconds()
-    return max(0, int(delta))
+    return max(0, int((target - now).total_seconds()))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,126 +209,161 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "اسکنر آربیتراژ بین‌روزی صندوق‌های درآمد ثابت\n"
-            "Inter-day arbitrage: compares live market price to the fund's "
-            "published daily NAV to find creation/redemption opportunities."
+            "Inter-day: compares live market price to daily NAV "
+            "to find creation/redemption opportunities."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
+        "--serve", action="store_true",
+        help="داشبورد وب را راه‌اندازی کن (http://localhost:PORT)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=5000,
+        help="پورت وب سرور (پیش‌فرض: 5000)",
+    )
+    parser.add_argument(
         "--watch", metavar="MINUTES", type=int, default=0,
-        help=(
-            "حالت مانیتور: هر MINUTES دقیقه اسکن مجدد (پیش‌فرض: خاموش).\n"
-            "مثال: --watch 15  →  هر ۱۵ دقیقه اسکن کن."
-        ),
+        help="حالت مانیتور: هر MINUTES دقیقه اسکن کن (0 = یک‌بار)",
     )
     parser.add_argument(
         "--summary", action="store_true",
-        help="فقط جدول خلاصه نمایش داده شود (بدون گزارش تفصیلی)",
+        help="فقط جدول خلاصه (بدون گزارش تفصیلی)",
     )
     parser.add_argument(
         "--csv", action="store_true",
-        help="خروجی CSV ذخیره شود (در حالت watch پس از هر اسکن)",
+        help="خروجی CSV ذخیره شود",
     )
     parser.add_argument(
         "--csv-path", default="arbitrage_results.csv",
-        help="مسیر فایل CSV (پیش‌فرض: arbitrage_results.csv)",
+        help="مسیر فایل CSV",
     )
     parser.add_argument(
         "--discover", action="store_true",
-        help="جستجو برای صندوق‌های جدید درآمد ثابت",
+        help="جستجو برای صندوق‌های جدید",
     )
     parser.add_argument(
         "--no-fipiran", action="store_true",
-        help="از FIPIRAN/Rahavard به عنوان منبع NAV استفاده نشود",
+        help="NAV از منبع خارجی دریافت نشود",
     )
     parser.add_argument(
         "--no-market-check", action="store_true",
-        help="بدون توجه به ساعت بازار اسکن شود (برای تست)",
+        help="بدون توجه به ساعت بازار اسکن شود",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
-        help="نمایش لاگ DEBUG در کنسول",
+        help="نمایش لاگ DEBUG",
     )
     parser.add_argument(
         "--delay", type=float, default=0.5,
-        help="تاخیر بین درخواست‌های HTTP (ثانیه، پیش‌فرض 0.5)",
+        help="تاخیر بین درخواست‌های HTTP (ثانیه)",
     )
 
     args = parser.parse_args()
     log_file = setup_logging(args.verbose)
-
-    logger = logging.getLogger(__name__)
+    logger   = logging.getLogger(__name__)
     logger.info("Log file: %s", log_file.resolve())
-    print(f"📄 لاگ کامل در: {log_file.resolve()}\n")
 
+    db         = Database()
     aggregator = DataAggregator()
+    use_nav    = not args.no_fipiran
 
     # ── discover mode ──────────────────────────────────────────────────────
     if args.discover:
-        logger.info("Searching for new fixed-income funds...")
         new_funds = aggregator.discover_new_funds()
         if new_funds:
             print(f"\n{len(new_funds)} صندوق جدید یافت شد:")
             for f in new_funds:
-                print(f"  {f['symbol']:>10}  |  {f['full_name']}  |  ins_code: {f['ins_code']}")
+                print(f"  {f['symbol']:>10}  |  {f['full_name']}  |  {f['ins_code']}")
         else:
             print("صندوق جدیدی یافت نشد.")
         return
 
-    use_nav = not args.no_fipiran
-
-    # ── single-scan mode ───────────────────────────────────────────────────
-    if args.watch == 0:
-        print("\n⏳ در حال دریافت داده‌ها ...")
-        print("   (اطمینان حاصل کنید که به اینترنت ایران دسترسی دارید)\n")
-
+    # ── web server ─────────────────────────────────────────────────────────
+    flask_app = None
+    if args.serve:
         try:
-            opportunities = run_scan(aggregator, use_nav)
+            from web_server import run_server
+        except ImportError:
+            print("❌ Flask نصب نشده. دستور: pip install flask")
+            sys.exit(1)
+
+        def _scan_callback():
+            """Called by POST /api/scan from the browser."""
+            opps = run_scan(aggregator, db, use_nav)
+            if flask_app and opps:
+                _push_scan(flask_app, opps)
+
+        flask_app = run_server(db, host="0.0.0.0", port=args.port,
+                               scan_callback=_scan_callback)
+        print(f"\n🌐 داشبورد وب:  http://localhost:{args.port}")
+        print(f"   Ctrl+C برای توقف\n")
+
+    # ── single scan (no watch) ─────────────────────────────────────────────
+    if args.watch == 0 and not args.serve:
+        print("\n⏳ در حال اسکن ...")
+        try:
+            opps = run_scan(aggregator, db, use_nav)
         except KeyboardInterrupt:
-            print("\n❌ عملیات لغو شد.")
+            print("\n❌ لغو شد.")
             sys.exit(1)
 
-        if not opportunities:
-            print("\n❌ داده‌ای دریافت نشد یا هیچ صندوقی قابل تحلیل نبود.")
+        if not opps:
+            print("\n❌ داده‌ای دریافت نشد.")
             sys.exit(1)
 
-        print_summary_table(opportunities)
-        print_market_overview(opportunities)
-
+        print_scan_header()
+        print_summary_table(opps)
+        print_market_overview(opps)
         if not args.summary:
-            print_detailed_report(opportunities)
-
+            print_detailed_report(opps)
         if args.csv:
-            export_csv(opportunities, args.csv_path)
+            export_csv(opps, args.csv_path)
 
-        actionable = filter_actionable(opportunities)
+        actionable = filter_actionable(opps)
         if actionable:
             print(f"\n✅ {len(actionable)} فرصت آربیتراژ بین‌روزی قابل اجرا شناسایی شد.")
         else:
-            print("\n📊 در حال حاضر فرصت آربیتراژ قابل توجهی وجود ندارد.")
+            print("\n📊 در حال حاضر فرصت قابل توجهی وجود ندارد.")
         print()
         return
 
-    # ── watch mode ─────────────────────────────────────────────────────────
-    interval_sec = args.watch * 60
-    print(f"\n🔭 حالت مانیتور آربیتراژ بین‌روزی فعال شد")
-    print(f"   هر {args.watch} دقیقه اسکن می‌شود")
-    print(f"   ساعت بازار بورس: {MARKET_OPEN.strftime('%H:%M')} تا {MARKET_CLOSE.strftime('%H:%M')}")
-    print(f"   برای توقف: Ctrl+C\n")
+    # ── watch / serve loop ─────────────────────────────────────────────────
+    interval_sec = (args.watch or 15) * 60
+    if args.serve and args.watch == 0:
+        # serve-only: scan once at startup then wait for POST /api/scan
+        print("⏳ اسکن اولیه ...")
+        opps = run_scan(aggregator, db, use_nav)
+        if flask_app and opps:
+            _push_scan(flask_app, opps)
+        print("✅ اسکن اولیه تکمیل شد — منتظر اسکن بعدی از طریق UI یا --watch")
+        # Keep main thread alive
+        try:
+            while True:
+                time.sleep(60)
+        except KeyboardInterrupt:
+            print("\n👋 متوقف شد.")
+        return
 
-    prev_opportunities: list[ArbitrageOpportunity] = []
+    print(f"\n🔭 حالت مانیتور آربیتراژ بین‌روزی فعال شد")
+    if args.serve:
+        print(f"   داشبورد وب: http://localhost:{args.port}")
+    print(f"   هر {args.watch} دقیقه اسکن")
+    print(f"   بازار: {MARKET_OPEN.strftime('%H:%M')}–{MARKET_CLOSE.strftime('%H:%M')}  "
+          f"{'(بدون بررسی ساعت)' if args.no_market_check else ''}")
+    print(f"   Ctrl+C برای توقف\n")
+
+    prev_opps: list[ArbitrageOpportunity] = []
     scan_count = 0
 
     try:
         while True:
-            # Wait for market hours unless --no-market-check
             if not args.no_market_check and not is_market_open():
                 wait_sec = seconds_until_open()
-                wait_min = wait_sec // 60
-                print(f"\n🕐 بازار بسته است. "
-                      f"تا باز شدن بازار {wait_min} دقیقه ({wait_sec//3600}h {(wait_sec%3600)//60}m) صبر می‌شود ...")
+                h, m = divmod(wait_sec // 60, 60)
+                print(f"\n🕐 بازار بسته — تا باز شدن {h}h {m}m ...")
                 try:
-                    time.sleep(min(wait_sec, 300))   # sleep in 5-min chunks
+                    time.sleep(min(wait_sec, 300))
                 except KeyboardInterrupt:
                     break
                 continue
@@ -338,57 +371,78 @@ def main():
             scan_count += 1
             print_scan_header(scan_count)
 
-            opportunities = run_scan(aggregator, use_nav)
+            opps = run_scan(aggregator, db, use_nav)
 
-            if not opportunities:
-                print("  ⚠️  داده‌ای دریافت نشد — اسکن بعدی در "
-                      f"{args.watch} دقیقه دیگر.")
+            if not opps:
+                print("  ⚠️  داده‌ای دریافت نشد")
             else:
-                print_summary_table(opportunities)
-
-                actionable = filter_actionable(opportunities)
+                print_summary_table(opps)
+                actionable = filter_actionable(opps)
                 if actionable:
                     print(f"\n  ✅ {len(actionable)} فرصت قابل اجرا:")
                     for o in actionable:
                         arrow = "🟢" if o.signal == "BUY" else "🔴"
-                        print(f"     {arrow} {o.symbol:>8}  |  "
-                              f"صرف/تخفیف: {o.premium_discount_pct:+.2f}%  |  "
-                              f"سود خالص: {o.net_profit_pct:+.2f}%  |  "
+                        print(f"     {arrow} {o.symbol:>8}  "
+                              f"صرف/تخفیف: {o.premium_discount_pct:+.2f}%  "
+                              f"سود: {o.net_profit_pct:+.2f}%  "
                               f"حجم: {o.volume:,}")
                 else:
                     print("\n  📊 هیچ فرصتی بالاتر از آستانه نیست.")
 
                 if scan_count > 1:
-                    print("\n  📈 تغییرات نسبت به اسکن قبلی:")
-                    print_delta(prev_opportunities, opportunities)
+                    print("\n  📈 تغییرات:")
+                    print_delta(prev_opps, opps)
 
                 if not args.summary and actionable:
-                    print()
-                    print_detailed_report(opportunities)
+                    print_detailed_report(opps)
 
                 if args.csv:
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    csv_path = args.csv_path.replace(
-                        ".csv", f"_{ts}.csv"
-                    ) if ".csv" in args.csv_path else f"{args.csv_path}_{ts}.csv"
-                    export_csv(opportunities, csv_path)
+                    ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    csv = args.csv_path.replace(".csv", f"_{ts}.csv")
+                    export_csv(opps, csv)
 
-                prev_opportunities = opportunities
+                # Push to SSE (web UI)
+                if flask_app:
+                    _push_scan(flask_app, opps)
 
-            # Sleep until next scan
-            next_at = datetime.now().replace(microsecond=0)
-            from datetime import timedelta
-            next_at = next_at + timedelta(seconds=interval_sec)
+                prev_opps = opps
+
+            next_at = datetime.now() + timedelta(seconds=interval_sec)
             print(f"\n  ⏱  اسکن بعدی: {next_at.strftime('%H:%M:%S')}")
             time.sleep(interval_sec)
 
     except KeyboardInterrupt:
         print("\n\n👋 مانیتور متوقف شد.")
-        if prev_opportunities:
-            actionable = filter_actionable(prev_opportunities)
-            print(f"   آخرین وضعیت: {len(prev_opportunities)} صندوق بررسی شد، "
-                  f"{len(actionable)} فرصت قابل اجرا")
+        if prev_opps:
+            n = len(filter_actionable(prev_opps))
+            print(f"   آخرین: {len(prev_opps)} صندوق، {n} فرصت قابل اجرا")
         print()
+
+
+def _push_scan(flask_app, opps: list[ArbitrageOpportunity]):
+    """Push a scan_complete event to all SSE clients."""
+    try:
+        payload = {
+            "type":      "scan_complete",
+            "timestamp": datetime.utcnow().isoformat(),
+            "funds": [
+                {
+                    "symbol":               o.symbol,
+                    "name":                 o.name,
+                    "market_price":         o.market_price,
+                    "nav":                  o.nav,
+                    "premium_discount_pct": o.premium_discount_pct,
+                    "net_profit_pct":       o.net_profit_pct,
+                    "volume":               o.volume,
+                    "signal":               o.signal,
+                    "actionable":           o.actionable,
+                }
+                for o in opps
+            ],
+        }
+        flask_app.push_to_sse(payload)
+    except Exception as e:
+        logging.getLogger(__name__).debug("SSE push failed: %s", e)
 
 
 if __name__ == "__main__":

@@ -1101,12 +1101,36 @@ class DataAggregator:
         self.fipiran  = FIPIRANFetcher()
         self.rahavard = RahavardFetcher()
 
-    def fetch_all(self, use_fipiran_fallback: bool = True) -> list[dict]:
+    def fetch_all(self, use_fipiran_fallback: bool = True,
+                  nav_cache=None) -> list[dict]:
+        """Fetch prices + NAV for all funds.
+
+        Parameters
+        ----------
+        use_fipiran_fallback : bool
+            Try FIPIRAN / Rahavard365 if TSETMC doesn't expose NAV.
+        nav_cache : Database | None
+            If provided, today's NAV is looked up in the DB before hitting
+            external sources.  Avoids repeated FIPIRAN/Rahavard calls for
+            every intra-day scan (NAV only changes once per trading day).
+        """
         logger.info("Fetching price data from TSETMC...")
         results = self.tsetmc.fetch_all_fund_data()
 
         if not use_fipiran_fallback:
             return results
+
+        # ── Fill NAV from DB cache (today's stored NAV) ──────────────────
+        if nav_cache is not None:
+            for result in results:
+                if result["nav_data"] is not None:
+                    continue
+                cached = nav_cache.get_cached_nav(result["symbol"])
+                if cached:
+                    result["nav_data"] = cached
+                    result["error"]    = None
+                    logger.info("  NAV for %s from DB cache (cancel_nav=%s)",
+                                result["symbol"], cached["cancel_nav"])
 
         missing_nav = [r for r in results if r["nav_data"] is None]
         if not missing_nav:
