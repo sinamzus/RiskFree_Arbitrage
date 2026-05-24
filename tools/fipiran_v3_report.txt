@@ -1,0 +1,189 @@
+========================================================================
+  بخش ۱ — اضافه کردن fund.fipiran.ir به hosts
+========================================================================
+  — hosts entry وجود ندارد، تلاش برای اضافه کردن...
+  ✗ خطای دسترسی — لازم است به صورت Admin ران کنید
+    یا دستی این خط را به C:\Windows\System32\drivers\etc\hosts اضافه کنید:
+    46.102.143.223 fund.fipiran.ir
+
+  DNS ✗ fund.fipiran.ir → [Errno 11001] getaddrinfo failed
+  DNS ✓ fipiran.ir → 46.102.143.223
+
+========================================================================
+  بخش ۲ — تست endpoint های کشف‌شده از JS bundle فیپیران
+========================================================================
+  (از bundle: fundlistissuebyfundtype?fundType=6)
+
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=6
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=5
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=1
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=2
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=3
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=4
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=7
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=8
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlist
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlist?pageNumber=1&pageSize=500
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlist?pageNumber=1&pageSize=500&typeOfFund=Fixed
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistbrief
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundlistbrief?typeOfFund=Fixed
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundcompare
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/fundcompare?TypeOfInvest=Fixed&ReturnType=1
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/treemap
+  ✗ ERROR  https://fund.fipiran.ir/api/v1/fund/treemap?typeOfFund=Fixed
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=6
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=5
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=1
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=2
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=3
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=4
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=7
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistissuebyfundtype?fundType=8
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlist
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlist?pageNumber=1&pageSize=500
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlist?pageNumber=1&pageSize=500&typeOfFund=Fixed
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistbrief
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundlistbrief?typeOfFund=Fixed
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundcompare
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/fundcompare?TypeOfInvest=Fixed&ReturnType=1
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/treemap
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+  ? HTML (548B)  https://fipiran.ir/api/v1/fund/treemap?typeOfFund=Fixed
+     <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+
+
+========================================================================
+  بخش ۳ — صندوق‌های درآمد ثابت ETF یافت‌شده
+========================================================================
+  هیچ داده‌ای از API فیپیران پیدا نشد.
+
+  ── راه‌حل دستی ──
+  1. این خط را به C:\Windows\System32\drivers\etc\hosts اضافه کن:
+     46.102.143.223 fund.fipiran.ir
+  2. مرورگر Chrome را باز کن
+  3. برو به: https://fipiran.ir/mf/list
+  4. F12 → Network → فیلتر: Fetch/XHR
+  5. صفحه را Reload کن
+  6. دنبال درخواست‌هایی بگرد که URL آنها شامل:
+     'fundlist' یا 'fundcompare' یا 'fundlistissuebyfundtype' باشد
+  7. URL کامل آن درخواست را اینجا بنویس
+
+========================================================================
+  بخش ۴ — تأیید ins_code نمادهای مشکوک
+========================================================================
+
+  — نمادهای مشکوک (تأیید نشده از جستجو) —
+  ✓ خاتم       18865325633315847  قیمت=37,594  نام=
+  ✓ اوصتا      57761388729898548  قیمت=63,033  نام=
+  ✓ فردا       65249046611427924  قیمت=38,161  نام=
+  ✓ سخند       59598536122397373  قیمت=10,949  نام=
+  ✓ یاقوت      1438514795814416  قیمت=42,266  نام=
+  ✓ فیروزا     10795723506538053  قیمت=81,944  نام=
+  ✓ همای       15494954332657697  قیمت=10,028  نام=
+
+  — نمادهای جدید (تأیید ins_code از TSETMC search 2026-05-24) —
+  ✓ آسود       16582961426722208  قیمت=15,051  نام=
+  ✓ اطمینان    50243708970398750  قیمت=16,444  نام=
+  ✓ اونیکس     23498719713662118  قیمت=22,430  نام=
+  ✓ ترنج       50264175787486822  قیمت=10,033  نام=
+  ✓ اکسیژن     44558786393585356  قیمت=17,608  نام=
+  ✓ دامون      43009306066217458  قیمت=19,554  نام=
+
+  — جستجوی مستقیم TSETMC برای نمادهای مشکوک —
+    خاتم: خاتم                                             flow=1 code=18865325633315847
+    اوصتا: اوصتا                                            flow=2 code=57761388729898548
+    فردا: فردا                                             flow=1 code=65249046611427924
+    فردا: امين يكم                                         flow=1 code=45728383369147894
+    فردا: الماس                                            flow=2 code=28788598290160782
+    سخند: سخند                                             flow=2 code=59598536122397373
+    یاقوت: ياقوت                                            flow=1 code=1438514795814416
+    فیروزا: فيروزا                                           flow=1 code=10795723506538053
+    فیروزا: تفيرو                                            flow=4 code=45062188442385800
+    فیروزا: تفيرو                                            flow=1 code=60938976068667707
+    همای: هماي                                             flow=1 code=15494954332657697
+
+========================================================================
+  DONE
+========================================================================
