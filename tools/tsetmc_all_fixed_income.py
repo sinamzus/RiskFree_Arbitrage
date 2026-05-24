@@ -42,14 +42,20 @@ def get(url, **kw):
         return None
 
 def extract_list(data):
-    """از هر ساختار JSON، لیست ابزارها را برگردان."""
+    """از هر ساختار JSON، لیست ابزارها را برگردان.
+    TSETMC marketwatch می‌تواند list یا dict-of-dicts باشد.
+    """
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
         for k in ["marketwatch", "MarketWatch", "data", "Data", "items",
                   "instrumentInfo", "closingPriceInfo", "closingPrice"]:
-            if k in data and isinstance(data[k], list):
-                return data[k]
+            val = data.get(k)
+            if isinstance(val, list) and val:
+                return val
+            # dict-of-dicts: {"marketwatch": {"insCode1": {...}, ...}}
+            if isinstance(val, dict) and val:
+                return list(val.values())
     return []
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -60,23 +66,26 @@ log("  A. GetMarketWatch — دانلود کل بازار")
 log("=" * 72)
 
 mw_candidates = [
-    # بازار صندوق‌های قابل معامله
-    f"{CDN}/MarketData/GetMarketWatch?market=6&EPS=false&mop=0&sop=0&sector=0&col=0",
-    f"{CDN}/MarketData/GetMarketWatch?market=6&EPS=false",
-    # بورس با فیلتر paperType=6 (صندوق ETF)
-    f"{CDN}/MarketData/GetMarketWatch?market=1&EPS=false&mop=0&sop=0&sector=0&col=0&paperTypes[0]=6",
-    f"{CDN}/MarketData/GetMarketWatch?market=1&EPS=false&paperType=6",
-    # فرابورس با فیلتر
-    f"{CDN}/MarketData/GetMarketWatch?market=2&EPS=false&mop=0&sop=0&sector=0&col=0&paperTypes[0]=6",
-    f"{CDN}/MarketData/GetMarketWatch?market=2&EPS=false&paperType=6",
-    # بدون فیلتر بازار (همه)
-    f"{CDN}/MarketData/GetMarketWatch?market=1&EPS=false&mop=0&sop=0&sector=0&col=0",
-    f"{CDN}/MarketData/GetMarketWatch?market=2&EPS=false&mop=0&sop=0&sector=0&col=0",
-    # فرمت‌های دیگر
-    f"{CDN}/MarketData/GetMarketWatch?market=1&EPS=1&mop=0&sop=0&sector=0&col=0",
-    f"{CDN}/ClosingPrice/GetMarketWatch?market=6",
+    # ── ClosingPrice/GetMarketWatch (تأیید شده از گزارش قبلی) ──
+    f"{CDN}/ClosingPrice/GetMarketWatch?market=6",          # صندوق ETF
+    f"{CDN}/ClosingPrice/GetMarketWatch?market=6&paperType=6",
+    f"{CDN}/ClosingPrice/GetMarketWatch?market=6&mop=0&sop=0",
     f"{CDN}/ClosingPrice/GetMarketWatch?market=1&paperType=6",
     f"{CDN}/ClosingPrice/GetMarketWatch?market=2&paperType=6",
+    f"{CDN}/ClosingPrice/GetMarketWatch?market=1&mop=0&sop=0",
+    f"{CDN}/ClosingPrice/GetMarketWatch?market=2&mop=0&sop=0",
+    # market=4 = SME / بازار پایه
+    f"{CDN}/ClosingPrice/GetMarketWatch?market=4&paperType=6",
+    # ── MarketData (۴۰۴ روی این سرور ولی شاید فرمت درست باشد) ──
+    f"{CDN}/MarketData/GetMarketWatch?market=6&EPS=false&mop=0&sop=0&sector=0&col=0",
+    f"{CDN}/MarketData/GetMarketWatch?market=6&EPS=false",
+    f"{CDN}/MarketData/GetMarketWatch?market=1&EPS=false&mop=0&sop=0&sector=0&col=0",
+    f"{CDN}/MarketData/GetMarketWatch?market=2&EPS=false&mop=0&sop=0&sector=0&col=0",
+    # ── EndPoints دیگر برای لیست ابزارها ──
+    f"{CDN}/Instrument/GetInstrumentList?market=6",
+    f"{CDN}/Instrument/GetInstrumentList?market=1&paperType=6",
+    f"{CDN}/Instrument/GetInstrumentList?market=2&paperType=6",
+    f"{CDN}/ClosingPrice/GetClosingPriceDailyList/0/365",   # همه (احتمال پایین)
 ]
 
 mw_pool = {}  # insCode → info
@@ -173,8 +182,8 @@ for url in sector_list_urls:
     time.sleep(0.4)
 
 # تست کدهای صنعت صندوق شناخته‌شده
-known_sector_codes = ["68691", "57486", "69180", "68633", "69074",
-                      "68949", "57010", "68948", "34"] | fund_sector_codes
+known_sector_codes = list(set(["68691", "57486", "69180", "68633", "69074",
+                               "68949", "57010", "68948", "34"]) | fund_sector_codes)
 for sc in known_sector_codes:
     for market in ["1", "2", "0"]:
         url = f"{CDN}/Sector/GetSectorPaperList/{sc}/{market}"
