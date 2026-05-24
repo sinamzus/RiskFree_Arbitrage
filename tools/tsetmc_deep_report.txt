@@ -1,0 +1,339 @@
+
+────────────────────────────────────────────────────────────────────────
+  SECTION 1: Fixed-income ETF fund list discovery
+────────────────────────────────────────────────────────────────────────
+
+── 1a. tsetmc.ir homepage ──
+  GET https://tsetmc.ir/
+  → 200  824 bytes  text/html
+  tsetmc.ir title: <title>.:TSETMC:. :: ÙØ¯ÛØ±ÛØª ÙÙØ§ÙØ±Û Ø¨ÙØ±Ø³ ØªÙØ±Ø§Ù</title>
+  First 300 chars: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" content="#000000"/><meta http-equiv="cache-control" content="no-cache"><meta http-equiv="expires" cont
+
+── 1b. tsetmc.ir API endpoint guesses ──
+  GET https://tsetmc.ir/api/v1/fund/fixedincome
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/api/v1/fund/fixedincome  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  GET https://tsetmc.ir/api/fund/list
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/api/fund/list  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  GET https://tsetmc.ir/api/v1/etf/list
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/api/v1/etf/list  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  GET https://tsetmc.ir/api/instruments/fixed-income
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/api/instruments/fixed-income  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  GET https://tsetmc.ir/api/Market/FixedIncome
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/api/Market/FixedIncome  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  GET https://tsetmc.ir/Loader.aspx?ParTree=15131P&t=etf
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/Loader.aspx?ParTree=15131P&t=etf  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  GET https://tsetmc.ir/Loader.aspx?ParTree=151318
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/Loader.aspx?ParTree=151318  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  GET https://tsetmc.ir/tsev2/data/instinfofast.aspx?d=i&g=5&t=1
+  → 200  824 bytes  text/html
+  ✓ https://tsetmc.ir/tsev2/data/instinfofast.aspx?d=i&g=5&t=1  → 824 bytes, preview: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+
+── 1c. CDN search for درآمد ثابت ETFs ──
+  GET https://cdn.tsetmc.com/api/Instrument/GetInstrumentSearch/%D8%B5%D9%86%D8%AF%D9%88%D9%82%20%D8%AF%D8%B1%D8%A2%D9%85%D8%AF%20%D8%AB%D8%A7%D8%A8%D8%AA
+  → 200  472 bytes  application/json; charset=utf-8
+  'صندوق درآمد ثابت' → 1 total, 1 ETF funds
+    امين يكم      45728383369147894     صندوق درآمد ثابت امين يكم فردا
+  GET https://cdn.tsetmc.com/api/Instrument/GetInstrumentSearch/%D8%AF%D8%B1%D8%A2%D9%85%D8%AF%20%D8%AB%D8%A7%D8%A8%D8%AA
+  → 200  7241 bytes  application/json; charset=utf-8
+  'درآمد ثابت' → 16 total, 5 ETF funds
+    امين يكم      45728383369147894     صندوق درآمد ثابت امين يكم فردا
+    تصميم         53419976284977130     صندوق س با درآمد ثابت تصميم
+    كمند          34718633636164421     صندوق س. با درآمد ثابت كمند
+    كيان          53251602435454519     صندوق س. با درآمد ثابت كيان
+    ماني          61265100181977543     صندوق س. با درآمد ثابت ماني
+  GET https://cdn.tsetmc.com/api/Instrument/GetInstrumentSearch/%D8%B5%D9%86%D8%AF%D9%88%D9%82%20%D8%AB%D8%A7%D8%A8%D8%AA
+  → 200  23 bytes  application/json; charset=utf-8
+  'صندوق ثابت' → 0 total, 0 ETF funds
+
+── 1d. CDN category/market overview endpoints ──
+  GET https://cdn.tsetmc.com/api/MarketData/GetMarketOverview/1
+  → 200  465 bytes  application/json; charset=utf-8
+  ✓ GetMarketOverview/1 → {'marketOverview': {'lastDataDEven': 0, 'lastDataHEven': 0, 'indexLastValue': 3909790.78, 'indexChange': 78018.32, 'indexEqualWeightedLastValue': 1032158.26, 'indexEqualWeightedChange': 32832.97, 'mar
+  GET https://cdn.tsetmc.com/api/MarketData/GetMarketOverview/2
+  → 200  468 bytes  application/json; charset=utf-8
+  ✓ GetMarketOverview/2 → {'marketOverview': {'lastDataDEven': 0, 'lastDataHEven': 0, 'indexLastValue': 30344.46, 'indexChange': 1139.24, 'indexEqualWeightedLastValue': 0.0, 'indexEqualWeightedChange': 0.0, 'marketActivityDEve
+  GET https://cdn.tsetmc.com/api/Instrument/GetInstrumentGroupByMarket/H1
+  → 404  0 bytes  
+  ✗ /Instrument/GetInstrumentGroupByMarket/H1
+  GET https://cdn.tsetmc.com/api/Instrument/GetInstrumentGroupByMarket/H2
+  → 404  0 bytes  
+  ✗ /Instrument/GetInstrumentGroupByMarket/H2
+  GET https://cdn.tsetmc.com/api/Instrument/GetMarketGroupList
+  → 404  0 bytes  
+  ✗ /Instrument/GetMarketGroupList
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetMarketClose/H1/1
+  → 404  0 bytes  
+  ✗ /ClosingPrice/GetMarketClose/H1/1
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetMarketClose/H1/0
+  → 404  0 bytes  
+  ✗ /ClosingPrice/GetMarketClose/H1/0
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetIndexB2/H1
+  → 404  0 bytes  
+  ✗ /ClosingPrice/GetIndexB2/H1
+
+────────────────────────────────────────────────────────────────────────
+  SECTION 2: History / سابقه tab data — كمند (34718633636164421)
+────────────────────────────────────────────────────────────────────────
+
+── 2a. CDN ClosingPriceHistory with type variants ──
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceHistory/34718633636164421/0
+  → 200  26 bytes  application/json; charset=utf-8
+  type=0: 0 entries, keys=[]
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceHistory/34718633636164421/1
+  → 200  26 bytes  application/json; charset=utf-8
+  type=1: 0 entries, keys=[]
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceHistory/34718633636164421/2
+  → 200  26 bytes  application/json; charset=utf-8
+  type=2: 0 entries, keys=[]
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceHistory/34718633636164421/3
+  → 200  26 bytes  application/json; charset=utf-8
+  type=3: 0 entries, keys=[]
+
+── 2b. tsetmc.ir history endpoints ──
+  GET https://www.tsetmc.com/History/34718633636164421/20260524
+  → 200  824 bytes  text/html
+  ✗ https://www.tsetmc.com/History/34718633636164421/20260524 → 824 bytes (SPA shell)
+  GET https://tsetmc.ir/History/34718633636164421/20260524
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/History/34718633636164421/20260524 → 824 bytes (SPA shell)
+  GET https://www.tsetmc.com/History/34718633636164421/20260521
+  → 200  824 bytes  text/html
+  ✗ https://www.tsetmc.com/History/34718633636164421/20260521 → 824 bytes (SPA shell)
+  GET https://tsetmc.ir/History/34718633636164421/20260521
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/History/34718633636164421/20260521 → 824 bytes (SPA shell)
+  GET https://www.tsetmc.com/History/34718633636164421/20260520
+  → 200  824 bytes  text/html
+  ✗ https://www.tsetmc.com/History/34718633636164421/20260520 → 824 bytes (SPA shell)
+  GET https://tsetmc.ir/History/34718633636164421/20260520
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/History/34718633636164421/20260520 → 824 bytes (SPA shell)
+
+── 2c. CDN alternative history endpoints ──
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetCSAdjHistory/34718633636164421/0
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetCSAdjHistory/34718633636164421/0
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetCSAdjHistory/34718633636164421/1
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetCSAdjHistory/34718633636164421/1
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetMFHistory/34718633636164421/0
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetMFHistory/34718633636164421/0
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetETFHistory/34718633636164421/0
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetETFHistory/34718633636164421/0
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetNavHistory/34718633636164421/0
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetNavHistory/34718633636164421/0
+  GET https://cdn.tsetmc.com/api/Nav/GetNavHistory/34718633636164421/0
+  → 200  824 bytes  text/html
+  ✗ Nav/GetNavHistory/34718633636164421/0 → SPA shell
+  GET https://cdn.tsetmc.com/api/Nav/GetNav/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ Nav/GetNav/34718633636164421 → SPA shell
+  GET https://cdn.tsetmc.com/api/ETF/GetETFByDate/34718633636164421/20260524
+  → 200  824 bytes  text/html
+  ✗ ETF/GetETFByDate/34718633636164421/20260524 → SPA shell
+  GET https://cdn.tsetmc.com/api/ETF/GetETFHistory/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ ETF/GetETFHistory/34718633636164421 → SPA shell
+  GET https://cdn.tsetmc.com/api/ETF/GetETFNav/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ ETF/GetETFNav/34718633636164421 → SPA shell
+
+────────────────────────────────────────────────────────────────────────
+  SECTION 3: Intraday / درون‌روز data — كمند (34718633636164421)
+────────────────────────────────────────────────────────────────────────
+
+── 3a. CDN trade history endpoints ──
+  GET https://cdn.tsetmc.com/api/Trade/GetTradeHistory/34718633636164421/0
+  → 404  0 bytes  
+  ✗ Trade/GetTradeHistory/34718633636164421/0 (ERR)
+  GET https://cdn.tsetmc.com/api/Trade/GetTradeHistory/34718633636164421/20260524/true
+  → 200  174123 bytes  application/json; charset=utf-8
+  ✓ Trade/GetTradeHistory/34718633636164421/20260524/true → 174123b: {'tradeHistory': [{'insCode': None, 'dEven': 0, 'nTran': 1382, 'hEven': 145941, 'qTitTran': 21060, 'pTran': 10163.0, 'qTitNgJ': 0, 'iSensVarP': '\x00', 'pPhSeaCotJ': 0.0, 'pPbSeaCotJ': 0.0, 'iAnuTran': 0, 'xqVarPJDrPRf': 0.0, 'canceled': 0}, {'insCode': None, 'dEven': 0, 'nTran': 1381, 'hEven': 145930, 'qTitTran': 98, 'pTran': 10163.0, 'qTitNgJ': 0, 'iSensVarP': '\x00', 'pPhSeaCotJ': 0.0, 'pPbSeaC
+  GET https://cdn.tsetmc.com/api/Trade/GetTradeHistory/34718633636164421/20260524/false
+  → 200  275987 bytes  application/json; charset=utf-8
+  ✓ Trade/GetTradeHistory/34718633636164421/20260524/false → 275987b: {'tradeHistory': [{'insCode': None, 'dEven': 0, 'nTran': 1382, 'hEven': 145941, 'qTitTran': 21060, 'pTran': 10163.0, 'qTitNgJ': 0, 'iSensVarP': '\x00', 'pPhSeaCotJ': 0.0, 'pPbSeaCotJ': 0.0, 'iAnuTran': 0, 'xqVarPJDrPRf': 0.0, 'canceled': 0}, {'insCode': None, 'dEven': 0, 'nTran': 1381, 'hEven': 145930, 'qTitTran': 98, 'pTran': 10163.0, 'qTitNgJ': 0, 'iSensVarP': '\x00', 'pPhSeaCotJ': 0.0, 'pPbSeaC
+  GET https://cdn.tsetmc.com/api/Trade/GetTrade/34718633636164421
+  → 200  275980 bytes  application/json; charset=utf-8
+  ✓ Trade/GetTrade/34718633636164421 → 275980b: {'trade': [{'insCode': None, 'dEven': 0, 'nTran': 1, 'hEven': 83000, 'qTitTran': 1000000, 'pTran': 10162.0, 'qTitNgJ': 0, 'iSensVarP': '\x00', 'pPhSeaCotJ': 0.0, 'pPbSeaCotJ': 0.0, 'iAnuTran': 0, 'xqVarPJDrPRf': 0.0, 'canceled': 0}, {'insCode': None, 'dEven': 0, 'nTran': 2, 'hEven': 83000, 'qTitTran': 448000, 'pTran': 10162.0, 'qTitNgJ': 0, 'iSensVarP': '\x00', 'pPhSeaCotJ': 0.0, 'pPbSeaCotJ': 0.0
+  GET https://cdn.tsetmc.com/api/Trade/GetTradeList/34718633636164421/20260524
+  → 404  0 bytes  
+  ✗ Trade/GetTradeList/34718633636164421/20260524 (ERR)
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetTradeHistory/34718633636164421/0
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetTradeHistory/34718633636164421/0 (ERR)
+
+── 3b. Old Loader.aspx trade endpoints ──
+  GET https://www.tsetmc.com/Loader.aspx?ParTree=15131W&i=34718633636164421
+  → 200  824 bytes  text/html
+  ✗ /Loader.aspx?ParTree=15131W&i=34718633636164421 (200)
+  GET https://www.tsetmc.com/Loader.aspx?ParTree=15131L&i=34718633636164421
+  → 200  824 bytes  text/html
+  ✗ /Loader.aspx?ParTree=15131L&i=34718633636164421 (200)
+  GET https://www.tsetmc.com/Loader.aspx?ParTree=15131V&i=34718633636164421
+  → 200  824 bytes  text/html
+  ✗ /Loader.aspx?ParTree=15131V&i=34718633636164421 (200)
+  GET https://www.tsetmc.com/Loader.aspx?ParTree=1513115&i=34718633636164421
+  → 200  824 bytes  text/html
+  ✗ /Loader.aspx?ParTree=1513115&i=34718633636164421 (200)
+  GET https://www.tsetmc.com/tsev2/data/instinfofast.aspx?i=34718633636164421&c=
+  → 200  824 bytes  text/html
+  ✗ /tsev2/data/instinfofast.aspx?i=34718633636164421&c= (200)
+  GET https://www.tsetmc.com/tsev2/data/TradeDetail.aspx?i=34718633636164421&d=20260524
+  → 200  824 bytes  text/html
+  ✗ /tsev2/data/TradeDetail.aspx?i=34718633636164421&d=20260524 (200)
+  GET https://www.tsetmc.com/tsev2/data/TradeDetail.aspx?i=34718633636164421&d=0
+  → 200  824 bytes  text/html
+  ✗ /tsev2/data/TradeDetail.aspx?i=34718633636164421&d=0 (200)
+  GET https://www.tsetmc.com/tsev2/data/TsePublicTrade.aspx?i=34718633636164421
+  → 200  824 bytes  text/html
+  ✗ /tsev2/data/TsePublicTrade.aspx?i=34718633636164421 (200)
+  GET https://www.tsetmc.com/tsev2/data/TsePublicTrade.aspx?i=34718633636164421&d=20260524
+  → 200  824 bytes  text/html
+  ✗ /tsev2/data/TsePublicTrade.aspx?i=34718633636164421&d=202605 (200)
+
+── 3c. tsetmc.ir intraday endpoints ──
+  GET https://tsetmc.ir/api/Trade/GetTradeHistory/34718633636164421/0
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/Trade/GetTradeHistory/34718633636164421/0 (200)
+  GET https://tsetmc.ir/api/Trade/GetTradeHistory/34718633636164421/20260524/true
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/Trade/GetTradeHistory/34718633636164421/20260524/true (200)
+  GET https://tsetmc.ir/tsev2/data/TradeDetail.aspx?i=34718633636164421&d=20260524
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/tsev2/data/TradeDetail.aspx?i=34718633636164421&d=20260524 (200)
+  GET https://tsetmc.ir/tsev2/data/TradeDetail.aspx?i=34718633636164421&d=0
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/tsev2/data/TradeDetail.aspx?i=34718633636164421&d=0 (200)
+  GET https://tsetmc.ir/Loader.aspx?ParTree=15131W&i=34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/Loader.aspx?ParTree=15131W&i=34718633636164421 (200)
+  GET https://tsetmc.ir/Loader.aspx?ParTree=15131L&i=34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/Loader.aspx?ParTree=15131L&i=34718633636164421 (200)
+
+────────────────────────────────────────────────────────────────────────
+  SECTION 4: Detailed date probe — 20260524
+────────────────────────────────────────────────────────────────────────
+
+── 4a. CDN endpoints that accept a date param ──
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceInfo/34718633636164421/20260524
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetClosingPriceInfo/34718633636164421/20260524 (ERR)
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDaily/34718633636164421/20260524
+  → 200  353 bytes  application/json; charset=utf-8
+  ✓ ClosingPrice/GetClosingPriceDaily/34718633636164421/20260524 → 353b: {'closingPriceDaily': {'priceChange': 11.0, 'priceMin': 10162.0, 'priceMax': 10163.0, 'priceYesterday': 10152.0, 'priceFirst': 10162.0, 'last': False, 'id': 0, 'insCode': '34718633636164421', 'dEven':
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPrice/34718633636164421/20260524
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetClosingPrice/34718633636164421/20260524 (ERR)
+  GET https://cdn.tsetmc.com/api/Instrument/GetInstrumentInfoByDate/34718633636164421/20260524
+  → 404  0 bytes  
+  ✗ Instrument/GetInstrumentInfoByDate/34718633636164421/20260524 (ERR)
+  GET https://cdn.tsetmc.com/api/Nav/GetNavByDate/34718633636164421/20260524
+  → 200  824 bytes  text/html
+  ✗ Nav/GetNavByDate/34718633636164421/20260524 (200)
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetLastClosingPrice/34718633636164421/20260524
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetLastClosingPrice/34718633636164421/20260524 (ERR)
+
+── 4b. thirtyDayClosingHistory variants ──
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetThirtyDayHistory/34718633636164421
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetThirtyDayHistory/34718633636164421
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/34718633636164421/30
+  → 200  9963 bytes  application/json; charset=utf-8
+  ✓ ClosingPrice/GetClosingPriceDailyList/34718633636164421/30 → 9963b: {'closingPriceDaily': [{'priceChange': 11.0, 'priceMin': 10162.0, 'priceMax': 10163.0, 'priceYesterday': 10152.0, 'priceFirst': 10162.0, 'last': False, 'id': 0, 'insCode': '34718633636164421', 'dEven'
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetThirtyDayClosingHistory/34718633636164421
+  → 404  0 bytes  
+  ✗ ClosingPrice/GetThirtyDayClosingHistory/34718633636164421
+
+────────────────────────────────────────────────────────────────────────
+  SECTION 5: tsetmc.ir deep probe
+────────────────────────────────────────────────────────────────────────
+  GET https://tsetmc.ir/
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/  (200, 824b)
+  GET https://tsetmc.ir/instrument/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/instrument/34718633636164421  (200, 824b)
+  GET https://tsetmc.ir/Symbol/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/Symbol/34718633636164421  (200, 824b)
+  GET https://tsetmc.ir/Symbol/كمند
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/Symbol/كمند  (200, 824b)
+  GET https://tsetmc.ir/api/v1/instrument/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/v1/instrument/34718633636164421  (200, 824b)
+  GET https://tsetmc.ir/api/v1/nav/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/v1/nav/34718633636164421  (200, 824b)
+  GET https://tsetmc.ir/api/v1/ohlcv/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/v1/ohlcv/34718633636164421  (200, 824b)
+  GET https://tsetmc.ir/api/v1/funds/fixed-income
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/v1/funds/fixed-income  (200, 824b)
+  GET https://tsetmc.ir/api/v1/fund/list?type=fixed
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/v1/fund/list?type=fixed  (ERR, 0b)
+  GET https://tsetmc.ir/api/v1/fund/etf
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/v1/fund/etf  (200, 824b)
+  GET https://tsetmc.ir/api/Symbol/GetInstrument/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/Symbol/GetInstrument/34718633636164421  (200, 824b)
+  GET https://tsetmc.ir/api/Nav/GetNav/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/api/Nav/GetNav/34718633636164421  (200, 824b)
+  GET https://tsetmc.ir/Home/ISClient/3/0
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/Home/ISClient/3/0  (200, 824b)
+  GET https://tsetmc.ir/Home/ISClient/3/34718633636164421
+  → 200  824 bytes  text/html
+  ✗ https://tsetmc.ir/Home/ISClient/3/34718633636164421  (200, 824b)
+
+────────────────────────────────────────────────────────────────────────
+  SECTION 6: Complete ClosingPriceInfo — ALL fields (no filter)
+────────────────────────────────────────────────────────────────────────
+  GET https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceInfo/34718633636164421
+  → 200  630 bytes  application/json; charset=utf-8
+  ALL 25 fields:
+    dEven                          = 20260524
+    finalLastDate                  = 20260524
+    hEven                          = 145941
+    iClose                         = False
+    id                             = 0
+    insCode                        = 0
+    instrument                     = None
+    instrumentState                = {'idn': 0, 'dEven': 0, 'hEven': 0, 'insCode': None, 'lVal18AFC': None, 'lVal30': None, 'cEtaval': 'A ', 'realHeven': 0, 'underSupervision': 0, 'cEtavalTitle': 'مجاز'}
+    last                           = True
+    lastHEven                      = 145941
+    mop                            = 0
+    nvt                            = 0.0
+    pClosing                       = 10162.0
+    pDrCotVal                      = 10163.0
+    pRedTran                       = 0.0
+    priceChange                    = 0.0
+    priceFirst                     = 10162.0
+    priceMax                       = 10163.0
+    priceMin                       = 10162.0
+    priceYesterday                 = 10152.0
+    qTotCap                        = 1572364912502.0
+    qTotTran5J                     = 154725894.0
+    thirtyDayClosingHistory        = None
+    yClose                         = False
+    zTotTran                       = 1382.0
+
+────────────────────────────────────────────────────────────────────────
+  DONE
+────────────────────────────────────────────────────────────────────────
