@@ -6,3 +6,6 @@ __pycache__/
 venv/
 .idea/
 .vscode/
+
+# Log files — NOT ignored so they can be committed for remote review
+# logs/

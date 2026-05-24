@@ -17,6 +17,8 @@ Usage:
 import argparse
 import logging
 import sys
+from pathlib import Path
+from datetime import datetime
 
 from data_fetcher import DataAggregator
 from arbitrage import scan_all, filter_actionable
@@ -28,13 +30,47 @@ from display import (
 )
 
 
-def setup_logging(verbose: bool = False):
+LOG_DIR = Path("logs")
+
+
+def setup_logging(verbose: bool = False) -> Path:
+    """Configure logging to both console and a timestamped log file.
+
+    Returns the path of the log file that was created.
+    """
+    LOG_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOG_DIR / f"run_{timestamp}.log"
+
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+
+    # Root logger
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)  # capture everything; handlers filter by level
+
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    # Console handler — INFO (or DEBUG if --verbose)
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(level)
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    # File handler — always DEBUG (full detail)
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    root.addHandler(file_handler)
+
+    return log_file
 
 
 def main():
@@ -71,9 +107,11 @@ def main():
     )
 
     args = parser.parse_args()
-    setup_logging(args.verbose)
+    log_file = setup_logging(args.verbose)
 
     logger = logging.getLogger(__name__)
+    logger.info("Log file: %s", log_file.resolve())
+    print(f"📄 لاگ کامل در: {log_file.resolve()}\n")
 
     aggregator = DataAggregator()
 
