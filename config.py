@@ -21,30 +21,56 @@ REQUEST_TIMEOUT = 15
 # Alternative symbols: some funds appear under a different ticker on TSETMC
 # so we provide alt_symbols for the search fallback.
 FIXED_INCOME_ETFS = [
-    # Verified fixed-income ETF funds (2026-05-24 scan).
-    # All 16 below got P0 match: exact ticker + lVal30 contains "صندوق".
-    # ins_codes populated at runtime via TSETMC search.
-    {"symbol": "کیان",   "name": "صندوق درآمد ثابت کیان"},
-    {"symbol": "پارند",  "name": "صندوق درآمد ثابت پارند"},
-    {"symbol": "اعتماد", "name": "صندوق درآمد ثابت اعتماد"},
-    {"symbol": "کمند",   "name": "صندوق درآمد ثابت کمند"},
-    {"symbol": "افران",  "name": "صندوق درآمد ثابت افران"},
-    {"symbol": "لبخند",  "name": "صندوق درآمد ثابت لبخند"},
-    {"symbol": "آفاق",   "name": "صندوق درآمد ثابت آفاق"},
-    {"symbol": "گنجین",  "name": "صندوق درآمد ثابت گنجینه"},
-    {"symbol": "خاتم",   "name": "صندوق درآمد ثابت خاتم"},
-    {"symbol": "اوصتا",  "name": "صندوق درآمد ثابت اوصتا"},
-    {"symbol": "فردا",   "name": "صندوق درآمد ثابت فردا"},
-    {"symbol": "سخند",   "name": "صندوق درآمد ثابت سخند"},
-    {"symbol": "یاقوت",  "name": "صندوق درآمد ثابت یاقوت"},
-    {"symbol": "فیروزا", "name": "صندوق درآمد ثابت فیروزا"},
-    {"symbol": "صایند",  "name": "صندوق درآمد ثابت صایند"},
-    {"symbol": "همای",   "name": "صندوق درآمد ثابت همای"},
-    # Removed:
-    # آساس  → matched "صندوق س.آسمان آرماني سهام" (equity fund, not fixed-income)
-    # گوهر  → matched "صندوق طلاي كيان" (gold fund, not fixed-income)
-    # سپهر  → no ETF fund match (P2 hit a non-fund instrument)
-    # حکمت  → no ETF fund match (P2 hit "بانك حكمت ايرانيان", a bank)
+    # ── Confirmed "درآمد ثابت" funds (direct name match, 2026-05-24 discovery) ──
+    {"symbol": "امین‌یکم", "name": "صندوق درآمد ثابت امین یکم فردا",
+     "ins_code": "45728383369147894"},
+    {"symbol": "تصمیم",   "name": "صندوق با درآمد ثابت تصمیم",
+     "ins_code": "53419976284977130"},
+    {"symbol": "سام",     "name": "صندوق درآمد ثابت سام",
+     "ins_code": "55308018877404137"},
+    {"symbol": "کارآمد",  "name": "صندوق درآمد ثابت کارآمد",
+     "ins_code": "7803396484851273"},
+    {"symbol": "کارما",   "name": "صندوق درآمد ثابت کیهان",
+     "ins_code": "33015297618582406"},
+    {"symbol": "کمند",    "name": "صندوق درآمد ثابت کمند",
+     "ins_code": "34718633636164421"},
+    {"symbol": "کیان",    "name": "صندوق درآمد ثابت کیان",
+     "ins_code": "53251602435454519"},
+    {"symbol": "ماني",    "name": "صندوق با درآمد ثابت ماني",
+     "ins_code": "61265100181977543"},
+    {"symbol": "پاسارگاد", "name": "صندوق درآمد ثابت پاسارگاد",
+     "ins_code": "61920683599787147"},
+    {"symbol": "پایش",    "name": "صندوق درآمد ثابت دینا",
+     "ins_code": "58722731270352481"},
+    # ── Confirmed fixed-income ETFs with "ثابت" in name ──
+    {"symbol": "پارند",   "name": "صندوق پارند پایدار سپهر",
+     "ins_code": "70595828753641750"},
+    {"symbol": "اعتماد",  "name": "صندوق اعتماد آفرین پارسیان",
+     "ins_code": "66818022341772870"},
+    {"symbol": "افران",   "name": "صندوق افرا نماد پایدار",
+     "ins_code": "3846143218462419"},
+    {"symbol": "لبخند",   "name": "صندوق لبخند فارابی",
+     "ins_code": "31569200988534548"},
+    {"symbol": "آفاق",    "name": "صندوق افق آتی",
+     "ins_code": "37073830945037165"},
+    {"symbol": "گنجین",   "name": "صندوق گنجینه یکم آوید",
+     "ins_code": "57728534324022361"},
+    {"symbol": "خاتم",    "name": "صندوق خاتم ایساتیس پویا",
+     "ins_code": "18865325633315847"},
+    {"symbol": "اوصتا",   "name": "صندوق اندیشه‌ورزان صباتامین",
+     "ins_code": "57761388729898548"},
+    {"symbol": "فردا",    "name": "صندوق آوای فردای زاگرس",
+     "ins_code": "65249046611427924"},
+    {"symbol": "سخند",    "name": "صندوق سپهرخبرگان نفت",
+     "ins_code": "59598536122397373"},
+    {"symbol": "یاقوت",   "name": "صندوق یاقوت آگاه",
+     "ins_code": "1438514795814416"},
+    {"symbol": "فیروزا",  "name": "صندوق ارمغان فیروزه آسیا",
+     "ins_code": "10795723506538053"},
+    {"symbol": "صایند",   "name": "صندوق گنجینه آینده روشن",
+     "ins_code": "45205530868811305"},
+    {"symbol": "همای",    "name": "صندوق همای آگاه",
+     "ins_code": "15494954332657697"},
 ]
 
 # Trading cost parameters
