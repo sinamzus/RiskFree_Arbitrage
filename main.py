@@ -43,7 +43,7 @@ import sys
 import time
 import threading
 from pathlib import Path
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta, date as date_type
 
 # Force UTF-8 stdout/stderr on Windows so Persian text and emoji work
 if sys.platform == "win32":
@@ -53,6 +53,7 @@ if sys.platform == "win32":
 
 import jdatetime
 
+from config import FIXED_INCOME_ETFS
 from data_fetcher import DataAggregator
 from arbitrage import scan_all, filter_actionable, ArbitrageOpportunity
 from database import Database
@@ -101,6 +102,133 @@ def setup_logging(verbose: bool = False) -> Path:
     root.addHandler(fh)
 
     return log_file
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  History bootstrap & incremental update
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _days_since(date_int: int) -> int:
+    """Return calendar days between *date_int* (YYYYMMDD) and today."""
+    dt = datetime.strptime(str(date_int), "%Y%m%d")
+    return max(1, (datetime.now() - dt).days)
+
+
+def update_history(aggregator: DataAggregator, db: Database,
+                   force_full: bool = False,
+                   fetch_intraday: bool = True,
+                   intraday_days: int = 7,
+                   delay: float = 0.3) -> None:
+    """Bootstrap or incrementally update daily OHLCV + intraday trade history.
+
+    **Daily OHLCV (GetClosingPriceDailyList)**
+    - First run (no data in DB):  fetches 365 days for every fund.
+    - Subsequent runs:            fetches only the missing days since the last
+                                  stored date (plus a 3-day overlap buffer to
+                                  catch late-published corrections).
+    - *force_full=True*:          always fetches 365 days (full refresh).
+
+    **Intraday ticks (GetTradeHistory)**
+    - Fetches the last *intraday_days* trading days for each fund.
+    - Only new ticks (dates not yet in DB) are inserted.
+    - Set *fetch_intraday=False* to skip tick data (faster on slow connections).
+
+    Parameters
+    ----------
+    aggregator   : DataAggregator — provides tsetmc fetcher
+    db           : Database       — where to persist the data
+    force_full   : bool           — force full 365-day re-download
+    fetch_intraday: bool          — also download intraday ticks
+    intraday_days: int            — how many recent dates to fetch intraday for
+    delay        : float          — seconds to sleep between API calls
+    """
+    logger = logging.getLogger(__name__)
+    fetcher = aggregator.tsetmc
+    today_int = int(datetime.now().strftime("%Y%m%d"))
+
+    # Collect last N non-weekend dates for intraday use
+    def _recent_trading_dates(n: int) -> list[int]:
+        dates, d = [], datetime.now()
+        while len(dates) < n:
+            if d.weekday() not in (3, 4):   # Thu=3, Fri=4 are Iran weekend
+                dates.append(int(d.strftime("%Y%m%d")))
+            d -= timedelta(days=1)
+        return dates
+
+    recent_dates = _recent_trading_dates(intraday_days) if fetch_intraday else []
+
+    total_daily_new   = 0
+    total_intraday_new = 0
+
+    for i, fund in enumerate(FIXED_INCOME_ETFS):
+        symbol   = fund["symbol"]
+        ins_code = fund.get("ins_code", "").strip()
+        if not ins_code:
+            logger.debug("update_history: skipping %s (no ins_code)", symbol)
+            continue
+
+        # ── 1. Daily OHLCV ──────────────────────────────────────────────
+        last_date = None if force_full else db.get_last_daily_date(symbol)
+
+        if last_date is None:
+            days_n = 365
+            reason = "bootstrap"
+        else:
+            days_since = _days_since(last_date)
+            days_n     = min(days_since + 3, 365)  # +3 day overlap buffer
+            reason     = f"incremental ({days_since}d since {last_date})"
+
+        logger.info("[%d/%d] %s — daily history %s (n=%d)",
+                    i + 1, len(FIXED_INCOME_ETFS), symbol, reason, days_n)
+
+        entries = fetcher.get_historical_daily(ins_code, days=days_n)
+        if entries:
+            # Only insert entries newer than what we already have
+            if last_date:
+                entries = [e for e in entries if e["date"] > last_date]
+            new_rows = db.save_daily_history(symbol, ins_code, entries)
+            total_daily_new += new_rows
+            logger.info("  %d new daily rows saved for %s", new_rows, symbol)
+        else:
+            logger.warning("  No daily history returned for %s", symbol)
+
+        time.sleep(delay)
+
+        # ── 2. Intraday ticks ────────────────────────────────────────────
+        if not fetch_intraday:
+            continue
+
+        intraday_dates_have = set(db.get_intraday_dates(symbol))
+
+        for date_int in recent_dates:
+            if date_int in intraday_dates_have:
+                logger.debug("  Intraday %s: already have %d", symbol, date_int)
+                continue
+            if date_int > today_int:
+                continue
+
+            logger.info("  Fetching intraday ticks for %s on %d ...",
+                        symbol, date_int)
+            trades = fetcher.get_intraday_trades(ins_code, date_int)
+            if trades:
+                new_rows = db.save_intraday_trades(
+                    symbol, ins_code, date_int, trades
+                )
+                total_intraday_new += new_rows
+                logger.info("  %d new tick rows for %s on %d",
+                            new_rows, symbol, date_int)
+            else:
+                logger.debug("  No intraday data for %s on %d", symbol, date_int)
+
+            time.sleep(delay)
+
+    logger.info(
+        "update_history complete: %d new daily rows, %d new tick rows",
+        total_daily_new, total_intraday_new,
+    )
+    print(f"\n✅ تاریخچه به‌روز شد — "
+          f"{total_daily_new} سطر روزانه جدید، "
+          f"{total_intraday_new} سطر درون‌روزی جدید")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,6 +392,21 @@ def main():
         "--delay", type=float, default=0.5,
         help="تاخیر بین درخواست‌های HTTP (ثانیه)",
     )
+    parser.add_argument(
+        "--bootstrap", action="store_true",
+        help=(
+            "دانلود کامل ۳۶۵ روز تاریخچه روزانه + داده درون‌روزی هفت روز اخیر "
+            "(در اولین اجرا به‌صورت خودکار انجام می‌شود)"
+        ),
+    )
+    parser.add_argument(
+        "--no-intraday", action="store_true",
+        help="در bootstrap/update تیک‌های درون‌روزی دانلود نشوند",
+    )
+    parser.add_argument(
+        "--intraday-days", type=int, default=7,
+        help="تعداد روزهای اخیر برای دریافت داده تیک‌به‌تیک (پیش‌فرض: 7)",
+    )
 
     args = parser.parse_args()
     log_file = setup_logging(args.verbose)
@@ -273,6 +416,32 @@ def main():
     db         = Database()
     aggregator = DataAggregator()
     use_nav    = not args.no_fipiran
+
+    # ── bootstrap / incremental history update ─────────────────────────────
+    fetch_intraday = not args.no_intraday
+
+    if args.bootstrap:
+        # Explicit --bootstrap: force full 365-day re-download
+        print("\n📥 در حال دانلود کامل تاریخچه (۳۶۵ روز) ...")
+        update_history(
+            aggregator, db,
+            force_full=True,
+            fetch_intraday=fetch_intraday,
+            intraday_days=args.intraday_days,
+            delay=args.delay,
+        )
+        return
+    else:
+        # Auto-bootstrap: run incremental update on every startup.
+        # This is cheap when data is fresh (fetches only the missing days).
+        logger.info("Running incremental history update ...")
+        update_history(
+            aggregator, db,
+            force_full=False,
+            fetch_intraday=fetch_intraday,
+            intraday_days=args.intraday_days,
+            delay=args.delay * 0.5,   # lighter delay for background update
+        )
 
     # ── discover mode ──────────────────────────────────────────────────────
     if args.discover:

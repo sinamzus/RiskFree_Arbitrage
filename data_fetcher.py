@@ -491,6 +491,93 @@ class TSETMCFetcher:
         }
 
     # ------------------------------------------------------------------ #
+    #  Historical daily OHLCV                                             #
+    # ------------------------------------------------------------------ #
+
+    def get_historical_daily(self, ins_code: str, days: int = 365) -> list[dict]:
+        """Fetch up to *days* days of daily OHLCV for *ins_code*.
+
+        Endpoint: ``ClosingPrice/GetClosingPriceDailyList/{insCode}/{n}``
+
+        For fixed-income ETFs ``priceYesterday`` in each entry approximates
+        the fund's published NAV for that date:
+            premium_pct = (pClosing - priceYesterday) / priceYesterday × 100
+
+        Returns a list of dicts sorted **ascending** by date (oldest first).
+        Each dict has keys:
+            date (YYYYMMDD int), open_price, high_price, low_price,
+            close_price, yesterday_price, volume, value, trade_count,
+            price_change
+        """
+        url  = f"{TSETMC_CDN}/ClosingPrice/GetClosingPriceDailyList/{ins_code}/{days}"
+        data = self._get(url, silent=True)
+        if not data:
+            logger.debug("get_historical_daily: no data for %s (n=%d)", ins_code, days)
+            return []
+        items = data.get("closingPriceDaily") or []
+        result = []
+        for e in items:
+            d = e.get("dEven")
+            if not d:
+                continue
+            yesterday = e.get("priceYesterday", 0)
+            close     = e.get("pClosing", 0)
+            premium   = ((close - yesterday) / yesterday * 100.0
+                         if yesterday > 0 else 0.0)
+            result.append({
+                "date":            int(d),
+                "open_price":      e.get("priceFirst", 0),
+                "high_price":      e.get("priceMax", 0),
+                "low_price":       e.get("priceMin", 0),
+                "close_price":     close,
+                "yesterday_price": yesterday,   # ≈ NAV for ETFs
+                "volume":          e.get("qTotTran5J", 0),
+                "value":           e.get("qTotCap", 0),
+                "trade_count":     e.get("zTotTran", 0),
+                "price_change":    e.get("priceChange", 0),
+                "premium_pct":     round(premium, 4),
+            })
+        result.sort(key=lambda x: x["date"])
+        logger.debug("get_historical_daily: %d entries for %s", len(result), ins_code)
+        return result
+
+    # ------------------------------------------------------------------ #
+    #  Intraday tick trades                                                #
+    # ------------------------------------------------------------------ #
+
+    def get_intraday_trades(self, ins_code: str, date_int: int) -> list[dict]:
+        """Fetch all intraday tick trades for *ins_code* on *date_int* (YYYYMMDD).
+
+        Endpoint: ``Trade/GetTradeHistory/{insCode}/{YYYYMMDD}/false``
+
+        Returns a list of dicts sorted **ascending** by sequence number.
+        Each dict has keys:
+            seq (int), time (HHMMSS int), price, volume, canceled (0|1)
+
+        Time encoding: 91530 → 09:15:30, 130000 → 13:00:00.
+        """
+        url  = f"{TSETMC_CDN}/Trade/GetTradeHistory/{ins_code}/{date_int}/false"
+        data = self._get(url, silent=True)
+        if not data:
+            logger.debug("get_intraday_trades: no data for %s on %s", ins_code, date_int)
+            return []
+        trades = data.get("tradeHistory") or []
+        result = []
+        for t in trades:
+            result.append({
+                "seq":      t.get("nTran", 0),
+                "time":     t.get("hEven", 0),      # HHMMSS as int
+                "price":    t.get("pTran", 0),
+                "volume":   t.get("qTitTran", 0),
+                "canceled": 1 if t.get("canceled") else 0,
+            })
+        result.sort(key=lambda x: x["seq"])
+        logger.debug(
+            "get_intraday_trades: %d ticks for %s on %s", len(result), ins_code, date_int
+        )
+        return result
+
+    # ------------------------------------------------------------------ #
     #  Order book                                                          #
     # ------------------------------------------------------------------ #
 
