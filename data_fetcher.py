@@ -20,6 +20,8 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+TSETMC_MAIN = "https://www.tsetmc.com"
+
 
 def _normalize(text: str) -> str:
     """Normalize Arabic-script characters to Persian equivalents.
@@ -50,15 +52,25 @@ class TSETMCFetcher:
         self.session.headers.update(REQUEST_HEADERS)
         self.session.headers["Referer"] = "https://www.tsetmc.com/"
         self._ins_code_cache: dict[str, str] = {}
+        self._etf_list_cache: Optional[list[dict]] = None   # cached ETF list
 
     # ------------------------------------------------------------------ #
     #  Internal HTTP helper                                                #
     # ------------------------------------------------------------------ #
 
-    def _get(self, url: str, silent: bool = False) -> Optional[dict]:
+    def _get(self, url: str, silent: bool = False,
+             html: bool = False) -> Optional[dict | str]:
+        """Fetch *url*.
+
+        Returns parsed JSON dict by default.
+        When *html=True* returns the raw response text (string).
+        Returns None on any error.
+        """
         try:
             resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
+            if html:
+                return resp.text
             return resp.json()
         except requests.exceptions.RequestException as e:
             if not silent:
@@ -156,70 +168,299 @@ class TSETMCFetcher:
             "trade_count":     info.get("zTotTran", 0),
         }
 
-        # Check if NAV happens to be embedded (rare but possible)
-        for nav_field in ("navStat", "nav", "statisticalNav", "cancelNav", "navValue"):
+        # Log full info dict at DEBUG level so we can see every field name
+        logger.debug("ClosingPriceInfo fields for %s: %s", ins_code,
+                     {k: v for k, v in info.items()
+                      if not k.startswith("_") and v not in (None, 0, "", [])})
+
+        # Check if NAV happens to be embedded (field may vary by instrument type)
+        for nav_field in ("navStat", "nav", "statisticalNav", "cancelNav",
+                          "navValue", "psGelStaMax", "pDrCotValStat",
+                          "staticNav", "navPerUnit"):
             nav = info.get(nav_field)
             if nav and isinstance(nav, (int, float)) and nav > 0:
                 result["embedded_nav"] = float(nav)
-                logger.debug("  Embedded NAV in ClosingPriceInfo[%s] = %s", nav_field, nav)
+                logger.info("  Embedded NAV in ClosingPriceInfo[%s] = %s for %s",
+                            nav_field, nav, ins_code)
                 break
 
         return result
 
     # ------------------------------------------------------------------ #
-    #  NAV data — TSETMC does not expose fund NAV via a stable endpoint.  #
-    #  We try several candidates silently; all currently return 404.      #
-    #  The real NAV comes from FIPIRAN (see FIPIRANFetcher).              #
+    #  NAV data — multiple strategies tried in sequence                   #
     # ------------------------------------------------------------------ #
 
     def get_fund_nav(self, ins_code: str) -> Optional[dict]:
-        """Try multiple TSETMC endpoints for fund NAV (all silently)."""
+        """Try every known strategy to get fund NAV for *ins_code*.
 
-        # 1. GetInstrumentInfo — check for any nav field
+        Strategies (ordered by confidence):
+        1. InstrumentInfo — navStat field (TSETMC statistical NAV)
+        2. ETF-specific CDN endpoints
+        3. Fund-specific CDN endpoints (historically 404)
+        4. ETFList bulk endpoint (cached)
+        5. Scrape www.tsetmc.com/instrument HTML page
+        6. StaticThreshold (low probability)
+        """
+
+        # ── 1. GetInstrumentInfo ──────────────────────────────────────────
         url = f"{TSETMC_CDN}/Instrument/GetInstrumentInfo/{ins_code}"
         data = self._get(url)
         if data:
             info = data.get("instrumentInfo", {})
-            for nav_key in ("navStat", "nav", "statisticalNav", "cancelNav", "staticNav"):
+            logger.debug("InstrumentInfo non-zero fields for %s: %s", ins_code,
+                         {k: v for k, v in info.items()
+                          if v not in (None, 0, "", [], {})})
+            for nav_key in ("navStat", "nav", "statisticalNav", "cancelNav",
+                            "staticNav", "psGelStaMax", "navPerUnit"):
                 nav = info.get(nav_key)
                 if nav and isinstance(nav, (int, float)) and nav > 0:
-                    logger.info("  NAV from InstrumentInfo[%s] = %s", nav_key, nav)
-                    return self._build_nav(nav, info.get("cancelNav", nav),
-                                          info.get("issueNav", nav),
-                                          str(info.get("dEven", "")),
-                                          "TSETMC/InstrumentInfo")
+                    logger.info("  NAV from InstrumentInfo[%s] = %s for %s",
+                                nav_key, nav, ins_code)
+                    return self._build_nav(
+                        nav,
+                        info.get("cancelNav", nav),
+                        info.get("issueNav",  nav),
+                        str(info.get("dEven", "")),
+                        "TSETMC/InstrumentInfo",
+                    )
 
-        # 2. Various Fund-specific endpoints (silent — expected to 404)
-        for path in ("GetFundInfo", "GetFund", "GetFundLastInfo", "GetMutualFundByInsCode"):
+        # ── 2. ETF-specific endpoints ─────────────────────────────────────
+        for path in (
+            "ETF/ETFByInsCode",
+            "ETF/GetETFByInsCode",
+            "ETF/GetETFInfo",
+        ):
+            data = self._get(f"{TSETMC_CDN}/{path}/{ins_code}", silent=True)
+            if not data:
+                continue
+            logger.debug("ETF endpoint '%s' raw for %s: %s", path, ins_code,
+                         str(data)[:300])
+            obj = (data.get("eTF") or data.get("etf") or
+                   data.get("ETF") or data.get("data") or data)
+            if not isinstance(obj, dict):
+                continue
+            for nav_key in ("cancelNav", "cancelNAV", "navStat", "nav",
+                            "statisticalNav", "navPerUnit"):
+                nav = obj.get(nav_key)
+                if nav and isinstance(nav, (int, float)) and nav > 0:
+                    logger.info("  NAV from %s: %s = %s", path, nav_key, nav)
+                    return self._build_nav(
+                        nav,
+                        obj.get("cancelNav", obj.get("cancelNAV", nav)),
+                        obj.get("issueNav",  obj.get("issueNAV",  nav)),
+                        str(obj.get("navDate", obj.get("dEven", ""))),
+                        f"TSETMC/{path}",
+                    )
+
+        # ── 3. Fund-specific endpoints (historically 404) ─────────────────
+        for path in ("GetFundInfo", "GetFund", "GetFundLastInfo",
+                     "GetMutualFundByInsCode", "FundInfo", "FundData"):
             data = self._get(f"{TSETMC_CDN}/Fund/{path}/{ins_code}", silent=True)
             if not data:
                 continue
+            logger.debug("Fund endpoint '%s' raw for %s: %s", path, ins_code,
+                         str(data)[:300])
             for key in ("fund", "fundInfo", "fundLastInfo", "data", None):
                 obj = data.get(key) if key else data
                 if not isinstance(obj, dict):
                     continue
-                for nav_key in ("cancelNav", "cancelNAV", "navStat", "nav", "statisticalNav"):
+                for nav_key in ("cancelNav", "cancelNAV", "navStat", "nav",
+                                "statisticalNav"):
                     nav = obj.get(nav_key)
                     if nav and isinstance(nav, (int, float)) and nav > 0:
-                        logger.info("  NAV from Fund/%s: %s = %s", path, nav_key, nav)
+                        logger.info("  NAV from Fund/%s: %s = %s",
+                                    path, nav_key, nav)
                         return self._build_nav(
                             nav,
                             obj.get("cancelNav", obj.get("cancelNAV", nav)),
                             obj.get("issueNav",  obj.get("issueNAV",  nav)),
                             str(obj.get("dEven", obj.get("navDate", ""))),
-                            f"TSETMC/{path}",
+                            f"TSETMC/Fund/{path}",
                         )
 
-        # 3. StaticThreshold — contains price band, rarely NAV
-        data = self._get(f"{TSETMC_CDN}/StaticThreshold/GetStaticThreshold/{ins_code}/0", silent=True)
+        # ── 4. ETFList bulk endpoint (fetch once, cache) ──────────────────
+        nav = self._nav_from_etf_list(ins_code)
+        if nav:
+            return nav
+
+        # ── 5. Scrape www.tsetmc.com/instrument HTML page ─────────────────
+        nav = self._nav_from_html(ins_code)
+        if nav:
+            return nav
+
+        # ── 6. StaticThreshold (rarely has NAV) ───────────────────────────
+        data = self._get(
+            f"{TSETMC_CDN}/StaticThreshold/GetStaticThreshold/{ins_code}/0",
+            silent=True,
+        )
         if data:
             for t in data.get("staticThreshold", []):
                 for nav_key in ("navStat", "nav", "cancelNav"):
-                    nav = t.get(nav_key)
-                    if nav and isinstance(nav, (int, float)) and nav > 0:
-                        logger.info("  NAV from StaticThreshold[%s] = %s", nav_key, nav)
-                        return self._build_nav(nav, nav, nav, "", "TSETMC/StaticThreshold")
+                    nav_val = t.get(nav_key)
+                    if nav_val and isinstance(nav_val, (int, float)) and nav_val > 0:
+                        logger.info("  NAV from StaticThreshold[%s] = %s",
+                                    nav_key, nav_val)
+                        return self._build_nav(nav_val, nav_val, nav_val,
+                                               "", "TSETMC/StaticThreshold")
 
+        logger.debug("  No NAV found for ins_code=%s", ins_code)
+        return None
+
+    def _nav_from_etf_list(self, ins_code: str) -> Optional[dict]:
+        """Fetch the ETFList once, cache it, then look up *ins_code*."""
+        if self._etf_list_cache is None:
+            raw = self._get(f"{TSETMC_CDN}/ETF/ETFList", silent=True)
+            if raw:
+                logger.debug("ETFList raw (first 500 chars): %s", str(raw)[:500])
+                self._etf_list_cache = (
+                    raw.get("eTFList") or raw.get("etfList") or
+                    raw.get("data") or raw if isinstance(raw, list) else []
+                )
+            else:
+                self._etf_list_cache = []
+
+        for item in (self._etf_list_cache or []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("insCode", "")) != str(ins_code):
+                continue
+            for nav_key in ("cancelNav", "cancelNAV", "navStat", "nav",
+                            "statisticalNav"):
+                nav_val = item.get(nav_key)
+                if nav_val and isinstance(nav_val, (int, float)) and nav_val > 0:
+                    logger.info("  NAV from ETFList[%s] = %s for %s",
+                                nav_key, nav_val, ins_code)
+                    return self._build_nav(
+                        nav_val,
+                        item.get("cancelNav", nav_val),
+                        item.get("issueNav",  nav_val),
+                        str(item.get("navDate", "")),
+                        "TSETMC/ETFList",
+                    )
+        return None
+
+    def _nav_from_html(self, ins_code: str) -> Optional[dict]:
+        """Scrape the TSETMC instrument HTML page for NAV data.
+
+        TSETMC renders partial data server-side (or embeds it in a __NEXT_DATA__
+        JSON blob).  We try three extraction patterns:
+        a) <script id="__NEXT_DATA__"> JSON blob (Next.js SSR)
+        b) Inline JSON variables in any <script> tag
+        c) Direct HTML element search (data-nav, aria-label, specific IDs)
+        """
+        url = f"{TSETMC_MAIN}/instrument/{ins_code}"
+        html = self._get(url, html=True)
+        if not html:
+            logger.debug("  HTML page unavailable for ins_code=%s", ins_code)
+            return None
+
+        logger.debug("  HTML page for %s: %d bytes", ins_code, len(html))
+
+        # a) Next.js __NEXT_DATA__ blob
+        match = re.search(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+                          html, re.DOTALL | re.IGNORECASE)
+        if match:
+            try:
+                blob = json.loads(match.group(1))
+                nav = self._extract_nav_from_json(blob, ins_code)
+                if nav:
+                    logger.info("  NAV from TSETMC HTML __NEXT_DATA__ for %s", ins_code)
+                    return nav
+            except Exception as e:
+                logger.debug("  __NEXT_DATA__ parse error for %s: %s", ins_code, e)
+
+        # b) Look for known variable/key patterns in all <script> tags
+        soup = BeautifulSoup(html, "html.parser")
+        for script in soup.find_all("script"):
+            text = script.string or ""
+            if not text:
+                continue
+
+            # Pattern: navStat:12345678 or "navStat":"12345678"
+            for pattern in (
+                r'["\']?navStat["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
+                r'["\']?cancelNav["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
+                r'["\']?statisticalNav["\']?\s*[:=]\s*["\']?(\d[\d,]*)',
+            ):
+                m = re.search(pattern, text)
+                if m:
+                    nav_str = m.group(1).replace(",", "")
+                    try:
+                        nav_val = float(nav_str)
+                        if nav_val > 100:   # sanity: NAV for Iranian funds is always >> 100
+                            logger.info(
+                                "  NAV from TSETMC HTML script pattern (%s) = %s for %s",
+                                pattern[:30], nav_val, ins_code,
+                            )
+                            return self._build_nav(nav_val, nav_val, nav_val,
+                                                   "", "TSETMC/HTML-script")
+                    except ValueError:
+                        pass
+
+            # Try generic JSON arrays/objects embedded in script
+            for json_match in re.findall(r'(\{[^<]{50,}\})', text, re.DOTALL):
+                try:
+                    obj = json.loads(json_match)
+                    nav = self._extract_nav_from_json(obj, ins_code)
+                    if nav:
+                        logger.info("  NAV from TSETMC HTML inline JSON for %s", ins_code)
+                        return nav
+                except Exception:
+                    pass
+
+        # c) Element-based extraction
+        for css_id in ("NavStat", "navStat", "LastNav", "cancelNav", "nav"):
+            el = soup.find(id=css_id)
+            if el:
+                text = el.get_text(strip=True).replace(",", "").replace("٬", "")
+                try:
+                    nav_val = float(text)
+                    if nav_val > 100:
+                        logger.info("  NAV from HTML #%s = %s for %s",
+                                    css_id, nav_val, ins_code)
+                        return self._build_nav(nav_val, nav_val, nav_val,
+                                               "", "TSETMC/HTML-element")
+                except ValueError:
+                    pass
+
+        logger.debug("  No NAV found in TSETMC HTML for ins_code=%s", ins_code)
+        return None
+
+    @staticmethod
+    def _extract_nav_from_json(obj, ins_code: str) -> Optional[dict]:
+        """Recursively search a parsed JSON structure for NAV fields."""
+        if isinstance(obj, dict):
+            # Check this dict for nav keys
+            for nav_key in ("navStat", "cancelNav", "cancelNAV",
+                            "statisticalNav", "nav", "navPerUnit"):
+                nav_val = obj.get(nav_key)
+                if nav_val and isinstance(nav_val, (int, float, str)):
+                    try:
+                        v = float(str(nav_val).replace(",", ""))
+                        if v > 100:
+                            return TSETMCFetcher._build_nav(
+                                v,
+                                float(str(obj.get("cancelNav",
+                                                   obj.get("cancelNAV", v)
+                                                   )).replace(",", "") or v),
+                                float(str(obj.get("issueNav",
+                                                   obj.get("issueNAV",  v)
+                                                   )).replace(",", "") or v),
+                                str(obj.get("navDate", obj.get("dEven", ""))),
+                                "TSETMC/JSON",
+                            )
+                    except (ValueError, TypeError):
+                        pass
+            # Recurse into values
+            for v in obj.values():
+                result = TSETMCFetcher._extract_nav_from_json(v, ins_code)
+                if result:
+                    return result
+        elif isinstance(obj, list):
+            for item in obj:
+                result = TSETMCFetcher._extract_nav_from_json(item, ins_code)
+                if result:
+                    return result
         return None
 
     @staticmethod
@@ -310,11 +551,12 @@ class TSETMCFetcher:
 
             time.sleep(delay * 0.3)
 
-            # Fetch NAV from TSETMC (usually unavailable; FIPIRAN fills this later)
+            # Fetch NAV from TSETMC (multiple strategies)
             nav = self.get_fund_nav(ins_code) if ins_code else None
             if nav is None and price and price.get("embedded_nav"):
                 embedded = price["embedded_nav"]
-                nav = self._build_nav(embedded, embedded, embedded, "", "TSETMC/embedded")
+                nav = self._build_nav(embedded, embedded, embedded,
+                                      "", "TSETMC/embedded")
             entry["nav_data"] = nav
             if nav is None:
                 entry["error"] = (entry["error"] + "; NAV دریافت نشد"
@@ -639,15 +881,130 @@ class FIPIRANFetcher:
 
 
 # =========================================================================== #
+#  Rahavard 365 NAV fetcher (alternative source)                              #
+# =========================================================================== #
+
+class RahavardFetcher:
+    """Fetches fund NAV data from rahavard365.com.
+
+    Rahavard 365 is an Iranian financial data portal that aggregates TSE data
+    and typically has more accessible APIs than fipiran.ir.
+    """
+
+    _BASE = "https://rahavard365.com"
+    _API  = "https://api.rahavard365.com"
+
+    # Known API endpoints for fund data
+    _FUND_ENDPOINTS = [
+        _API + "/v1/funds",
+        _API + "/v1/fund/list",
+        _BASE + "/api/v1/fund/list",
+        _BASE + "/api/funds",
+    ]
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            **REQUEST_HEADERS,
+            "Referer":  self._BASE + "/",
+            "Origin":   self._BASE,
+        })
+
+    def get_fixed_income_funds(self) -> list[dict]:
+        """Try to fetch fixed-income ETF fund data from Rahavard 365."""
+        for url in self._FUND_ENDPOINTS:
+            try:
+                resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
+                resp.raise_for_status()
+                logger.debug("Rahavard %s → %d, size=%d, preview: %s",
+                             url, resp.status_code, len(resp.content),
+                             resp.text[:200].replace("\n", " "))
+                try:
+                    data = resp.json()
+                except ValueError:
+                    logger.debug("Rahavard %s: not JSON", url)
+                    continue
+
+                items = (data if isinstance(data, list) else
+                         data.get("data") or data.get("items") or
+                         data.get("result") or data.get("funds") or [])
+                if not isinstance(items, list) or not items:
+                    continue
+
+                funds = self._map_items(items)
+                if funds:
+                    logger.info("Rahavard: %d fixed-income ETFs from %s", len(funds), url)
+                    return funds
+
+            except requests.exceptions.HTTPError as e:
+                logger.debug("Rahavard %s → HTTP error: %s", url, e)
+            except requests.exceptions.RequestException as e:
+                logger.debug("Rahavard %s → connection error: %s", url, e)
+
+        logger.debug("Rahavard: no usable data from any endpoint")
+        return []
+
+    def _map_items(self, items: list) -> list[dict]:
+        result = []
+        for f in items:
+            if not isinstance(f, dict):
+                continue
+            # Type filter: درآمد ثابت or fixedIncome
+            fund_type = str(
+                f.get("fundType") or f.get("type") or
+                f.get("typeTitle") or f.get("typeName") or ""
+            ).lower()
+            if "درآمد" not in fund_type and "fixed" not in fund_type:
+                continue
+
+            # ETF filter
+            is_etf = (f.get("isEtf") or f.get("isETF") or f.get("etf") or 0)
+            if not (is_etf == 1 or is_etf is True or str(is_etf).lower() == "true"):
+                continue
+
+            def _nav(*keys):
+                for k in keys:
+                    v = f.get(k)
+                    if v:
+                        try:
+                            return float(str(v).replace(",", ""))
+                        except (TypeError, ValueError):
+                            pass
+                return 0.0
+
+            cancel = _nav("cancelNav", "cancelNAV", "navCancel", "nav")
+            issue  = _nav("issueNav",  "issueNAV",  "navIssue")
+            stat   = _nav("statisticalNav", "navStat") or cancel
+            if cancel <= 0:
+                continue
+
+            symbol = (f.get("symbol") or f.get("ticker") or
+                      f.get("name")   or "").strip()
+            result.append({
+                "symbol":          symbol,
+                "name":            (f.get("name") or f.get("fullName") or symbol).strip(),
+                "nav":             cancel,
+                "issue_nav":       issue,
+                "statistical_nav": stat,
+                "nav_date":        str(f.get("navDate") or f.get("date") or ""),
+                "total_units":     f.get("units") or f.get("shareCount") or 0,
+                "total_nav":       f.get("totalNav") or f.get("totalNetAsset") or 0,
+                "manager":         f.get("manager") or f.get("managerName") or "",
+            })
+        return result
+
+
+# =========================================================================== #
 #  DataAggregator                                                              #
 # =========================================================================== #
 
 class DataAggregator:
-    """Combines TSETMC price data with FIPIRAN NAV data."""
+    """Combines TSETMC price data with NAV data from multiple sources."""
 
     def __init__(self):
-        self.tsetmc  = TSETMCFetcher()
-        self.fipiran = FIPIRANFetcher()
+        self.tsetmc   = TSETMCFetcher()
+        self.fipiran  = FIPIRANFetcher()
+        self.rahavard = RahavardFetcher()
 
     def fetch_all(self, use_fipiran_fallback: bool = True) -> list[dict]:
         logger.info("Fetching price data from TSETMC...")
@@ -660,28 +1017,45 @@ class DataAggregator:
         if not missing_nav:
             return results
 
-        logger.info("%d fund(s) missing NAV — fetching from FIPIRAN...", len(missing_nav))
+        logger.info("%d fund(s) missing NAV — trying external NAV sources...",
+                    len(missing_nav))
+
+        # Try FIPIRAN first
         fipiran_funds = self.fipiran.get_fixed_income_funds()
+        if fipiran_funds:
+            self._fill_nav(results, fipiran_funds, "FIPIRAN")
+        else:
+            logger.info("FIPIRAN returned no data — trying Rahavard 365...")
+            rahavard_funds = self.rahavard.get_fixed_income_funds()
+            if rahavard_funds:
+                self._fill_nav(results, rahavard_funds, "Rahavard365")
+            else:
+                logger.warning("All external NAV sources exhausted — NAV unavailable")
 
-        if not fipiran_funds:
-            logger.warning("FIPIRAN returned no data — NAV will be unavailable")
-            return results
+        still_missing = [r["symbol"] for r in results if r["nav_data"] is None]
+        if still_missing:
+            logger.warning("NAV still missing: %s", ", ".join(still_missing))
 
-        # Build a flexible lookup: try exact symbol match, then partial name match
-        fipiran_by_symbol = {f["symbol"]: f for f in fipiran_funds}
-        fipiran_by_name   = {f["name"]:   f for f in fipiran_funds}
+        return results
+
+    def _fill_nav(self, results: list[dict], nav_funds: list[dict],
+                  source_name: str) -> None:
+        """Match *nav_funds* entries to *results* and fill in missing NAVs."""
+        by_symbol = {_normalize(f["symbol"]): f for f in nav_funds}
+        by_name   = {_normalize(f["name"]):   f for f in nav_funds}
 
         for result in results:
             if result["nav_data"] is not None:
                 continue
 
-            fip = (fipiran_by_symbol.get(result["symbol"]) or
-                   fipiran_by_name.get(result["name"]))
+            sym = _normalize(result["symbol"])
+            fip = by_symbol.get(sym) or by_name.get(_normalize(result["name"]))
 
-            # Fallback: partial name match
+            # Fuzzy: check if any fund name contains our symbol
             if not fip:
-                for ff in fipiran_funds:
-                    if result["symbol"] in ff["name"] or ff["symbol"] in result["name"]:
+                for ff in nav_funds:
+                    if sym in _normalize(ff["name"]) or \
+                       _normalize(ff.get("symbol", "")) in _normalize(result["name"]):
                         fip = ff
                         break
 
@@ -694,16 +1068,11 @@ class DataAggregator:
                     "total_nav":       fip["total_nav"],
                     "fund_units":      fip["total_units"],
                     "nav_date":        fip["nav_date"],
-                    "source":          "FIPIRAN",
+                    "source":          source_name,
                 }
                 result["error"] = None
-                logger.info("  NAV for %s filled from FIPIRAN", result["symbol"])
-
-        still_missing = [r["symbol"] for r in results if r["nav_data"] is None]
-        if still_missing:
-            logger.warning("NAV still missing after FIPIRAN: %s", ", ".join(still_missing))
-
-        return results
+                logger.info("  NAV for %s filled from %s (cancel_nav=%s)",
+                            result["symbol"], source_name, fip["nav"])
 
     def discover_new_funds(self, keywords: list[str] = None) -> list[dict]:
         if keywords is None:
