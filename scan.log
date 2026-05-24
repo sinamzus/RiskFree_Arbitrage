@@ -1,13 +1,38 @@
-15:55:09 [INFO] __main__: Log file: C:\Users\Part Laptop\RiskFree_Arbitrage\logs\run_20260524_155509.log
-15:55:09 [DEBUG] database: Database initialised at data\arbitrage.db
+--- Logging error ---
 Traceback (most recent call last):
-  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 449, in <module>
+  File "C:\Users\Part Laptop\AppData\Local\Python\pythoncore-3.14-64\Lib\logging\__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 456, in <module>
+    main()
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 272, in main
+    logger.info("Log file: %s", log_file.resolve())
+Message: 'Log file: %s'
+Arguments: (WindowsPath('C:/Users/Part Laptop/RiskFree_Arbitrage/logs/run_20260524_155643.log'),)
+--- Logging error ---
+Traceback (most recent call last):
+  File "C:\Users\Part Laptop\AppData\Local\Python\pythoncore-3.14-64\Lib\logging\__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 456, in <module>
+    main()
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 274, in main
+    db         = Database()
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\database.py", line 79, in __init__
+    self._init()
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\database.py", line 97, in _init
+    logger.debug("Database initialised at %s", self.path)
+Message: 'Database initialised at %s'
+Arguments: (WindowsPath('data/arbitrage.db'),)
+Traceback (most recent call last):
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 456, in <module>
     main()
     ~~~~^^
-  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 304, in main
-    print("\n\u23f3 \u062f\u0631 \u062d\u0627\u0644 \u0627\u0633\u06a9\u0646 ...")
+  File "C:\Users\Part Laptop\RiskFree_Arbitrage\main.py", line 311, in main
+    print("\n⏳ در حال اسکن ...")
     ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Part Laptop\AppData\Local\Python\pythoncore-3.14-64\Lib\encodings\cp1252.py", line 19, in encode
-    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
-           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-UnicodeEncodeError: 'charmap' codec can't encode character '\u23f3' in position 2: character maps to <undefined>
+ValueError: I/O operation on closed file.
