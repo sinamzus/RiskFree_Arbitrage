@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass, field
+from typing import Optional
 
 from config import (
     BUYER_COMMISSION,
@@ -13,6 +14,7 @@ from config import (
     MIN_DISCOUNT_THRESHOLD,
     MIN_DAILY_VOLUME,
 )
+from intraday_context import IntraydayContext, qualify_signal
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +37,13 @@ class ArbitrageOpportunity:
     best_ask: float
     bid_depth: int               # total bid volume at top 5 levels
     ask_depth: int               # total ask volume at top 5 levels
-    signal: str                  # "BUY", "SELL", "HOLD"
+    signal: str                  # "BUY", "BUY_WEAK", "SELL", "SELL_WEAK", "HOLD"
     actionable: bool
     reasons: list[str] = field(default_factory=list)
+    intraday: Optional[IntraydayContext] = field(default=None)
 
 
-def analyze_fund(fund_data: dict) -> ArbitrageOpportunity | None:
+def analyze_fund(fund_data: dict) -> Optional["ArbitrageOpportunity"]:
     """Analyze a single fund for arbitrage opportunities.
 
     Premium arbitrage (market price > NAV):
@@ -50,10 +53,18 @@ def analyze_fund(fund_data: dict) -> ArbitrageOpportunity | None:
     Discount arbitrage (market price < NAV):
       - Buy on market, redeem at cancel_nav
       - Profit = cancel_nav - market_price - costs
+
+    If ``fund_data["intraday_context"]`` is set (an :class:`IntraydayContext`),
+    the base signal is further qualified:
+      - BUY  + narrowing trend  → BUY_WEAK   (discount reversing)
+      - SELL + narrowing trend  → SELL_WEAK  (premium fading)
+      A WEAK signal is still reported but ``actionable`` is set False
+      so it appears in the watchlist, not the action list.
     """
     price_data = fund_data.get("price_data")
     nav_data = fund_data.get("nav_data")
     order_book = fund_data.get("order_book")
+    ctx: Optional[IntraydayContext] = fund_data.get("intraday_context")
 
     if not price_data or not nav_data:
         return None
@@ -142,6 +153,15 @@ def analyze_fund(fund_data: dict) -> ArbitrageOpportunity | None:
         actionable = False
         reasons.append("عمق سفارشات صفر — نقدشوندگی ناکافی")
 
+    # ── Intraday trend qualification ──────────────────────────────────────
+    if ctx is not None:
+        signal, trend_reasons = qualify_signal(signal, ctx)
+        reasons.extend(trend_reasons)
+        # A WEAK signal means the trend opposes the position — mark not actionable
+        if signal in ("BUY_WEAK", "SELL_WEAK"):
+            actionable = False
+    # ─────────────────────────────────────────────────────────────────────
+
     return ArbitrageOpportunity(
         symbol=fund_data["symbol"],
         name=fund_data["name"],
@@ -162,10 +182,11 @@ def analyze_fund(fund_data: dict) -> ArbitrageOpportunity | None:
         signal=signal,
         actionable=actionable,
         reasons=reasons,
+        intraday=ctx,
     )
 
 
-def scan_all(fund_data_list: list[dict]) -> list[ArbitrageOpportunity]:
+def scan_all(fund_data_list: list[dict]) -> list["ArbitrageOpportunity"]:
     """Analyze all funds and return sorted opportunities."""
     opportunities = []
     for fund_data in fund_data_list:
@@ -181,6 +202,6 @@ def scan_all(fund_data_list: list[dict]) -> list[ArbitrageOpportunity]:
     return opportunities
 
 
-def filter_actionable(opportunities: list[ArbitrageOpportunity]) -> list[ArbitrageOpportunity]:
+def filter_actionable(opportunities: list["ArbitrageOpportunity"]) -> list["ArbitrageOpportunity"]:
     """Return only actionable opportunities."""
     return [o for o in opportunities if o.actionable]

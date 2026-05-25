@@ -237,16 +237,25 @@ def update_history(aggregator: DataAggregator, db: Database,
 
 def run_scan(aggregator: DataAggregator,
              db: Database,
-             use_nav: bool = True) -> list[ArbitrageOpportunity]:
-    """Fetch data, analyse, save to DB, return opportunities."""
+             use_nav: bool = True,
+             enrich_intraday: bool = True) -> list[ArbitrageOpportunity]:
+    """Fetch data, analyse, save to DB, return opportunities.
+
+    Parameters
+    ----------
+    enrich_intraday
+        If True (default), fetch today's intraday tick data for each fund
+        from TSETMC, store in the DB, and attach an
+        :class:`~intraday_context.IntraydayContext` to each fund dict before
+        signal analysis.  This adds ~0.3 s per fund but gives trend-qualified
+        signals (BUY_WEAK / SELL_WEAK when the premium is reversing).
+    """
+    from intraday_context import compute_intraday_context
+
     logger = logging.getLogger(__name__)
     scanned_at = datetime.now()
-
-    # ── NAV cache: if today's NAV is already in DB, pass it to the aggregator
-    #    so it skips the expensive FIPIRAN/Rahavard fetch for cached funds.
     today = scanned_at.strftime("%Y-%m-%d")
-    for fund in aggregator.tsetmc._ins_code_cache.keys():
-        pass  # cache keys populated after first discovery run
+    today_int = int(scanned_at.strftime("%Y%m%d"))
 
     try:
         fund_data = aggregator.fetch_all(
@@ -264,6 +273,43 @@ def run_scan(aggregator: DataAggregator,
     if failed:
         logger.warning("%d funds had no data: %s",
                        len(failed), ", ".join(f["symbol"] for f in failed))
+
+    # ── Intraday enrichment ──────────────────────────────────────────────
+    if enrich_intraday:
+        tsetmc = aggregator.tsetmc
+        enriched = 0
+        for fd in fund_data:
+            sym      = fd.get("symbol", "")
+            ins_code = fd.get("ins_code") or tsetmc.get_ins_code(sym)
+            nav_data = fd.get("nav_data") or {}
+            nav      = nav_data.get("cancel_nav", 0)
+
+            if not ins_code or nav <= 0:
+                continue
+
+            # Fetch today's ticks (endpoint returns all trades for the date)
+            ticks = tsetmc.get_intraday_trades(ins_code, today_int)
+            if ticks:
+                # Persist to DB (skips duplicates via INSERT OR IGNORE)
+                db.save_intraday_trades(sym, ins_code, today_int, ticks)
+
+            # Also load any ticks already in DB for today (covers partial days)
+            stored = db.get_intraday_trades(sym, today_int)
+            merged = {t["seq"]: t for t in ticks}
+            merged.update({t["seq"]: t for t in stored})
+            all_ticks = sorted(merged.values(), key=lambda t: t["seq"])
+
+            ctx = compute_intraday_context(all_ticks, nav)
+            if ctx:
+                fd["intraday_context"] = ctx
+                enriched += 1
+                logger.debug(
+                    "intraday %s: %d ticks  trend=%s slope=%+.4f",
+                    sym, ctx.tick_count, ctx.trend_label, ctx.trend_slope,
+                )
+
+        logger.info("Intraday context enriched %d / %d funds", enriched, len(fund_data))
+    # ────────────────────────────────────────────────────────────────────
 
     opps = scan_all(fund_data)
 
