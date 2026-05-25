@@ -104,9 +104,55 @@ def create_app(db, scan_callback=None):
 
     @app.route("/api/funds")
     def api_funds():
-        """Latest snapshot for every tracked fund, sorted by |premium_discount|."""
-        rows = db.get_latest()
-        return jsonify({"funds": rows, "last_scan": db.last_scan_time()})
+        """All configured funds, enriched with latest scan snapshot where available.
+
+        Always returns all 30 config funds — even those not yet scanned.
+        Funds without a snapshot get zero/null values so the UI can show them.
+        """
+        from config import FIXED_INCOME_ETFS
+        latest_map = {r["symbol"]: r for r in db.get_latest()}
+
+        funds = []
+        for f in FIXED_INCOME_ETFS:
+            sym = f["symbol"]
+            snap = latest_map.get(sym)
+            if snap:
+                row = dict(snap)
+            else:
+                # stub — fund is configured but not yet scanned
+                row = {
+                    "symbol":               sym,
+                    "name":                 f.get("name", sym),
+                    "market_price":         0,
+                    "nav":                  0,
+                    "issue_nav":            0,
+                    "cancel_nav":           0,
+                    "statistical_nav":      0,
+                    "premium_discount_pct": 0,
+                    "net_profit_pct":       0,
+                    "volume":               0,
+                    "value":                0,
+                    "trade_count":          0,
+                    "best_bid":             0,
+                    "best_ask":             0,
+                    "signal":               "HOLD",
+                    "actionable":           0,
+                    "intraday_trend":       "",
+                    "trend_slope":          0,
+                    "vwap":                 0,
+                    "vwap_premium_pct":     0,
+                    "tick_count_today":     0,
+                    "scanned_at":           None,
+                }
+            funds.append(row)
+
+        # Sort: scanned funds first (by |premium_discount|), unscanned at bottom
+        funds.sort(key=lambda r: (
+            0 if r.get("scanned_at") else 1,
+            -abs(r.get("premium_discount_pct") or 0),
+        ))
+
+        return jsonify({"funds": funds, "last_scan": db.last_scan_time()})
 
     @app.route("/api/history")
     def api_history():

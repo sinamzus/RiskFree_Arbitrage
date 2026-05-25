@@ -228,9 +228,11 @@ html, body {
   padding: 1px 6px; border-radius: 3px;
   letter-spacing: .3px;
 }
-.badge-BUY  { background: rgba(38,166,154,.18); color: var(--green); }
-.badge-SELL { background: rgba(239,83,80,.18);  color: var(--red); }
-.badge-HOLD { background: rgba(120,123,134,.12); color: var(--muted); }
+.badge-BUY      { background: rgba(38,166,154,.18); color: var(--green); }
+.badge-BUY_WEAK { background: rgba(240,192,64,.14); color: var(--yellow); }
+.badge-SELL     { background: rgba(239,83,80,.18);  color: var(--red); }
+.badge-SELL_WEAK{ background: rgba(255,112,67,.14); color: #ff7043; }
+.badge-HOLD     { background: rgba(120,123,134,.12); color: var(--muted); }
 
 /* ─── Main panel ─────────────────────────────────────────────── */
 #main {
@@ -502,7 +504,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             <tr>
               <th>نماد</th><th>قیمت (ریال)</th><th>NAV</th>
               <th>صرف/تخفیف%</th><th>سود خالص%</th>
-              <th>حجم</th><th>سیگنال</th><th>Z-score</th>
+              <th>حجم</th><th>روند درون‌روزی</th><th>سیگنال</th><th>Z-score</th>
             </tr>
           </thead>
           <tbody id="tbl-body"></tbody>
@@ -723,14 +725,22 @@ function renderList() {
     const price = f.market_price ? fmtN(f.market_price) + ' ﷼' : '—';
     const nav   = f.nav ? fmtN(f.nav) + ' ﷼' : '';
     const sc = selected.has(f.symbol) ? (selected.size > 1 ? 'selN' : 'sel1') : '';
-    return `<div class="fi ${sc}" onclick="onClick(event,'${f.symbol}')">
+    const sigLabel = {BUY:'خرید',BUY_WEAK:'خرید↘',SELL:'فروش',SELL_WEAK:'فروش↗'}[sig] || '—';
+    // trend icon from intraday_trend field
+    const trendIcon = {WIDENING:'↗',NARROWING:'↘',STABLE:'→'}[f.intraday_trend||''] || '';
+    const trendEl = trendIcon
+      ? `<span style="font-size:9px;color:var(--muted);margin-top:1px">${trendIcon} ${(f.trend_slope||0)>0?'+':''}${(f.trend_slope||0).toFixed(3)}%</span>`
+      : '';
+    const unscanned = !f.scanned_at;
+    return `<div class="fi ${sc}" style="${unscanned?'opacity:.5':''}" onclick="onClick(event,'${f.symbol}')">
       <div>
         <div class="fi-name">${f.symbol}</div>
-        <div class="fi-sub">${price}${nav ? ' | ' + nav : ''}</div>
+        <div class="fi-sub">${unscanned ? '<em style="color:var(--muted)">اسکن نشده</em>' : price+(nav?' | '+nav:'')}</div>
       </div>
       <div class="fi-right">
         <span class="fi-pd ${cls}">${pd>=0?'+':''}${pd.toFixed(2)}%</span>
-        <span class="badge badge-${sig}">${sig==='BUY'?'خرید':sig==='SELL'?'فروش':'—'}</span>
+        <span class="badge badge-${sig}">${sigLabel}</span>
+        ${trendEl}
       </div>
     </div>`;
   }).join('');
@@ -1045,23 +1055,54 @@ function updateInfoDefault(sym, rows) {
 // ══════════════════════════════════════════════════════════════════
 function renderStats(sym) {
   const st = allStats[sym];
+  // also pull intraday data from latest fund snapshot
+  const fd = latestFunds.find(f => f.symbol === sym);
+
   document.getElementById('stats-title').textContent = 'آمار — ' + sym;
-  if (!st?.count) {
-    document.getElementById('stats-content').innerHTML =
-      '<div style="color:var(--muted);font-size:var(--fs-xs);margin-top:6px">آمار کافی نیست — اسکن بیشتری لازم است</div>';
-    return;
+
+  let html = '';
+
+  // ── Intraday context block ──────────────────────────────────────────
+  if (fd && fd.tick_count_today > 0) {
+    const trend = fd.intraday_trend || '';
+    const slope = fd.trend_slope || 0;
+    const vwap  = fd.vwap || 0;
+    const vwapP = fd.vwap_premium_pct || 0;
+    const ticks = fd.tick_count_today || 0;
+    const tIcon = {WIDENING:'↗',NARROWING:'↘',STABLE:'→'}[trend] || '';
+    const tCol  = trend==='WIDENING'  ? 'var(--red)'   :
+                  trend==='NARROWING' ? 'var(--green)' : 'var(--muted)';
+    const slopeCol = slope > 0 ? 'var(--red)' : slope < 0 ? 'var(--green)' : 'var(--muted)';
+    html += `
+      <div style="font-size:var(--fs-xs);color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;margin-top:2px">درون‌روزی</div>
+      <div class="sr"><span>معاملات امروز</span><span class="sv">${ticks.toLocaleString('fa-IR')}</span></div>
+      <div class="sr"><span>VWAP</span><span class="sv">${fmtN(vwap)}</span></div>
+      <div class="sr"><span>صرف VWAP</span><span class="sv ${vwapP>0?'pos':vwapP<0?'neg':''}">${pct(vwapP)}</span></div>
+      <div class="sr"><span>روند</span><span class="sv" style="color:${tCol}">${tIcon} ${trend||'—'}</span></div>
+      <div class="sr"><span>slope</span><span class="sv" style="color:${slopeCol}">${slope>=0?'+':''}${slope.toFixed(4)}%/tick</span></div>
+      <div style="height:1px;background:var(--brd);margin:7px 0"></div>
+    `;
   }
-  const zAbs = Math.abs(st.z_score||0);
-  const zCls = zAbs > 2 ? 'warn' : zAbs > 1.5 ? 'pos' : '';
-  document.getElementById('stats-content').innerHTML = `
-    <div class="sr"><span>میانگین (${st.days}روز)</span><span class="sv ${(st.mean||0)>0?'pos':'neg'}">${pct(st.mean)}</span></div>
-    <div class="sr"><span>انحراف معیار</span><span class="sv">±${(st.std||0).toFixed(3)}%</span></div>
-    <div class="sr"><span>وضعیت</span><span class="sv ${(st.current||0)>0?'pos':'neg'}">${pct(st.current)}</span></div>
-    <div class="sr"><span>Z-score</span><span class="sv ${zCls}">${(st.z_score||0)>=0?'▲':'▼'} ${(st.z_score||0).toFixed(2)}</span></div>
-    <div class="sr"><span>نمونه</span><span class="sv">${(st.count||0).toLocaleString('fa-IR')}</span></div>
-    <div class="sr"><span>فرصت‌های قابل اجرا</span><span class="sv ${st.actionable_count>0?'neg':''}">${st.actionable_count||0}</span></div>
-    ${zAbs>1.5?`<div style="margin-top:7px;padding:5px 8px;background:rgba(240,192,64,.07);border-radius:5px;font-size:var(--fs-xs);color:var(--yellow)">⚠ انحراف بزرگ از میانگین</div>`:''}
-  `;
+
+  // ── Mean-reversion stats block ──────────────────────────────────────
+  if (!st?.count) {
+    html += '<div style="color:var(--muted);font-size:var(--fs-xs);margin-top:6px">آمار کافی نیست — اسکن بیشتری لازم است</div>';
+  } else {
+    const zAbs = Math.abs(st.z_score||0);
+    const zCls = zAbs > 2 ? 'warn' : zAbs > 1.5 ? 'pos' : '';
+    html += `
+      <div style="font-size:var(--fs-xs);color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">میانگین‌گردانی</div>
+      <div class="sr"><span>میانگین (${st.days}روز)</span><span class="sv ${(st.mean||0)>0?'pos':'neg'}">${pct(st.mean)}</span></div>
+      <div class="sr"><span>انحراف معیار</span><span class="sv">±${(st.std||0).toFixed(3)}%</span></div>
+      <div class="sr"><span>وضعیت</span><span class="sv ${(st.current||0)>0?'pos':'neg'}">${pct(st.current)}</span></div>
+      <div class="sr"><span>Z-score</span><span class="sv ${zCls}">${(st.z_score||0)>=0?'▲':'▼'} ${(st.z_score||0).toFixed(2)}</span></div>
+      <div class="sr"><span>نمونه</span><span class="sv">${(st.count||0).toLocaleString('fa-IR')}</span></div>
+      <div class="sr"><span>فرصت‌های قابل اجرا</span><span class="sv ${st.actionable_count>0?'neg':''}">${st.actionable_count||0}</span></div>
+      ${zAbs>1.5?`<div style="margin-top:7px;padding:5px 8px;background:rgba(240,192,64,.07);border-radius:5px;font-size:var(--fs-xs);color:var(--yellow)">⚠ انحراف بزرگ از میانگین</div>`:''}
+    `;
+  }
+
+  document.getElementById('stats-content').innerHTML = html;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1071,20 +1112,39 @@ function renderTable(funds) {
   const tb = document.getElementById('tbl-body');
   if (!funds.length) { tb.innerHTML=''; return; }
   tb.innerHTML = funds.map(f => {
-    const pd = f.premium_discount_pct||0, np = f.net_profit_pct||0;
+    const pd  = f.premium_discount_pct||0, np = f.net_profit_pct||0;
     const sig = f.signal||'HOLD';
-    const z = allStats[f.symbol]?.z_score;
+    const z   = allStats[f.symbol]?.z_score;
     const zStr = z!=null ? (z>=0?'+':'')+z.toFixed(2) : '—';
-    const sigHtml = sig==='BUY'  ? `<span class="tc-buy">🟢 خرید</span>` :
-                    sig==='SELL' ? `<span class="tc-sell">🔴 فروش</span>` :
-                                   `<span class="tc-muted">—</span>`;
-    return `<tr onclick="onRowClick('${f.symbol}')">
+
+    const sigHtml =
+      sig==='BUY'       ? `<span class="tc-buy">🟢 خرید</span>` :
+      sig==='BUY_WEAK'  ? `<span style="color:var(--yellow)">🟡 خرید↘</span>` :
+      sig==='SELL'      ? `<span class="tc-sell">🔴 فروش</span>` :
+      sig==='SELL_WEAK' ? `<span style="color:#ff7043">🟠 فروش↗</span>` :
+                          `<span class="tc-muted">—</span>`;
+
+    // intraday trend cell
+    const trend = f.intraday_trend || '';
+    const slope = f.trend_slope || 0;
+    const ticks = f.tick_count_today || 0;
+    const tIcon = {WIDENING:'↗',NARROWING:'↘',STABLE:'→'}[trend] || '';
+    const tCol  = trend==='WIDENING'  ? 'color:var(--red)'   :
+                  trend==='NARROWING' ? 'color:var(--green)' : 'color:var(--muted)';
+    const trendHtml = tIcon
+      ? `<span style="${tCol}">${tIcon} ${slope>=0?'+':''}${slope.toFixed(3)}%</span>
+         <span class="tc-muted" style="font-size:10px;margin-right:3px">(${ticks})</span>`
+      : '<span class="tc-muted">—</span>';
+
+    const unscanned = !f.scanned_at;
+    return `<tr onclick="onRowClick('${f.symbol}')" ${unscanned?'style="opacity:.45"':''}>
       <td class="tc-sym">${f.symbol}</td>
       <td>${f.market_price?fmtN(f.market_price):'—'}</td>
       <td>${f.nav?fmtN(f.nav):'—'}</td>
       <td class="${pd>0?'tc-sell':pd<0?'tc-buy':'tc-muted'}">${(pd>=0?'+':'')}${pd.toFixed(3)}%</td>
       <td class="${np>0?'tc-buy':np<0?'tc-sell':'tc-muted'}">${(np>=0?'+':'')}${np.toFixed(3)}%</td>
       <td class="tc-muted">${(f.volume||0).toLocaleString('fa-IR')}</td>
+      <td>${trendHtml}</td>
       <td>${sigHtml}</td>
       <td class="${Math.abs(z||0)>1.5?'tc-sell':'tc-muted'}">${zStr}</td>
     </tr>`;

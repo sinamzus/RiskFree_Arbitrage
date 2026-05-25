@@ -88,7 +88,13 @@ CREATE TABLE IF NOT EXISTS snapshots (
     best_ask             REAL    DEFAULT 0,
     signal               TEXT    DEFAULT 'HOLD',
     actionable           INTEGER DEFAULT 0,
-    nav_source           TEXT    DEFAULT ''
+    nav_source           TEXT    DEFAULT '',
+    -- intraday context (computed from tick data during scan)
+    intraday_trend       TEXT    DEFAULT '',   -- WIDENING | NARROWING | STABLE | ''
+    trend_slope          REAL    DEFAULT 0,    -- %/tick
+    vwap                 REAL    DEFAULT 0,
+    vwap_premium_pct     REAL    DEFAULT 0,
+    tick_count_today     INTEGER DEFAULT 0
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uix_symbol_scanned
@@ -138,6 +144,18 @@ class Database:
     def _init(self):
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            # ── migrate existing DBs: add intraday context columns if absent
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+            for col, defn in [
+                ("intraday_trend",   "TEXT    DEFAULT ''"),
+                ("trend_slope",      "REAL    DEFAULT 0"),
+                ("vwap",             "REAL    DEFAULT 0"),
+                ("vwap_premium_pct", "REAL    DEFAULT 0"),
+                ("tick_count_today", "INTEGER DEFAULT 0"),
+            ]:
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} {defn}")
+                    logger.debug("Migrated snapshots: added column %s", col)
         logger.debug("Database initialised at %s", self.path)
 
     # ------------------------------------------------------------------ #
@@ -155,6 +173,7 @@ class Database:
 
         rows = []
         for o in opportunities:
+            ctx = getattr(o, "intraday", None)
             rows.append((
                 o.symbol, o.name, ts, day,
                 o.market_price, o.nav, o.issue_nav, o.cancel_nav,
@@ -162,7 +181,13 @@ class Database:
                 o.volume, o.value, o.trade_count,
                 o.best_bid, o.best_ask, o.signal,
                 1 if o.actionable else 0,
-                "",  # nav_source (not on dataclass; extend if needed)
+                "",  # nav_source
+                # intraday context (None-safe)
+                ctx.trend_label      if ctx else "",
+                ctx.trend_slope      if ctx else 0.0,
+                ctx.vwap             if ctx else 0.0,
+                ctx.vwap_premium_pct if ctx else 0.0,
+                ctx.tick_count       if ctx else 0,
             ))
 
         with self._conn() as conn:
@@ -172,8 +197,9 @@ class Database:
                     market_price, nav, issue_nav, cancel_nav,
                     statistical_nav, premium_discount_pct, net_profit_pct,
                     volume, value, trade_count,
-                    best_bid, best_ask, signal, actionable, nav_source)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    best_bid, best_ask, signal, actionable, nav_source,
+                    intraday_trend, trend_slope, vwap, vwap_premium_pct, tick_count_today)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 rows,
             )
 
