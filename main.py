@@ -198,25 +198,38 @@ def update_history(aggregator: DataAggregator, db: Database,
         if not fetch_intraday:
             continue
 
-        intraday_dates_have = set(db.get_intraday_dates(symbol))
+        # Build a map of date → tick count already in DB
+        # Today is ALWAYS re-fetched (new ticks arrive every minute during session)
+        # Past days are skipped only when they already have a meaningful number of ticks
+        MIN_TICKS_COMPLETE = 10   # a day with < this is considered incomplete
+        intraday_have_map: dict[int, int] = {}
+        for d in db.get_intraday_dates(symbol):
+            rows = db.get_intraday_trades(symbol, d)
+            intraday_have_map[d] = len(rows)
 
         for date_int in recent_dates:
-            if date_int in intraday_dates_have:
-                logger.debug("  Intraday %s: already have %d", symbol, date_int)
-                continue
             if date_int > today_int:
                 continue
 
-            logger.info("  Fetching intraday ticks for %s on %d ...",
-                        symbol, date_int)
+            existing = intraday_have_map.get(date_int, 0)
+            is_today = (date_int == today_int)
+
+            # Skip past days that already have a full set of ticks
+            if not is_today and existing >= MIN_TICKS_COMPLETE:
+                logger.debug("  Intraday %s: already have %d ticks for %d",
+                             symbol, existing, date_int)
+                continue
+
+            logger.info("  Fetching intraday ticks for %s on %d (have=%d) ...",
+                        symbol, date_int, existing)
             trades = fetcher.get_intraday_trades(ins_code, date_int)
             if trades:
                 new_rows = db.save_intraday_trades(
                     symbol, ins_code, date_int, trades
                 )
                 total_intraday_new += new_rows
-                logger.info("  %d new tick rows for %s on %d",
-                            new_rows, symbol, date_int)
+                logger.info("  %d new tick rows for %s on %d (total in DB: %d)",
+                            new_rows, symbol, date_int, existing + new_rows)
             else:
                 logger.debug("  No intraday data for %s on %d", symbol, date_int)
 
@@ -289,17 +302,16 @@ def run_scan(aggregator: DataAggregator,
             if not ins_code or nav <= 0:
                 continue
 
-            # Fetch today's ticks (endpoint returns all trades for the date)
+            # Fetch today's full tick list (GetTradeHistory returns all
+            # trades up to the current moment during the session).
             ticks = tsetmc.get_intraday_trades(ins_code, today_int)
             if ticks:
-                # Persist to DB (skips duplicates via INSERT OR IGNORE)
+                # INSERT OR IGNORE — new ticks added, existing ones kept
                 db.save_intraday_trades(sym, ins_code, today_int, ticks)
-
-            # Also load any ticks already in DB for today (covers partial days)
-            stored = db.get_intraday_trades(sym, today_int)
-            merged = {t["seq"]: t for t in ticks}
-            merged.update({t["seq"]: t for t in stored})
-            all_ticks = sorted(merged.values(), key=lambda t: t["seq"])
+                all_ticks = ticks   # fresh from API; already sorted by seq
+            else:
+                # API returned nothing (pre-market or closed) — use DB cache
+                all_ticks = db.get_intraday_trades(sym, today_int)
 
             ctx = compute_intraday_context(all_ticks, nav)
             if ctx:
@@ -455,6 +467,10 @@ def main():
         "--intraday-days", type=int, default=7,
         help="تعداد روزهای اخیر برای دریافت داده تیک‌به‌تیک (پیش‌فرض: 7)",
     )
+    parser.add_argument(
+        "--intraday-status", action="store_true",
+        help="نمایش وضعیت داده تیک‌به‌تیک در DB و خروج",
+    )
 
     args = parser.parse_args()
     log_file = setup_logging(args.verbose)
@@ -464,6 +480,36 @@ def main():
     db         = Database()
     aggregator = DataAggregator()
     use_nav    = not args.no_fipiran
+
+    # ── intraday status report ──────────────────────────────────────────────
+    if args.intraday_status:
+        from config import FIXED_INCOME_ETFS as FUNDS
+        today_int = int(datetime.now().strftime("%Y%m%d"))
+        print()
+        print("=" * 72)
+        print("  وضعیت داده درون‌روزی در DB")
+        print("=" * 72)
+        print(f"  {'نماد':12s}  {'آخرین تاریخ':12s}  {'تیک آن روز':>12s}  {'کل تاریخ':>8s}")
+        print("  " + "─" * 55)
+        for fund in FUNDS:
+            sym   = fund["symbol"]
+            dates = db.get_intraday_dates(sym)
+            if dates:
+                last  = dates[-1]
+                ticks = db.get_intraday_trades(sym, last)
+                mark  = " ← امروز" if last == today_int else ""
+                print(f"  {sym:12s}  {last:12d}  {len(ticks):>12,}  {len(dates):>8d}{mark}")
+            else:
+                print(f"  {sym:12s}  {'—':12s}  {'—':>12s}  {'—':>8s}")
+        print()
+        total = sum(
+            len(db.get_intraday_trades(f["symbol"], d))
+            for f in FUNDS
+            for d in db.get_intraday_dates(f["symbol"])
+        )
+        print(f"  مجموع تیک در DB: {total:,}")
+        print()
+        return
 
     # ── bootstrap / incremental history update ─────────────────────────────
     fetch_intraday = not args.no_intraday
