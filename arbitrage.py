@@ -41,6 +41,13 @@ class ArbitrageOpportunity:
     actionable: bool
     reasons: list[str] = field(default_factory=list)
     intraday: Optional[IntraydayContext] = field(default=None)
+    # ── Order-book tradability (populated by run_scan when available) ──────
+    tradable: bool       = False   # True if book depth supports the signal
+    tradable_volume: int = 0       # units available at profitable price levels
+    tradable_value: float= 0.0     # Rial value of the tradable volume
+    spread_pct: float    = 0.0     # bid-ask spread % of mid price
+    ob_score: float      = 0.0     # 0-100 composite order-book quality score
+    tradability_reason: str = ""   # brief explanation for UI tooltip
 
 
 def analyze_fund(fund_data: dict) -> Optional["ArbitrageOpportunity"]:
@@ -162,6 +169,16 @@ def analyze_fund(fund_data: dict) -> Optional["ArbitrageOpportunity"]:
             actionable = False
     # ─────────────────────────────────────────────────────────────────────
 
+    # ── Order-book tradability ────────────────────────────────────────────
+    td = fund_data.get("tradability")
+    if td is None and order_book:
+        # Compute on-the-fly if main.py didn't pre-compute it
+        from orderbook import compute_tradability
+        nav_for_arb = cancel_nav if signal in ("BUY", "BUY_WEAK") else issue_nav
+        if nav_for_arb > 0:
+            dir_ = "BUY" if signal in ("BUY", "BUY_WEAK") else "SELL"
+            td = compute_tradability(dir_, nav_for_arb, order_book)
+
     return ArbitrageOpportunity(
         symbol=fund_data["symbol"],
         name=fund_data["name"],
@@ -183,6 +200,12 @@ def analyze_fund(fund_data: dict) -> Optional["ArbitrageOpportunity"]:
         actionable=actionable,
         reasons=reasons,
         intraday=ctx,
+        tradable          = td.tradeable          if td else False,
+        tradable_volume   = td.executable_volume  if td else 0,
+        tradable_value    = td.executable_value   if td else 0.0,
+        spread_pct        = td.spread_pct         if td else 0.0,
+        ob_score          = td.book_depth_score   if td else 0.0,
+        tradability_reason= td.reason             if td else "",
     )
 
 

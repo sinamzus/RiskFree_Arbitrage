@@ -67,6 +67,36 @@ CREATE TABLE IF NOT EXISTS intraday_trades (
 
 CREATE INDEX IF NOT EXISTS ix_intraday_symbol_date ON intraday_trades(symbol, date);
 
+-- ── Intraday order-book snapshots ─────────────────────────────────────────
+-- One row per (symbol, date, time).  Captured at every scanner tick.
+-- Stores top-5 bid/ask levels so tradability can be analysed offline.
+CREATE TABLE IF NOT EXISTS intraday_orderbook (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol      TEXT    NOT NULL,
+    ins_code    TEXT    NOT NULL,
+    date        INTEGER NOT NULL,   -- YYYYMMDD
+    time        INTEGER NOT NULL,   -- HHMMSS
+    -- 5 bid levels (buy queue, sorted best=highest first)
+    bid1_price  REAL    DEFAULT 0,  bid1_vol INTEGER DEFAULT 0,  bid1_cnt INTEGER DEFAULT 0,
+    bid2_price  REAL    DEFAULT 0,  bid2_vol INTEGER DEFAULT 0,  bid2_cnt INTEGER DEFAULT 0,
+    bid3_price  REAL    DEFAULT 0,  bid3_vol INTEGER DEFAULT 0,  bid3_cnt INTEGER DEFAULT 0,
+    bid4_price  REAL    DEFAULT 0,  bid4_vol INTEGER DEFAULT 0,  bid4_cnt INTEGER DEFAULT 0,
+    bid5_price  REAL    DEFAULT 0,  bid5_vol INTEGER DEFAULT 0,  bid5_cnt INTEGER DEFAULT 0,
+    -- 5 ask levels (sell queue, sorted best=lowest first)
+    ask1_price  REAL    DEFAULT 0,  ask1_vol INTEGER DEFAULT 0,  ask1_cnt INTEGER DEFAULT 0,
+    ask2_price  REAL    DEFAULT 0,  ask2_vol INTEGER DEFAULT 0,  ask2_cnt INTEGER DEFAULT 0,
+    ask3_price  REAL    DEFAULT 0,  ask3_vol INTEGER DEFAULT 0,  ask3_cnt INTEGER DEFAULT 0,
+    ask4_price  REAL    DEFAULT 0,  ask4_vol INTEGER DEFAULT 0,  ask4_cnt INTEGER DEFAULT 0,
+    ask5_price  REAL    DEFAULT 0,  ask5_vol INTEGER DEFAULT 0,  ask5_cnt INTEGER DEFAULT 0,
+    -- Pre-computed summary metrics
+    spread_pct  REAL    DEFAULT 0,   -- (ask1 - bid1) / mid × 100
+    bid_depth   INTEGER DEFAULT 0,   -- sum of bid1..bid5 volume
+    ask_depth   INTEGER DEFAULT 0,   -- sum of ask1..ask5 volume
+    UNIQUE (symbol, date, time)
+);
+
+CREATE INDEX IF NOT EXISTS ix_ob_symbol_date ON intraday_orderbook(symbol, date);
+
 -- ── Scan snapshots ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS snapshots (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,16 +174,23 @@ class Database:
     def _init(self):
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
-            # ── migrate existing DBs: add intraday context columns if absent
-            existing = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+            # ── migrate existing DBs: add columns if absent ───────────────────
+            existing_snap = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
             for col, defn in [
-                ("intraday_trend",   "TEXT    DEFAULT ''"),
-                ("trend_slope",      "REAL    DEFAULT 0"),
-                ("vwap",             "REAL    DEFAULT 0"),
-                ("vwap_premium_pct", "REAL    DEFAULT 0"),
-                ("tick_count_today", "INTEGER DEFAULT 0"),
+                ("intraday_trend",    "TEXT    DEFAULT ''"),
+                ("trend_slope",       "REAL    DEFAULT 0"),
+                ("vwap",              "REAL    DEFAULT 0"),
+                ("vwap_premium_pct",  "REAL    DEFAULT 0"),
+                ("tick_count_today",  "INTEGER DEFAULT 0"),
+                # order-book tradability columns
+                ("tradable",          "INTEGER DEFAULT 0"),
+                ("tradable_volume",   "INTEGER DEFAULT 0"),
+                ("tradable_value",    "REAL    DEFAULT 0"),
+                ("spread_pct",        "REAL    DEFAULT 0"),
+                ("ob_score",          "REAL    DEFAULT 0"),
+                ("tradability_reason","TEXT    DEFAULT ''"),
             ]:
-                if col not in existing:
+                if col not in existing_snap:
                     conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} {defn}")
                     logger.debug("Migrated snapshots: added column %s", col)
         logger.debug("Database initialised at %s", self.path)
@@ -188,6 +225,13 @@ class Database:
                 ctx.vwap             if ctx else 0.0,
                 ctx.vwap_premium_pct if ctx else 0.0,
                 ctx.tick_count       if ctx else 0,
+                # order-book tradability
+                1 if getattr(o, "tradable", False) else 0,
+                getattr(o, "tradable_volume", 0),
+                getattr(o, "tradable_value",  0.0),
+                getattr(o, "spread_pct",      0.0),
+                getattr(o, "ob_score",        0.0),
+                getattr(o, "tradability_reason", ""),
             ))
 
         with self._conn() as conn:
@@ -198,8 +242,10 @@ class Database:
                     statistical_nav, premium_discount_pct, net_profit_pct,
                     volume, value, trade_count,
                     best_bid, best_ask, signal, actionable, nav_source,
-                    intraday_trend, trend_slope, vwap, vwap_premium_pct, tick_count_today)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    intraday_trend, trend_slope, vwap, vwap_premium_pct, tick_count_today,
+                    tradable, tradable_volume, tradable_value,
+                    spread_pct, ob_score, tradability_reason)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 rows,
             )
 
@@ -454,3 +500,113 @@ class Database:
                 (symbol,),
             ).fetchall()
         return [r["date"] for r in rows]
+
+    # ------------------------------------------------------------------ #
+    #  Order-book snapshots                                               #
+    # ------------------------------------------------------------------ #
+
+    def save_orderbook_snapshot(self, symbol: str, ins_code: str,
+                                date_int: int, time_int: int,
+                                order_book: dict) -> bool:
+        """Persist one order-book snapshot.
+
+        *order_book* must be {"bids": [...x5], "asks": [...x5]}
+        with each level having keys price, volume, count.
+        Duplicate (symbol, date, time) rows are silently ignored.
+        Returns True if the row was newly inserted.
+        """
+        bids = order_book.get("bids", []) or []
+        asks = order_book.get("asks", []) or []
+
+        def _lv(lst, i, key):
+            try:
+                return lst[i].get(key, 0) or 0
+            except IndexError:
+                return 0
+
+        bid_depth = sum(_lv(bids, i, "volume") for i in range(5))
+        ask_depth = sum(_lv(asks, i, "volume") for i in range(5))
+
+        bp1 = _lv(bids, 0, "price")
+        ap1 = _lv(asks, 0, "price")
+        if bp1 > 0 and ap1 > 0:
+            mid = (bp1 + ap1) / 2
+            spread_pct = round((ap1 - bp1) / mid * 100, 4) if mid > 0 else 0
+        else:
+            spread_pct = 0
+
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO intraday_orderbook
+                   (symbol, ins_code, date, time,
+                    bid1_price, bid1_vol, bid1_cnt,
+                    bid2_price, bid2_vol, bid2_cnt,
+                    bid3_price, bid3_vol, bid3_cnt,
+                    bid4_price, bid4_vol, bid4_cnt,
+                    bid5_price, bid5_vol, bid5_cnt,
+                    ask1_price, ask1_vol, ask1_cnt,
+                    ask2_price, ask2_vol, ask2_cnt,
+                    ask3_price, ask3_vol, ask3_cnt,
+                    ask4_price, ask4_vol, ask4_cnt,
+                    ask5_price, ask5_vol, ask5_cnt,
+                    spread_pct, bid_depth, ask_depth)
+                   VALUES (?,?,?,?,
+                           ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,
+                           ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,
+                           ?,?,?)""",
+                (symbol, ins_code, date_int, time_int,
+                 _lv(bids,0,"price"), _lv(bids,0,"volume"), _lv(bids,0,"count"),
+                 _lv(bids,1,"price"), _lv(bids,1,"volume"), _lv(bids,1,"count"),
+                 _lv(bids,2,"price"), _lv(bids,2,"volume"), _lv(bids,2,"count"),
+                 _lv(bids,3,"price"), _lv(bids,3,"volume"), _lv(bids,3,"count"),
+                 _lv(bids,4,"price"), _lv(bids,4,"volume"), _lv(bids,4,"count"),
+                 _lv(asks,0,"price"), _lv(asks,0,"volume"), _lv(asks,0,"count"),
+                 _lv(asks,1,"price"), _lv(asks,1,"volume"), _lv(asks,1,"count"),
+                 _lv(asks,2,"price"), _lv(asks,2,"volume"), _lv(asks,2,"count"),
+                 _lv(asks,3,"price"), _lv(asks,3,"volume"), _lv(asks,3,"count"),
+                 _lv(asks,4,"price"), _lv(asks,4,"volume"), _lv(asks,4,"count"),
+                 spread_pct, bid_depth, ask_depth),
+            )
+            inserted = cur.rowcount > 0
+        return inserted
+
+    def get_latest_orderbook(self, symbol: str) -> Optional[dict]:
+        """Return the most-recent order-book snapshot for *symbol*, or None."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM intraday_orderbook
+                   WHERE symbol=?
+                   ORDER BY date DESC, time DESC
+                   LIMIT 1""",
+                (symbol,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_orderbook_history(self, symbol: str,
+                              date_int: int,
+                              limit: int = 500) -> list[dict]:
+        """Return intraday order-book snapshots for *symbol* on *date_int*.
+
+        Returns up to *limit* rows sorted ascending by time.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT date, time,
+                          bid1_price, bid1_vol, bid1_cnt,
+                          bid2_price, bid2_vol, bid2_cnt,
+                          bid3_price, bid3_vol, bid3_cnt,
+                          bid4_price, bid4_vol, bid4_cnt,
+                          bid5_price, bid5_vol, bid5_cnt,
+                          ask1_price, ask1_vol, ask1_cnt,
+                          ask2_price, ask2_vol, ask2_cnt,
+                          ask3_price, ask3_vol, ask3_cnt,
+                          ask4_price, ask4_vol, ask4_cnt,
+                          ask5_price, ask5_vol, ask5_cnt,
+                          spread_pct, bid_depth, ask_depth
+                   FROM intraday_orderbook
+                   WHERE symbol=? AND date=?
+                   ORDER BY time ASC
+                   LIMIT ?""",
+                (symbol, date_int, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]

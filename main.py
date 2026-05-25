@@ -289,40 +289,68 @@ def run_scan(aggregator: DataAggregator,
 
     # ── Intraday enrichment ──────────────────────────────────────────────
     if enrich_intraday:
+        from orderbook import compute_tradability
         tsetmc = aggregator.tsetmc
         enriched = 0
+        ob_saved = 0
+        time_int = int(scanned_at.strftime("%H%M%S"))
+
         for fd in fund_data:
             sym      = fd.get("symbol", "")
-            # ins_code is populated by fetch_all_fund_data from config;
-            # fall back to the in-memory discovery cache if somehow missing
             ins_code = fd.get("ins_code") or tsetmc._ins_code_cache.get(sym, "")
             nav_data = fd.get("nav_data") or {}
             nav      = nav_data.get("cancel_nav", 0)
 
-            if not ins_code or nav <= 0:
+            if not ins_code:
                 continue
 
-            # Fetch today's full tick list (GetTradeHistory returns all
-            # trades up to the current moment during the session).
-            ticks = tsetmc.get_intraday_trades(ins_code, today_int)
-            if ticks:
-                # INSERT OR IGNORE — new ticks added, existing ones kept
-                db.save_intraday_trades(sym, ins_code, today_int, ticks)
-                all_ticks = ticks   # fresh from API; already sorted by seq
-            else:
-                # API returned nothing (pre-market or closed) — use DB cache
-                all_ticks = db.get_intraday_trades(sym, today_int)
+            # ── Fetch & store intraday tick data ─────────────────────────
+            if nav > 0:
+                ticks = tsetmc.get_intraday_trades(ins_code, today_int)
+                if ticks:
+                    db.save_intraday_trades(sym, ins_code, today_int, ticks)
+                    all_ticks = ticks
+                else:
+                    all_ticks = db.get_intraday_trades(sym, today_int)
 
-            ctx = compute_intraday_context(all_ticks, nav)
-            if ctx:
-                fd["intraday_context"] = ctx
-                enriched += 1
-                logger.debug(
-                    "intraday %s: %d ticks  trend=%s slope=%+.4f",
-                    sym, ctx.tick_count, ctx.trend_label, ctx.trend_slope,
+                ctx = compute_intraday_context(all_ticks, nav)
+                if ctx:
+                    fd["intraday_context"] = ctx
+                    enriched += 1
+                    logger.debug(
+                        "intraday %s: %d ticks  trend=%s slope=%+.4f",
+                        sym, ctx.tick_count, ctx.trend_label, ctx.trend_slope,
+                    )
+
+            # ── Fetch & store order-book snapshot ─────────────────────────
+            ob = tsetmc.get_best_limits(ins_code)
+            if ob:
+                fd["order_book"] = ob   # refresh with current book
+                if db.save_orderbook_snapshot(sym, ins_code, today_int,
+                                               time_int, ob):
+                    ob_saved += 1
+
+                # Compute tradability and attach to fund data
+                price_data = fd.get("price_data") or {}
+                prem_pct = 0.0
+                if nav > 0:
+                    mkt = price_data.get("last_price") or price_data.get("close_price") or 0
+                    if mkt > 0:
+                        prem_pct = (mkt - nav) / nav * 100
+
+                direction = "SELL" if prem_pct >= 0 else "BUY"
+                nav_for_arb = (
+                    nav_data.get("issue_nav", nav)
+                    if direction == "SELL"
+                    else nav_data.get("cancel_nav", nav)
                 )
+                td = compute_tradability(direction, nav_for_arb, ob)
+                fd["tradability"] = td
 
-        logger.info("Intraday context enriched %d / %d funds", enriched, len(fund_data))
+        logger.info(
+            "Intraday context enriched %d / %d funds; %d order-book snapshots saved",
+            enriched, len(fund_data), ob_saved,
+        )
     # ────────────────────────────────────────────────────────────────────
 
     opps = scan_all(fund_data)

@@ -375,6 +375,123 @@ def create_app(db, scan_callback=None):
         dates = db.get_intraday_dates(symbol)
         return jsonify({"symbol": symbol, "dates": dates})
 
+    @app.route("/api/orderbook")
+    def api_orderbook():
+        """Return the latest order-book snapshot + tradability for *symbol*.
+
+        Query params:
+          symbol  – fund symbol (required)
+          nav     – optional NAV override for tradability calculation
+          direction – optional "BUY"|"SELL" override
+        """
+        from orderbook import compute_tradability, orderbook_from_db_row
+        symbol    = request.args.get("symbol", "")
+        nav_param = float(request.args.get("nav", 0) or 0)
+        dir_param = request.args.get("direction", "")
+
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        row = db.get_latest_orderbook(symbol)
+        if not row:
+            return jsonify({"symbol": symbol, "snapshot": None,
+                            "tradability": None})
+
+        ob = orderbook_from_db_row(row)
+        nav = nav_param
+
+        # Try to get NAV from latest scan snapshot
+        if nav <= 0:
+            latest_map = {r["symbol"]: r for r in db.get_latest()}
+            snap = latest_map.get(symbol, {})
+            nav = snap.get("cancel_nav") or snap.get("nav") or 0
+
+        direction = dir_param or "BUY"
+        td = compute_tradability(direction, nav, ob) if nav > 0 else None
+
+        return jsonify({
+            "symbol":   symbol,
+            "snapshot": {
+                "date":       row["date"],
+                "time":       row["time"],
+                "spread_pct": row["spread_pct"],
+                "bid_depth":  row["bid_depth"],
+                "ask_depth":  row["ask_depth"],
+                "bids": [
+                    {"price": row[f"bid{i}_price"],
+                     "volume": row[f"bid{i}_vol"],
+                     "count":  row[f"bid{i}_cnt"]}
+                    for i in range(1, 6)
+                ],
+                "asks": [
+                    {"price": row[f"ask{i}_price"],
+                     "volume": row[f"ask{i}_vol"],
+                     "count":  row[f"ask{i}_cnt"]}
+                    for i in range(1, 6)
+                ],
+            },
+            "tradability": {
+                "tradeable":            td.tradeable,
+                "direction":            td.direction,
+                "threshold_price":      td.threshold_price,
+                "best_executable_price": td.best_executable_price,
+                "executable_volume":    td.executable_volume,
+                "executable_value":     td.executable_value,
+                "avg_fill_price":       td.avg_fill_price,
+                "slippage_pct":         td.slippage_pct,
+                "spread_pct":           td.spread_pct,
+                "book_depth_score":     td.book_depth_score,
+                "reason":               td.reason,
+            } if td else None,
+        })
+
+    @app.route("/api/orderbook_history")
+    def api_orderbook_history():
+        """Return intraday order-book snapshots for *symbol* on *date*.
+
+        Query params:
+          symbol – fund symbol (required)
+          date   – YYYYMMDD (default: today)
+          limit  – max rows (default: 500)
+        """
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        symbol   = request.args.get("symbol", "")
+        date_str = request.args.get("date", "")
+        limit    = int(request.args.get("limit", 500))
+
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        if date_str:
+            date_int = int(date_str)
+        else:
+            date_int = int(_dt.now(ZoneInfo("Asia/Tehran")).strftime("%Y%m%d"))
+
+        rows = db.get_orderbook_history(symbol, date_int, limit)
+
+        # Convert to compact format for the chart:
+        # Each entry: {time (HHMMSS), spread_pct, bid_depth, ask_depth,
+        #              b1p, b1v, b2p, b2v, b3p, b3v, b4p, b4v, b5p, b5v,
+        #              a1p, a1v, a2p, a2v, a3p, a3v, a4p, a4v, a5p, a5v}
+        out = []
+        for r in rows:
+            entry = {
+                "time":       r["time"],
+                "spread_pct": r["spread_pct"],
+                "bid_depth":  r["bid_depth"],
+                "ask_depth":  r["ask_depth"],
+            }
+            for i in range(1, 6):
+                entry[f"b{i}p"] = r[f"bid{i}_price"]
+                entry[f"b{i}v"] = r[f"bid{i}_vol"]
+                entry[f"a{i}p"] = r[f"ask{i}_price"]
+                entry[f"a{i}v"] = r[f"ask{i}_vol"]
+            out.append(entry)
+
+        return jsonify({"symbol": symbol, "date": date_int,
+                        "count": len(out), "snapshots": out})
+
     @app.route("/api/stream")
     def api_stream():
         """Server-Sent Events endpoint for real-time scan updates."""

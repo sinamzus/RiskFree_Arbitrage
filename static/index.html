@@ -370,6 +370,55 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .tc-muted { color: var(--muted); }
 .tc-sym   { font-weight: 800; }
 
+/* ─── Order-book panel ───────────────────────────────────────── */
+#ob-panel {
+  display: none;
+  background: var(--surf);
+  border-top: 1px solid var(--brd);
+  padding: 8px 14px;
+  flex-shrink: 0;
+}
+#ob-panel.visible { display: flex; gap: 18px; align-items: flex-start; }
+.ob-ladder {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3,auto);
+  gap: 1px 10px;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.ob-header { color: var(--muted); font-weight: 600; font-size: 10px; text-align: center; }
+.ob-bid   { color: var(--green); text-align: left; }
+.ob-ask   { color: var(--red);   text-align: left; }
+.ob-price { text-align: right; }
+.ob-vol   { text-align: left; color: var(--muted); }
+.ob-depth-bar {
+  height: 3px; border-radius: 2px; margin-top: 1px;
+  background: rgba(255,255,255,.08);
+  overflow: hidden;
+}
+.ob-depth-fill { height: 100%; border-radius: 2px; }
+.ob-meta {
+  display: flex; flex-direction: column; gap: 5px;
+  min-width: 180px; font-size: var(--fs-xs);
+}
+.ob-meta-row { display: flex; justify-content: space-between; gap: 8px; }
+.ob-meta-lbl { color: var(--muted); }
+.ob-meta-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+.ob-tradable-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700;
+  margin-top: 4px;
+}
+.ob-tradable-badge.yes { background: rgba(38,166,154,.18); color: var(--green); border: 1px solid rgba(38,166,154,.4); }
+.ob-tradable-badge.no  { background: rgba(239,83,80,.14);  color: var(--red);   border: 1px solid rgba(239,83,80,.35); }
+.ob-reason { font-size: 10px; color: var(--muted); margin-top: 3px; max-width: 240px; line-height: 1.4; }
+
+/* tradability icon in fund list */
+.fi-exec { font-size: 9px; margin-top: 1px; }
+.fi-exec.yes { color: var(--green); }
+.fi-exec.no  { color: var(--red); }
+
 /* ─── Loading overlay ────────────────────────────────────────── */
 #loading {
   position: fixed; inset: 0;
@@ -492,6 +541,29 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       </div>
     </div>
 
+    <!-- Order-book panel (shown when a fund is selected) -->
+    <div id="ob-panel">
+      <!-- Bid ladder -->
+      <div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-weight:600">📗 خریداران (Bids)</div>
+        <div class="ob-ladder" id="ob-bids"></div>
+      </div>
+      <!-- Ask ladder -->
+      <div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-weight:600">📕 فروشندگان (Asks)</div>
+        <div class="ob-ladder" id="ob-asks"></div>
+      </div>
+      <!-- Tradability meta -->
+      <div class="ob-meta" id="ob-meta">
+        <div class="ob-meta-row"><span class="ob-meta-lbl">اسپرد:</span><span class="ob-meta-val" id="ob-spread">—</span></div>
+        <div class="ob-meta-row"><span class="ob-meta-lbl">عمق خرید:</span><span class="ob-meta-val" id="ob-bid-depth">—</span></div>
+        <div class="ob-meta-row"><span class="ob-meta-lbl">عمق فروش:</span><span class="ob-meta-val" id="ob-ask-depth">—</span></div>
+        <div class="ob-meta-row"><span class="ob-meta-lbl">امتیاز نقدشوندگی:</span><span class="ob-meta-val" id="ob-score">—</span></div>
+        <div id="ob-tradable-badge" class="ob-tradable-badge"></div>
+        <div id="ob-reason" class="ob-reason"></div>
+      </div>
+    </div>
+
     <!-- Bottom -->
     <div id="bottom">
       <div id="stats-panel">
@@ -557,6 +629,7 @@ window.addEventListener('DOMContentLoaded', () => {
   loadStats();
   setInterval(loadFunds, 60_000);
   setInterval(loadStats, 120_000);
+  setInterval(() => { if (selected.size===1) loadOrderBook([...selected][0]); }, 30_000);
   window.addEventListener('resize', onResize);
 });
 
@@ -750,6 +823,86 @@ async function fetchRows(sym) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+//  Order-book panel
+// ══════════════════════════════════════════════════════════════════
+let obCache = {};   // sym → {snapshot, tradability}
+
+async function loadOrderBook(sym) {
+  if (!sym) { document.getElementById('ob-panel').classList.remove('visible'); return; }
+
+  // Check fund signal direction from latest data
+  const fund = latestFunds.find(f => f.symbol === sym) || {};
+  const sig  = fund.signal || '';
+  const direction = sig.startsWith('BUY') ? 'BUY' : sig.startsWith('SELL') ? 'SELL' : 'BUY';
+  const nav  = fund.cancel_nav || fund.nav || 0;
+
+  const url = `/api/orderbook?symbol=${E(sym)}&direction=${direction}${nav > 0 ? '&nav=' + nav : ''}`;
+  const r = await fetch(url).catch(() => null);
+  if (!r?.ok) return;
+  const j = await r.json();
+  obCache[sym] = j;
+  renderOrderBook(sym, j);
+}
+
+function renderOrderBook(sym, data) {
+  const panel = document.getElementById('ob-panel');
+  const snap  = data?.snapshot;
+  const td    = data?.tradability;
+
+  if (!snap) {
+    panel.classList.remove('visible');
+    return;
+  }
+  panel.classList.add('visible');
+
+  const maxVol = Math.max(
+    ...snap.bids.map(b => b.volume || 0),
+    ...snap.asks.map(a => a.volume || 0),
+    1,
+  );
+
+  const ladderRow = (level, side) => {
+    if (!level.price) return '';
+    const bar = Math.round(level.volume / maxVol * 100);
+    const col = side === 'bid' ? 'var(--green)' : 'var(--red)';
+    return `
+      <span class="ob-${side}">${fmtN(level.price)}</span>
+      <span class="ob-vol">${fmtV(level.volume)}</span>
+      <span class="ob-vol" style="color:var(--muted);font-size:9px">${level.count || ''}×</span>
+      <div class="ob-depth-bar" style="grid-column:1/-1;margin:-2px 0 3px">
+        <div class="ob-depth-fill" style="width:${bar}%;background:${col}40"></div>
+      </div>`;
+  };
+
+  document.getElementById('ob-bids').innerHTML =
+    `<span class="ob-header">قیمت</span><span class="ob-header">حجم</span><span class="ob-header">تعداد</span>` +
+    snap.bids.map(b => ladderRow(b, 'bid')).join('');
+
+  document.getElementById('ob-asks').innerHTML =
+    `<span class="ob-header">قیمت</span><span class="ob-header">حجم</span><span class="ob-header">تعداد</span>` +
+    snap.asks.map(a => ladderRow(a, 'ask')).join('');
+
+  document.getElementById('ob-spread').textContent     = snap.spread_pct ? snap.spread_pct.toFixed(3) + '%' : '—';
+  document.getElementById('ob-bid-depth').textContent  = snap.bid_depth ? fmtV(snap.bid_depth) + ' واحد' : '—';
+  document.getElementById('ob-ask-depth').textContent  = snap.ask_depth ? fmtV(snap.ask_depth) + ' واحد' : '—';
+  document.getElementById('ob-score').textContent      = td ? td.book_depth_score.toFixed(1) + '/100' : '—';
+
+  const badge  = document.getElementById('ob-tradable-badge');
+  const reason = document.getElementById('ob-reason');
+  if (td) {
+    badge.className = 'ob-tradable-badge ' + (td.tradeable ? 'yes' : 'no');
+    badge.textContent = td.tradeable
+      ? `✓ قابل اجرا — ${fmtV(td.executable_volume)} واحد`
+      : '✗ غیرقابل اجرا';
+    reason.textContent = td.reason || '';
+  } else {
+    badge.className = 'ob-tradable-badge';
+    badge.textContent = '';
+    reason.textContent = '';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
 //  Fund list
 // ══════════════════════════════════════════════════════════════════
 function renderList() {
@@ -786,6 +939,11 @@ function renderList() {
       ? `<span style="font-size:9px;color:var(--muted);margin-top:1px">${trendIcon} ${(f.trend_slope||0)>0?'+':''}${(f.trend_slope||0).toFixed(3)}%</span>`
       : '';
     const unscanned = !f.scanned_at;
+    // tradability indicator
+    const hasSignal = sig === 'BUY' || sig === 'SELL';
+    const execEl = hasSignal
+      ? `<span class="fi-exec ${f.tradable ? 'yes' : 'no'}" title="${f.tradability_reason||''}">${f.tradable ? '✓exec' : '✗exec'}</span>`
+      : '';
     return `<div class="fi ${sc}" style="${unscanned?'opacity:.5':''}" onclick="onClick(event,'${f.symbol}')">
       <div>
         <div class="fi-name">${f.symbol}</div>
@@ -795,6 +953,7 @@ function renderList() {
         <span class="fi-pd ${cls}">${pd>=0?'+':''}${pd.toFixed(2)}%</span>
         <span class="badge badge-${sig}">${sigLabel}</span>
         ${trendEl}
+        ${execEl}
       </div>
     </div>`;
   }).join('');
@@ -827,6 +986,9 @@ function afterSelect() {
 
   cache = {};
   redraw();
+  // Update order-book panel
+  if (n === 1) loadOrderBook([...selected][0]);
+  else document.getElementById('ob-panel').classList.remove('visible');
 }
 
 // ══════════════════════════════════════════════════════════════════
