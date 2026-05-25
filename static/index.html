@@ -405,6 +405,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   <!-- Intraday TF (hidden unless intraday source) -->
   <div class="pill-group" id="tf-intra-grp" style="display:none">
+    <button class="pill" data-m="0"  onclick="setInterval(0)">تیک</button>
     <button class="pill" data-m="1"  onclick="setInterval(1)">۱m</button>
     <button class="pill on" data-m="5"  onclick="setInterval(5)">۵m</button>
     <button class="pill" data-m="15" onclick="setInterval(15)">۱۵m</button>
@@ -473,6 +474,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <span class="ib-lbl">NAV</span><span class="ib-val" id="ib-nav">—</span>
       <span class="ib-lbl">حجم</span><span class="ib-val" id="ib-vol">—</span>
       <span class="ib-lbl">صرف</span><span class="ib-val" id="ib-prem">—</span>
+      <span class="ib-lbl" id="ib-ticks-lbl" style="display:none">تیک</span><span class="ib-val" id="ib-ticks" style="display:none">—</span>
     </div>
 
     <!-- Charts -->
@@ -667,6 +669,9 @@ async function loadStats() {
   if (selected.size === 1) renderStats([...selected][0]);
 }
 
+// intraday NAV cache: sym+date → nav value
+const navCache = {};
+
 async function fetchRows(sym) {
   const dateVal = document.getElementById('intraday-date').value || todayStr();
   const dateInt = dateVal.replace(/-/g,'');
@@ -678,16 +683,34 @@ async function fetchRows(sym) {
     const r = await fetch(`/api/daily_history?symbol=${E(sym)}&days=${days}`).catch(()=>null);
     if (r?.ok) { const j = await r.json(); rows = j.history || []; }
     document.getElementById('boot-notice').style.display = rows.length ? 'none' : '';
+
   } else if (src === 'scan') {
     const r = await fetch(`/api/history?symbol=${E(sym)}&days=${days}`).catch(()=>null);
     if (r?.ok) { const j = await r.json(); rows = j.history || []; }
     document.getElementById('boot-notice').style.display = 'none';
+
   } else {
-    // intraday
-    const r = await fetch(
-      `/api/intraday_bars?symbol=${E(sym)}&date=${dateInt}&interval=${itvMin}`
-    ).catch(()=>null);
-    if (r?.ok) { const j = await r.json(); rows = j.bars || []; }
+    // intraday — tick mode (itvMin===0) or bar mode
+    if (itvMin === 0) {
+      // raw ticks
+      const r = await fetch(
+        `/api/intraday_ticks?symbol=${E(sym)}&date=${dateInt}`
+      ).catch(()=>null);
+      if (r?.ok) {
+        const j = await r.json();
+        rows = j.ticks || [];
+        if (j.nav) navCache[sym+'_'+dateInt] = j.nav;
+      }
+    } else {
+      const r = await fetch(
+        `/api/intraday_bars?symbol=${E(sym)}&date=${dateInt}&interval=${itvMin}`
+      ).catch(()=>null);
+      if (r?.ok) {
+        const j = await r.json();
+        rows = j.bars || [];
+        if (j.nav) navCache[sym+'_'+dateInt] = j.nav;
+      }
+    }
     if (!rows.length) document.getElementById('boot-notice').style.display = '';
     else              document.getElementById('boot-notice').style.display = 'none';
   }
@@ -835,7 +858,11 @@ async function redraw() {
     const col = PALETTE[ci++ % PALETTE.length];
 
     if (src === 'intraday') {
-      drawIntraday(sym, rows, col, showVol);
+      if (itvMin === 0) {
+        drawTicks(sym, rows, col, showVol);
+      } else {
+        drawIntraday(sym, rows, col, showVol);
+      }
     } else if (multi) {
       drawMultiLine(sym, rows, col, doNorm);
     } else if (src === 'daily' && ctype === 'candle') {
@@ -848,9 +875,24 @@ async function redraw() {
 
   if (anyData) { PC.timeScale().fitContent(); KC.timeScale().fitContent(); }
 
+  // tick count visibility in info bar
+  const isIntra = src === 'intraday';
+  ['ib-ticks-lbl','ib-ticks'].forEach(id =>
+    document.getElementById(id).style.display = isIntra ? '' : 'none'
+  );
+  if (isIntra && selected.size === 1) {
+    const sym0 = [...selected][0];
+    const dateVal = document.getElementById('intraday-date').value || todayStr();
+    const dateInt = dateVal.replace(/-/g,'');
+    const tickRows = cache[`${sym0}_${src}_${days}_${itvMin}_${dateInt}`] || [];
+    document.getElementById('ib-ticks').textContent =
+      (tickRows.length).toLocaleString('fa-IR') + (itvMin === 0 ? ' معامله' : ' بار');
+  }
+
   // Update label
   const sym = [...selected][0] || '';
   document.getElementById('price-lbl').textContent =
+    src === 'intraday' && itvMin === 0 ? `${sym} — تیک به تیک` :
     src === 'intraday' ? `${sym} — ${itvMin}m شمعی` :
     multi ? 'مقایسه — ' + [...selected].join(' / ') :
     sym + (src === 'daily' ? ' — قیمت + NAV' : ' — اسکن');
@@ -902,6 +944,64 @@ function drawLine(sym, rows, col, showNav, showVol) {
     addVolume(rows, r => ({ time:dStr(r.date), value:r.volume||0, color:'rgba(91,156,246,.22)' }));
 }
 
+// ── Raw tick line (second-by-second price + premium) ───────────────
+function drawTicks(sym, rows, col, showVol) {
+  if (!rows.length) return;
+  const dateVal = (document.getElementById('intraday-date').value || todayStr()).replace(/-/g,'');
+  const navKey  = sym + '_' + dateVal;
+  const nav     = navCache[navKey] || 0;
+
+  // Price line
+  const ps = PC.addLineSeries({
+    color: col, lineWidth: 1,
+    priceLineVisible: true, lastValueVisible: true,
+    crosshairMarkerVisible: false,
+  });
+  ps.setData(rows.map(t => ({
+    time:  hhmmss2unix(t.time, dateVal),
+    value: t.price,
+  })).filter(d => d.value > 0));
+  AS[sym] = { price: ps };
+
+  // Volume histogram (trade-level, each bar = 1 trade)
+  if (showVol && rows.length < 5000) {   // skip if too many ticks
+    const vs = PC.addHistogramSeries({
+      color: 'rgba(91,156,246,.2)',
+      priceFormat: { type: 'volume' }, priceScaleId: 'vol',
+    });
+    PC.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, visible: false });
+    vs.setData(rows.map(t => ({
+      time:  hhmmss2unix(t.time, dateVal),
+      value: t.volume,
+      color: (t.premium_pct ?? 0) >= 0 ? 'rgba(239,83,80,.3)' : 'rgba(38,166,154,.3)',
+    })));
+    AS[sym].vol = vs;
+  }
+
+  // Premium line in the premium panel
+  if (nav > 0) {
+    const hs = KC.addLineSeries({
+      color: col, lineWidth: 1,
+      priceLineVisible: false, lastValueVisible: true,
+    });
+    hs.setData(rows.map(t => ({
+      time:  hhmmss2unix(t.time, dateVal),
+      value: t.premium_pct ?? 0,
+    })));
+
+    // Zero + threshold lines
+    const zeroData = rows.map(t => ({ time: hhmmss2unix(t.time, dateVal), value: 0 }));
+    KC.addLineSeries({ color:'rgba(255,255,255,.12)', lineWidth:1,
+      priceLineVisible:false, lastValueVisible:false }).setData(zeroData);
+    [[0.3,'rgba(239,83,80,.5)'],[-.3,'rgba(38,166,154,.5)']].forEach(([v,c]) =>
+      KC.addLineSeries({ color:c, lineWidth:1, lineStyle:LineStyle.Dashed,
+        priceLineVisible:false, lastValueVisible:false })
+        .setData(rows.map(t => ({ time:hhmmss2unix(t.time,dateVal), value:+v })))
+    );
+    AS[sym].prem = hs;
+  }
+}
+
 // ── Intraday candlestick ────────────────────────────────────────────
 function drawIntraday(sym, rows, col, showVol) {
   const cs = PC.addCandlestickSeries({
@@ -944,25 +1044,43 @@ function drawMultiLine(sym, rows, col, doNorm) {
   AS[sym].price = ps;
 }
 
-// ── Premium histogram ───────────────────────────────────────────────
+// ── Premium histogram (daily/scan) or bar premium (intraday bars) ──
 function drawPrem(sym, rows, col) {
-  const pk = src==='intraday' ? null :
-             src==='daily'    ? 'premium_pct' : 'premium_discount_pct';
-  const tk = src==='intraday' ? 'time'  :
-             src==='daily'    ? 'date'  : 'scanned_at';
-
-  if (!pk) return;   // intraday: no NAV per bar
+  // For raw tick mode, premium is drawn inside drawTicks — skip here
+  if (src === 'intraday' && itvMin === 0) return;
 
   const dateVal = (document.getElementById('intraday-date').value || todayStr()).replace(/-/g,'');
-  const hs = KC.addHistogramSeries({ priceLineVisible:false, lastValueVisible:false, base:0 });
-  const data = rows.map(r => {
-    const v = r[pk] || 0;
-    return {
-      time:  src==='intraday' ? hhmm2unix(r[tk], dateVal) : toT(r[tk]),
-      value: v,
-      color: v >= 0 ? 'rgba(239,83,80,.6)' : 'rgba(38,166,154,.6)',
-    };
-  });
+  const navKey  = sym + '_' + dateVal.replace(/-/g,'');
+
+  let data;
+  if (src === 'intraday') {
+    // Intraday bars: use premium_pct embedded in each bar by the server
+    // Fall back to computing from navCache if field absent
+    const nav = navCache[navKey] || 0;
+    data = rows.map(r => {
+      const v = r.premium_pct != null
+        ? r.premium_pct
+        : (nav > 0 ? (r.close - nav) / nav * 100 : 0);
+      return {
+        time:  hhmm2unix(r.time, dateVal.replace(/-/g,'')),
+        value: v,
+        color: v >= 0 ? 'rgba(239,83,80,.6)' : 'rgba(38,166,154,.6)',
+      };
+    });
+  } else {
+    const pk = src === 'daily' ? 'premium_pct' : 'premium_discount_pct';
+    const tk = src === 'daily' ? 'date'         : 'scanned_at';
+    data = rows.map(r => {
+      const v = r[pk] || 0;
+      return {
+        time:  toT(r[tk]),
+        value: v,
+        color: v >= 0 ? 'rgba(239,83,80,.6)' : 'rgba(38,166,154,.6)',
+      };
+    });
+  }
+
+  if (!data.length) return;
 
   // Zero line
   KC.addLineSeries({ color:'rgba(255,255,255,.1)', lineWidth:1,
@@ -971,13 +1089,14 @@ function drawPrem(sym, rows, col) {
 
   // ±0.3% thresholds for single fund
   if (selected.size === 1) {
-    [['-0.3','rgba(38,166,154,.5)'],['0.3','rgba(239,83,80,.5)']].forEach(([v,c]) => {
+    [[0.3,'rgba(239,83,80,.5)'],[-0.3,'rgba(38,166,154,.5)']].forEach(([v,c]) => {
       KC.addLineSeries({ color:c, lineWidth:1, lineStyle:LineStyle.Dashed,
         priceLineVisible:false, lastValueVisible:false })
-        .setData(data.map(d => ({ time:d.time, value:+v })));
+        .setData(data.map(d => ({ time:d.time, value:v })));
     });
   }
 
+  const hs = KC.addHistogramSeries({ priceLineVisible:false, lastValueVisible:false, base:0 });
   hs.setData(data);
   if (!AS[sym]) AS[sym] = {};
   AS[sym].prem = hs;
@@ -1175,6 +1294,15 @@ function hhmm2unix(hhmm, yyyymmdd) {
   const h = +s.slice(0,2), m = +s.slice(2,4);
   const ds = yyyymmdd;
   const iso = `${ds.slice(0,4)}-${ds.slice(4,6)}-${ds.slice(6,8)}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00+03:30`;
+  return Math.floor(new Date(iso).getTime() / 1000);
+}
+
+// HHMMSS int + YYYYMMDD string → UTC unix seconds (tick precision)
+function hhmmss2unix(hhmmss, yyyymmdd) {
+  const s = String(hhmmss).padStart(6,'0');
+  const h = +s.slice(0,2), m = +s.slice(2,4), sec = +s.slice(4,6);
+  const ds = yyyymmdd;
+  const iso = `${ds.slice(0,4)}-${ds.slice(4,6)}-${ds.slice(6,8)}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}+03:30`;
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 

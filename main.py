@@ -280,7 +280,9 @@ def run_scan(aggregator: DataAggregator,
         enriched = 0
         for fd in fund_data:
             sym      = fd.get("symbol", "")
-            ins_code = fd.get("ins_code") or tsetmc.get_ins_code(sym)
+            # ins_code is populated by fetch_all_fund_data from config;
+            # fall back to the in-memory discovery cache if somehow missing
+            ins_code = fd.get("ins_code") or tsetmc._ins_code_cache.get(sym, "")
             nav_data = fd.get("nav_data") or {}
             nav      = nav_data.get("cancel_nav", 0)
 

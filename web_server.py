@@ -187,14 +187,37 @@ def create_app(db, scan_callback=None):
         history = db.get_daily_history(symbol, days)
         return jsonify({"symbol": symbol, "days": days, "history": history})
 
+    def _nav_for_date(symbol: str, date_int: int) -> float:
+        """Return NAV for *symbol* on *date_int* (YYYYMMDD).
+
+        Uses daily_history.yesterday_price (≈ NAV) for historical dates.
+        For today, falls back to the latest snapshot.
+        """
+        today_int = int(datetime.now().strftime("%Y%m%d"))
+        if date_int < today_int:
+            # Historical: use yesterday_price from daily_history
+            rows = db.get_daily_history(symbol, days=365)
+            for r in rows:
+                if r.get("date") == date_int:
+                    return r.get("yesterday_price", 0)
+            return 0
+        else:
+            # Today or future: use latest snapshot NAV
+            latest = {r["symbol"]: r for r in db.get_latest()}
+            snap = latest.get(symbol, {})
+            return snap.get("cancel_nav") or snap.get("nav") or 0
+
     @app.route("/api/intraday_bars")
     def api_intraday_bars():
-        """Aggregate intraday tick trades into OHLCV bars.
+        """Aggregate intraday tick trades into OHLCV bars + premium per bar.
 
         Query params:
           symbol   – fund symbol (required)
           date     – YYYYMMDD int (default: today)
           interval – minutes per bar: 1, 5, 15, 30, 60 (default: 5)
+
+        Response includes ``nav`` (float) so the client can compute
+        per-bar premium_pct = (bar.close - nav) / nav * 100.
         """
         symbol   = request.args.get("symbol", "")
         interval = int(request.args.get("interval", 5))
@@ -210,11 +233,70 @@ def create_app(db, scan_callback=None):
 
         ticks = db.get_intraday_trades(symbol, date_int)
         bars  = _aggregate_ticks(ticks, interval)
+        nav   = _nav_for_date(symbol, date_int)
+
+        # Embed premium_pct into each bar
+        if nav > 0:
+            for b in bars:
+                b["premium_pct"] = round((b["close"] - nav) / nav * 100, 4)
+        else:
+            for b in bars:
+                b["premium_pct"] = None
+
         return jsonify({
             "symbol":   symbol,
             "date":     date_int,
             "interval": interval,
+            "nav":      nav,
             "bars":     bars,
+        })
+
+    @app.route("/api/intraday_ticks")
+    def api_intraday_ticks():
+        """Return raw tick-level trades for *symbol* on *date_int*.
+
+        Query params:
+          symbol – fund symbol (required)
+          date   – YYYYMMDD int (default: today)
+
+        Each tick dict:
+          seq, time (HHMMSS int), price, volume, canceled,
+          premium_pct (float|null — if NAV known)
+
+        Use this for second-by-second premium animation and signal audit.
+        """
+        symbol   = request.args.get("symbol", "")
+        date_int = request.args.get(
+            "date",
+            datetime.now().strftime("%Y%m%d"),
+        )
+        date_int = int(date_int)
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        ticks = db.get_intraday_trades(symbol, date_int)
+        nav   = _nav_for_date(symbol, date_int)
+
+        result = []
+        for t in ticks:
+            if t.get("canceled"):
+                continue
+            p = t.get("price", 0)
+            prem = round((p - nav) / nav * 100, 4) if nav > 0 and p > 0 else None
+            result.append({
+                "seq":         t["seq"],
+                "time":        t["time"],   # HHMMSS int
+                "price":       p,
+                "volume":      t.get("volume", 0),
+                "premium_pct": prem,
+            })
+
+        return jsonify({
+            "symbol":     symbol,
+            "date":       date_int,
+            "nav":        nav,
+            "tick_count": len(result),
+            "ticks":      result,
         })
 
     @app.route("/api/intraday_dates")
