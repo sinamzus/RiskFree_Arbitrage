@@ -418,9 +418,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   <!-- Intraday lookback (visible only in intraday mode) -->
   <div class="pill-group" id="intra-days-grp" style="display:none">
-    <button class="pill on" data-id="1"  onclick="setIntraDays(1)">۱D</button>
+    <button class="pill"    data-id="1"  onclick="setIntraDays(1)">۱D</button>
     <button class="pill"    data-id="3"  onclick="setIntraDays(3)">۳D</button>
-    <button class="pill"    data-id="5"  onclick="setIntraDays(5)">۵D</button>
+    <button class="pill on" data-id="5"  onclick="setIntraDays(5)">۵D</button>
     <button class="pill"    data-id="10" onclick="setIntraDays(10)">۱۰D</button>
     <button class="pill"    data-id="20" onclick="setIntraDays(20)">۲۰D</button>
   </div>
@@ -544,7 +544,7 @@ let days        = 30;
 let src         = 'daily';         // 'daily' | 'scan' | 'intraday'
 let ctype       = 'candle';        // 'candle' | 'line'
 let itvMin      = 5;               // intraday interval minutes
-let intraDays   = 1;               // intraday lookback in trading days
+let intraDays   = 5;               // intraday lookback in trading days
 let syncing     = false;
 
 // ══════════════════════════════════════════════════════════════════
@@ -569,24 +569,32 @@ function todayStr() {
 //  Charts
 // ══════════════════════════════════════════════════════════════════
 function tvOpts(el, showTimeAxis) {
-  // Jalali tick formatter for the time-scale axis
-  const jalaliTickFmt = (time, tickMarkType) => {
-    if (typeof time === 'string') {
-      // Daily mode: "YYYY-MM-DD" string
-      const [gy, gm, gd] = time.split('-').map(Number);
-      const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
-      if (tickMarkType === 0) return String(jy);
-      if (tickMarkType === 1) return String(jy) + '/' + String(jm).padStart(2,'0');
-      return String(jm).padStart(2,'0') + '/' + String(jd).padStart(2,'0');
-    } else {
-      // Intraday mode: Unix timestamp number
-      const { jy, jm, jd, hh, mm } = unixToJalali(time);
-      if (tickMarkType === 0) return String(jy);
-      if (tickMarkType === 1) return String(jy) + '/' + String(jm).padStart(2,'0');
-      if (tickMarkType === 2) return String(jm).padStart(2,'0') + '/' + String(jd).padStart(2,'0');
-      return String(hh).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+  // ── Jalali converters for TradingView time values ─────────────────
+  // TradingView passes BusinessDay objects {year,month,day} for string-date
+  // series, and UTCTimestamp (number) for Unix-timestamp series.
+  const jalaliFromTV = (time) => {
+    if (typeof time === 'number') {
+      // Intraday: UTC Unix seconds → Iran local → Jalali
+      return unixToJalali(time);
     }
+    // Daily (BusinessDay object {year,month,day} or "YYYY-MM-DD" string)
+    const gy = time.year  || +String(time).slice(0,4);
+    const gm = time.month || +String(time).slice(5,7);
+    const gd = time.day   || +String(time).slice(8,10);
+    const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+    return { jy, jm, jd, hh: 0, mm: 0, ss: 0 };
   };
+
+  const p2 = n => String(n).padStart(2, '0');
+
+  const jalaliTickFmt = (time, tickMarkType) => {
+    const { jy, jm, jd, hh, mm } = jalaliFromTV(time);
+    if (tickMarkType === 0) return String(jy);                        // Year
+    if (tickMarkType === 1) return jy + '/' + p2(jm);                // Month
+    if (tickMarkType === 2) return p2(jm) + '/' + p2(jd);            // Day
+    return p2(hh) + ':' + p2(mm);                                    // Time
+  };
+
   return {
     width: el.clientWidth, height: el.clientHeight,
     layout: { background: { color: TV.bg }, textColor: TV.txt,
@@ -596,13 +604,10 @@ function tvOpts(el, showTimeAxis) {
     rightPriceScale: { borderColor: TV.brd },
     localization: {
       timeFormatter: (time) => {
-        if (typeof time === 'string') {
-          const [gy, gm, gd] = time.split('-').map(Number);
-          const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
-          return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
-        }
-        const { jy, jm, jd, hh, mm } = unixToJalali(time);
-        return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')} ${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+        const { jy, jm, jd, hh, mm } = jalaliFromTV(time);
+        const dateStr = `${jy}/${p2(jm)}/${p2(jd)}`;
+        if (typeof time === 'number') return `${dateStr} ${p2(hh)}:${p2(mm)}`;
+        return dateStr;
       },
     },
     timeScale: {
@@ -1368,15 +1373,22 @@ function onRowClick(sym) {
 /**
  * Convert Gregorian date to Jalali (Shamsi).
  * Returns [jYear, jMonth, jDay].
+ *
+ * Algorithm by Roozbeh Pournader & Mohammad Toossi; corrected epoch = 1600 CE.
+ * Verified: 2024-05-25 → [1403, 3, 5]  (Khordad 5, 1403)
  */
 function gregorianToJalali(gy, gm, gd) {
-  const g_d_no = [0,31,59,90,120,151,181,212,243,273,304,334];
-  const isLeapG = y => (y%4===0 && y%100!==0) || y%400===0;
-  const gy2 = gm > 2 ? gy + 1 : gy;
-  let g_day_no = 365*gy + Math.floor((gy2+3)/4) - Math.floor((gy2+99)/100) + Math.floor((gy2+399)/400);
-  for (let i = 0; i < gm-1; i++) g_day_no += g_d_no[i];
-  if (gm > 2 && isLeapG(gy)) g_day_no++;
-  g_day_no += gd;
+  // Shift epoch to 1600 CE (= Jalali year 979)
+  const g_y = gy - 1600;
+  const g_m = gm - 1;
+  const g_d = gd - 1;
+  const gMon = [31,28,31,30,31,30,31,31,30,31,30,31];
+
+  let g_day_no = 365*g_y + Math.floor((g_y+3)/4) - Math.floor((g_y+99)/100) + Math.floor((g_y+399)/400);
+  for (let i = 0; i < g_m; i++) g_day_no += gMon[i];
+  // Leap day for the year's Feb if past Feb
+  if (g_m > 1 && ((g_y%4===0 && g_y%100!==0) || g_y%400===0)) g_day_no++;
+  g_day_no += g_d;
 
   let j_day_no = g_day_no - 79;
   const j_np = Math.floor(j_day_no / 12053);
@@ -1387,9 +1399,9 @@ function gregorianToJalali(gy, gm, gd) {
     jy += Math.floor((j_day_no-1)/365);
     j_day_no = (j_day_no-1) % 365;
   }
-  const jml = [31,31,31,31,31,31,30,30,30,30,30,29];
+  const jMon = [31,31,31,31,31,31,30,30,30,30,30,29];
   let jm = 0;
-  for (jm = 0; jm < 11 && j_day_no >= jml[jm]; jm++) j_day_no -= jml[jm];
+  for (jm = 0; jm < 11 && j_day_no >= jMon[jm]; jm++) j_day_no -= jMon[jm];
   return [jy, jm+1, j_day_no+1];
 }
 
@@ -1447,22 +1459,30 @@ function hhmmss2unix(hhmmss, yyyymmdd) {
 }
 
 function fmtTime(t) {
-  if (typeof t === 'string') {
-    // "YYYY-MM-DD" → Jalali date
-    const [gy, gm, gd] = t.split('-').map(Number);
-    const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
-    return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
-  }
+  const p2 = n => String(n).padStart(2,'0');
   if (typeof t === 'number' && t > 20000000) {
     // YYYYMMDD integer → Jalali date
     const s = String(t);
-    const gy = +s.slice(0,4), gm = +s.slice(4,6), gd = +s.slice(6,8);
-    const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
-    return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
+    const [jy, jm, jd] = gregorianToJalali(+s.slice(0,4), +s.slice(4,6), +s.slice(6,8));
+    return `${jy}/${p2(jm)}/${p2(jd)}`;
   }
-  // Unix timestamp (intraday) → Jalali date + Iran time
-  const { jy, jm, jd, hh, mm } = unixToJalali(t);
-  return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')} ${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+  if (typeof t === 'number') {
+    // UTC Unix timestamp (intraday) → Jalali date + Iran time
+    const { jy, jm, jd, hh, mm } = unixToJalali(t);
+    return `${jy}/${p2(jm)}/${p2(jd)} ${p2(hh)}:${p2(mm)}`;
+  }
+  if (typeof t === 'string') {
+    // "YYYY-MM-DD" string
+    const [gy, gm, gd] = t.split('-').map(Number);
+    const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+    return `${jy}/${p2(jm)}/${p2(jd)}`;
+  }
+  if (t && typeof t === 'object' && 'year' in t) {
+    // TradingView BusinessDay object {year, month, day}
+    const [jy, jm, jd] = gregorianToJalali(t.year, t.month, t.day);
+    return `${jy}/${p2(jm)}/${p2(jd)}`;
+  }
+  return '';
 }
 
 function fmtN(v) { return v ? Math.round(v).toLocaleString('fa-IR') : '—'; }
