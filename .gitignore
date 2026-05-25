@@ -7,8 +7,7 @@ venv/
 .idea/
 .vscode/
 
-# Log files — NOT ignored so they can be committed for remote review
-# logs/
+logs/
 data/arbitrage.db
 data/
 tools/raw/
