@@ -115,6 +115,12 @@ html, body {
 .pill.on    { background: var(--blue); color: #fff; }
 .pill.on-green { background: var(--green); color: #fff; }
 
+/* divider inside unified TF group */
+.tf-div {
+  width: 1px; height: 14px; background: var(--brd2);
+  align-self: center; flex-shrink: 0; margin: 0 3px;
+}
+
 /* checkbox label */
 .chk {
   display: flex; align-items: center; gap: 5px;
@@ -394,36 +400,24 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <span id="header-title">📈 آربیتراژ بین‌روزی — صندوق‌های درآمد ثابت</span>
   <div class="h-div"></div>
 
-  <!-- Timeframe daily -->
-  <div class="pill-group" id="tf-daily-grp">
-    <button class="pill" data-d="7"   onclick="setDays(7)">۱W</button>
-    <button class="pill on" data-d="30"  onclick="setDays(30)">۱M</button>
-    <button class="pill" data-d="90"  onclick="setDays(90)">۳M</button>
-    <button class="pill" data-d="180" onclick="setDays(180)">۶M</button>
-    <button class="pill" data-d="365" onclick="setDays(365)">۱Y</button>
+  <!-- Unified TF bar: intraday | daily — انتخاب TF به‌صورت خودکار حالت را تعیین می‌کند -->
+  <div class="pill-group" id="tf-grp">
+    <button class="pill"    data-tf="intra-0"   onclick="setTF('intra',0)">تیک</button>
+    <button class="pill"    data-tf="intra-1"   onclick="setTF('intra',1)">۱m</button>
+    <button class="pill"    data-tf="intra-5"   onclick="setTF('intra',5)">۵m</button>
+    <button class="pill"    data-tf="intra-15"  onclick="setTF('intra',15)">۱۵m</button>
+    <button class="pill"    data-tf="intra-30"  onclick="setTF('intra',30)">۳۰m</button>
+    <button class="pill"    data-tf="intra-60"  onclick="setTF('intra',60)">۱H</button>
+    <span class="tf-div"></span>
+    <button class="pill"    data-tf="daily-7"   onclick="setTF('daily',7)">۱W</button>
+    <button class="pill on" data-tf="daily-30"  onclick="setTF('daily',30)">۱M</button>
+    <button class="pill"    data-tf="daily-90"  onclick="setTF('daily',90)">۳M</button>
+    <button class="pill"    data-tf="daily-180" onclick="setTF('daily',180)">۶M</button>
+    <button class="pill"    data-tf="daily-365" onclick="setTF('daily',365)">۱Y</button>
   </div>
 
-  <!-- Intraday TF (hidden unless intraday source) -->
-  <div class="pill-group" id="tf-intra-grp" style="display:none">
-    <button class="pill" data-m="0"  onclick="setInterval(0)">تیک</button>
-    <button class="pill" data-m="1"  onclick="setInterval(1)">۱m</button>
-    <button class="pill on" data-m="5"  onclick="setInterval(5)">۵m</button>
-    <button class="pill" data-m="15" onclick="setInterval(15)">۱۵m</button>
-    <button class="pill" data-m="30" onclick="setInterval(30)">۳۰m</button>
-    <button class="pill" data-m="60" onclick="setInterval(60)">۱H</button>
-  </div>
-
-  <!-- Date picker for intraday (hidden unless intraday) -->
+  <!-- Date picker: only visible in intraday mode -->
   <input type="date" id="intraday-date" style="display:none" onchange="redraw()">
-
-  <div class="h-div"></div>
-
-  <!-- Source toggle -->
-  <div class="pill-group">
-    <button class="pill on"  id="src-daily"   onclick="setSrc('daily')">روزانه</button>
-    <button class="pill"     id="src-scan"    onclick="setSrc('scan')">اسکن</button>
-    <button class="pill"     id="src-intraday" onclick="setSrc('intraday')">درون‌روزی</button>
-  </div>
 
   <div class="h-div"></div>
 
@@ -806,40 +800,38 @@ function afterSelect() {
 // ══════════════════════════════════════════════════════════════════
 //  Control handlers
 // ══════════════════════════════════════════════════════════════════
-function setDays(n) {
-  days = n;
-  document.querySelectorAll('#tf-daily-grp .pill').forEach(b =>
-    b.classList.toggle('on', +b.dataset.d === n)
+// ── Unified TF handler ─────────────────────────────────────────────────────
+// mode='intra' → درون‌روزی (val = minutes, 0 = tick)
+// mode='daily' → روزانه    (val = days)
+function setTF(mode, val) {
+  if (mode === 'intra') {
+    itvMin = val;
+    src    = 'intraday';
+  } else {
+    days = val;
+    src  = 'daily';
+  }
+  // Highlight the active pill
+  document.querySelectorAll('#tf-grp .pill').forEach(b =>
+    b.classList.toggle('on', b.dataset.tf === mode + '-' + val)
   );
-  cache = {}; loadStats(); redraw();
-}
-
-function setInterval(m) {
-  itvMin = m;
-  document.querySelectorAll('#tf-intra-grp .pill').forEach(b =>
-    b.classList.toggle('on', +b.dataset.m === m)
-  );
-  cache = {}; redraw();
-}
-
-function setSrc(s) {
-  src = s;
-  document.getElementById('src-daily'   ).classList.toggle('on', s === 'daily');
-  document.getElementById('src-scan'    ).classList.toggle('on', s === 'scan');
-  document.getElementById('src-intraday').classList.toggle('on', s === 'intraday');
-
-  const isIntra = s === 'intraday';
-  document.getElementById('tf-daily-grp').style.display   = isIntra ? 'none' : '';
-  document.getElementById('tf-intra-grp').style.display   = isIntra ? '' : 'none';
-  document.getElementById('intraday-date').style.display  = isIntra ? '' : 'none';
+  // Show date picker only in intraday mode
+  document.getElementById('intraday-date').style.display = (src === 'intraday') ? '' : 'none';
 
   cache = {};
-  if (isIntra && selected.size === 1) {
-    // Auto-pick the most recent date with data for this fund
+  if (src === 'intraday' && selected.size === 1) {
     autoPickIntraDate([...selected][0]).then(() => redraw());
   } else {
+    if (src === 'daily') loadStats();
     redraw();
   }
+}
+
+// Internal-only source override for scan data (no UI button needed)
+function setSrc(s) {
+  src = s;
+  cache = {};
+  redraw();
 }
 
 // Fetch available dates for a fund and set the date picker to the latest one

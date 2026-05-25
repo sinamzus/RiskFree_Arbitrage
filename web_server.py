@@ -106,7 +106,7 @@ def create_app(db, scan_callback=None):
     def api_funds():
         """All configured funds, enriched with latest scan snapshot where available.
 
-        Always returns all 30 config funds — even those not yet scanned.
+        Always returns all configured funds — even those not yet scanned.
         Funds without a snapshot get zero/null values so the UI can show them.
         """
         from config import FIXED_INCOME_ETFS
