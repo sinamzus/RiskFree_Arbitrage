@@ -793,7 +793,14 @@ function afterSelect() {
 
   renderList();
   if (n === 1) renderStats([...selected][0]);
-  redraw();
+
+  // In intraday mode: auto-pick latest available date for new selection
+  if (src === 'intraday' && n === 1) {
+    cache = {};
+    autoPickIntraDate([...selected][0]).then(() => redraw());
+  } else {
+    redraw();
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -826,7 +833,64 @@ function setSrc(s) {
   document.getElementById('tf-intra-grp').style.display   = isIntra ? '' : 'none';
   document.getElementById('intraday-date').style.display  = isIntra ? '' : 'none';
 
-  cache = {}; redraw();
+  cache = {};
+  if (isIntra && selected.size === 1) {
+    // Auto-pick the most recent date with data for this fund
+    autoPickIntraDate([...selected][0]).then(() => redraw());
+  } else {
+    redraw();
+  }
+}
+
+// Fetch available dates for a fund and set the date picker to the latest one
+async function autoPickIntraDate(sym) {
+  const r = await fetch(`/api/intraday_dates?symbol=${E(sym)}`).catch(() => null);
+  if (!r?.ok) return;
+  const j = await r.json();
+  const dates = j.dates || [];   // list of YYYYMMDD ints, ascending
+
+  const picker = document.getElementById('intraday-date');
+  if (dates.length === 0) {
+    // No data at all — stay on today and show notice
+    picker.value = todayStr();
+    showIntraNotice('هنوز داده درون‌روزی در DB نیست. ابتدا اسکریپر را اجرا کنید.');
+    return;
+  }
+
+  // Most recent date that has data
+  const latest = String(dates[dates.length - 1]);
+  const dateStr = `${latest.slice(0,4)}-${latest.slice(4,6)}-${latest.slice(6,8)}`;
+  picker.value = dateStr;
+
+  // If not today, show a notice
+  if (dateStr !== todayStr()) {
+    showIntraNotice(`آخرین داده موجود: ${dateStr}  (امروز هنوز در DB نیست)`);
+  } else {
+    hideIntraNotice();
+  }
+}
+
+function showIntraNotice(msg) {
+  let el = document.getElementById('intra-notice');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'intra-notice';
+    el.style.cssText = [
+      'position:absolute','bottom:8px','left:50%','transform:translateX(-50%)',
+      'background:rgba(37,42,56,.94)','border:1px solid rgba(240,192,64,.4)',
+      'color:var(--yellow)','font-size:11px','padding:5px 14px',
+      'border-radius:6px','z-index:20','pointer-events:none','white-space:nowrap',
+    ].join(';');
+    document.getElementById('charts').appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = '';
+  clearTimeout(el._t);
+  el._t = setTimeout(hideIntraNotice, 6000);
+}
+function hideIntraNotice() {
+  const el = document.getElementById('intra-notice');
+  if (el) el.style.display = 'none';
 }
 
 function setCType(t) {

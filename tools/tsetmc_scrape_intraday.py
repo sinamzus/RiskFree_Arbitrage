@@ -74,7 +74,14 @@ def hhmm(t: int) -> str:
 # ─── Endpoint probes (run once at startup) ───────────────────────────────────
 
 PROBE_INS  = "34718633636164421"   # کمند — always in list
-PROBE_DATE = None                  # set from first available date
+
+def _last_trading_day() -> int:
+    """Return yesterday (or last Thursday if today is Saturday/Sunday)."""
+    TSE_WEEKEND = {3, 4}
+    d = datetime.now() - timedelta(days=1)
+    while d.weekday() in TSE_WEEKEND:
+        d -= timedelta(days=1)
+    return int(d.strftime("%Y%m%d"))
 
 def warm_session():
     """Visit TSETMC main page to get session cookies."""
@@ -97,13 +104,19 @@ def warm_session():
 WORKING_STRATEGY: str | None = None   # filled by probe_endpoints()
 
 def probe_endpoints(date_int: int) -> str | None:
-    """Try all known endpoint patterns. Return name of first that works."""
+    """Try all known endpoint patterns. Return name of first that works.
+
+    Uses *yesterday* for the probe (today has no trades if market is closed).
+    """
     global WORKING_STRATEGY
     if WORKING_STRATEGY:
         return WORKING_STRATEGY
 
     ins = PROBE_INS
-    d   = str(date_int)
+    # Always probe with the last trading day (not today which may be empty)
+    probe_date = _last_trading_day()
+    d   = str(probe_date)
+    log(f"  (probe تاریخ: {probe_date})")
 
     candidates = [
         # ── CDN JSON endpoints ─────────────────────────────────────────────
