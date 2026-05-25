@@ -159,7 +159,13 @@ def search_all_terms(verbose: bool) -> dict[str, dict]:
         data = get_json(url, delay=0.2)
         if not data:
             continue
-        instruments = data if isinstance(data, list) else []
+        # TSETMC wraps results: {"instrumentSearch": [...]}
+        if isinstance(data, dict):
+            instruments = data.get("instrumentSearch", [])
+        elif isinstance(data, list):
+            instruments = data
+        else:
+            instruments = []
         for inst in instruments:
             code    = inst.get("insCode", "")
             name    = inst.get("lVal30", "")
@@ -232,7 +238,8 @@ def try_bulk_endpoints() -> dict[str, dict]:
                 items = []
                 if isinstance(data, list): items = data
                 elif isinstance(data, dict):
-                    for k in ["instruments", "data", "result", "closingPrice", "marketWatch"]:
+                    for k in ["instrumentSearch", "instruments", "data", "result",
+                              "closingPrice", "closingPriceInfo", "marketWatch"]:
                         if k in data: items = data[k]; break
                 for item in (items if isinstance(items, list) else []):
                     code = (item.get("insCode") or item.get("inscode") or
