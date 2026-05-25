@@ -21,12 +21,19 @@ from datetime import datetime
 from typing import Optional
 
 
-def _aggregate_ticks(ticks: list, interval_min: int) -> list:
+def _aggregate_ticks(ticks: list, interval_min: int, date_int: int = 0) -> list:
     """Aggregate tick rows into OHLCV bars of *interval_min* minutes.
 
     Each tick dict has: seq, time (HHMMSS int), price, volume, canceled.
-    Returns list of bar dicts sorted ascending by bar_time (HHMM int).
+    Returns list of bar dicts sorted ascending by bar_time (Unix UTC seconds).
     """
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    _tz = ZoneInfo("Asia/Tehran")
+
+    d = str(date_int or 19700101)
+    year, month, day = int(d[:4]), int(d[4:6]), int(d[6:8])
+
     bars: dict = {}
     for t in sorted(ticks, key=lambda x: x.get("seq", 0)):
         if t.get("canceled"):
@@ -35,14 +42,20 @@ def _aggregate_ticks(ticks: list, interval_min: int) -> list:
         h = heven // 10000
         m = (heven % 10000) // 100
         bar_m   = (m // interval_min) * interval_min
-        bar_key = h * 100 + bar_m          # HHMM int
         price   = t.get("price",  0)
         volume  = t.get("volume", 0)
         if price <= 0:
             continue
-        if bar_key not in bars:
-            bars[bar_key] = {
-                "time":   bar_key,
+
+        # Proper Unix timestamp: Iran local time → UTC
+        try:
+            bar_unix = int(_dt(year, month, day, h, bar_m, 0, tzinfo=_tz).timestamp())
+        except Exception:
+            bar_unix = h * 3600 + bar_m * 60  # fallback
+
+        if bar_unix not in bars:
+            bars[bar_unix] = {
+                "time":   bar_unix,
                 "open":   price,
                 "high":   price,
                 "low":    price,
@@ -50,7 +63,7 @@ def _aggregate_ticks(ticks: list, interval_min: int) -> list:
                 "volume": 0,
                 "count":  0,
             }
-        b = bars[bar_key]
+        b = bars[bar_unix]
         b["high"]   = max(b["high"], price)
         b["low"]    = min(b["low"],  price)
         b["close"]  = price
@@ -213,87 +226,141 @@ def create_app(db, scan_callback=None):
 
         Query params:
           symbol   – fund symbol (required)
-          date     – YYYYMMDD int (default: today)
+          days     – number of recent trading days to return (default: 1)
+          date     – optional end date YYYYMMDD (limits to dates <= this)
           interval – minutes per bar: 1, 5, 15, 30, 60 (default: 5)
 
-        Response includes ``nav`` (float) so the client can compute
-        per-bar premium_pct = (bar.close - nav) / nav * 100.
+        Bar `time` field is UTC Unix timestamp (Asia/Tehran aware).
+        Response includes ``nav`` (from most recent date with data).
         """
         symbol   = request.args.get("symbol", "")
         interval = int(request.args.get("interval", 5))
-        date_int = request.args.get(
-            "date",
-            datetime.now().strftime("%Y%m%d"),
-        )
-        date_int = int(date_int)
+        days_back = int(request.args.get("days", 1))
+        date_str  = request.args.get("date", "")
+
         if not symbol:
             return jsonify({"error": "symbol required"}), 400
         if interval not in (1, 2, 3, 5, 10, 15, 30, 60):
             interval = 5
+        days_back = max(1, min(days_back, 60))
 
-        ticks = db.get_intraday_trades(symbol, date_int)
-        bars  = _aggregate_ticks(ticks, interval)
-        nav   = _nav_for_date(symbol, date_int)
+        # Determine dates to fetch
+        available_dates = db.get_intraday_dates(symbol)
+        if not available_dates:
+            return jsonify({"symbol": symbol, "interval": interval,
+                            "days": days_back, "nav": 0, "bars": []})
 
-        # Embed premium_pct into each bar
-        if nav > 0:
-            for b in bars:
-                b["premium_pct"] = round((b["close"] - nav) / nav * 100, 4)
+        if date_str:
+            end_date = int(date_str)
+            pool = [d for d in available_dates if d <= end_date]
         else:
+            pool = list(available_dates)
+        dates_to_fetch = pool[-days_back:]
+
+        all_bars = []
+        nav = 0.0
+        for date_int in dates_to_fetch:
+            ticks     = db.get_intraday_trades(symbol, date_int)
+            if not ticks:
+                continue
+            date_nav  = _nav_for_date(symbol, date_int)
+            if date_nav > 0 and nav == 0:
+                nav = date_nav
+            bars = _aggregate_ticks(ticks, interval, date_int)
             for b in bars:
-                b["premium_pct"] = None
+                if date_nav > 0:
+                    b["premium_pct"] = round((b["close"] - date_nav) / date_nav * 100, 4)
+                else:
+                    b["premium_pct"] = None
+            all_bars.extend(bars)
+
+        all_bars.sort(key=lambda x: x["time"])
 
         return jsonify({
             "symbol":   symbol,
-            "date":     date_int,
             "interval": interval,
+            "days":     days_back,
             "nav":      nav,
-            "bars":     bars,
+            "bars":     all_bars,
         })
 
     @app.route("/api/intraday_ticks")
     def api_intraday_ticks():
-        """Return raw tick-level trades for *symbol* on *date_int*.
+        """Return raw tick-level trades for *symbol*.
 
         Query params:
           symbol – fund symbol (required)
-          date   – YYYYMMDD int (default: today)
+          days   – number of recent trading days (default: 1)
+          date   – optional end date YYYYMMDD
 
-        Each tick dict:
-          seq, time (HHMMSS int), price, volume, canceled,
-          premium_pct (float|null — if NAV known)
-
-        Use this for second-by-second premium animation and signal audit.
+        Each tick: seq, unix_time (UTC Unix seconds), time (HHMMSS int),
+                   price, volume, premium_pct, date (YYYYMMDD int)
         """
-        symbol   = request.args.get("symbol", "")
-        date_int = request.args.get(
-            "date",
-            datetime.now().strftime("%Y%m%d"),
-        )
-        date_int = int(date_int)
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        _tz = ZoneInfo("Asia/Tehran")
+
+        symbol    = request.args.get("symbol", "")
+        days_back = int(request.args.get("days", 1))
+        date_str  = request.args.get("date", "")
+
         if not symbol:
             return jsonify({"error": "symbol required"}), 400
+        days_back = max(1, min(days_back, 60))
 
-        ticks = db.get_intraday_trades(symbol, date_int)
-        nav   = _nav_for_date(symbol, date_int)
+        available_dates = db.get_intraday_dates(symbol)
+        if not available_dates:
+            return jsonify({"symbol": symbol, "days": days_back,
+                            "nav": 0, "tick_count": 0, "ticks": []})
+
+        if date_str:
+            end_date = int(date_str)
+            pool = [d for d in available_dates if d <= end_date]
+        else:
+            pool = list(available_dates)
+        dates_to_fetch = pool[-days_back:]
 
         result = []
-        for t in ticks:
-            if t.get("canceled"):
-                continue
-            p = t.get("price", 0)
-            prem = round((p - nav) / nav * 100, 4) if nav > 0 and p > 0 else None
-            result.append({
-                "seq":         t["seq"],
-                "time":        t["time"],   # HHMMSS int
-                "price":       p,
-                "volume":      t.get("volume", 0),
-                "premium_pct": prem,
-            })
+        nav = 0.0
+        for date_int in dates_to_fetch:
+            ticks    = db.get_intraday_trades(symbol, date_int)
+            date_nav = _nav_for_date(symbol, date_int)
+            if date_nav > 0 and nav == 0:
+                nav = date_nav
+
+            d = str(date_int)
+            year, month, day = int(d[:4]), int(d[4:6]), int(d[6:8])
+
+            for t in ticks:
+                if t.get("canceled"):
+                    continue
+                p = t.get("price", 0)
+                if p <= 0:
+                    continue
+                heven = t.get("time", 0)
+                h  = heven // 10000
+                mi = (heven % 10000) // 100
+                sec = heven % 100
+                try:
+                    unix_t = int(_dt(year, month, day, h, mi, sec, tzinfo=_tz).timestamp())
+                except Exception:
+                    unix_t = heven
+                prem = round((p - date_nav) / date_nav * 100, 4) if date_nav > 0 else None
+                result.append({
+                    "seq":         t.get("seq", 0),
+                    "unix_time":   unix_t,
+                    "time":        heven,
+                    "date":        date_int,
+                    "price":       p,
+                    "volume":      t.get("volume", 0),
+                    "premium_pct": prem,
+                })
+
+        result.sort(key=lambda x: x["unix_time"])
 
         return jsonify({
             "symbol":     symbol,
-            "date":       date_int,
+            "days":       days_back,
             "nav":        nav,
             "tick_count": len(result),
             "ticks":      result,

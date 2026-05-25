@@ -416,8 +416,14 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <button class="pill"    data-tf="daily-365" onclick="setTF('daily',365)">۱Y</button>
   </div>
 
-  <!-- Date picker: only visible in intraday mode -->
-  <input type="date" id="intraday-date" style="display:none" onchange="redraw()">
+  <!-- Intraday lookback (visible only in intraday mode) -->
+  <div class="pill-group" id="intra-days-grp" style="display:none">
+    <button class="pill on" data-id="1"  onclick="setIntraDays(1)">۱D</button>
+    <button class="pill"    data-id="3"  onclick="setIntraDays(3)">۳D</button>
+    <button class="pill"    data-id="5"  onclick="setIntraDays(5)">۵D</button>
+    <button class="pill"    data-id="10" onclick="setIntraDays(10)">۱۰D</button>
+    <button class="pill"    data-id="20" onclick="setIntraDays(20)">۲۰D</button>
+  </div>
 
   <div class="h-div"></div>
 
@@ -538,6 +544,7 @@ let days        = 30;
 let src         = 'daily';         // 'daily' | 'scan' | 'intraday'
 let ctype       = 'candle';        // 'candle' | 'line'
 let itvMin      = 5;               // intraday interval minutes
+let intraDays   = 1;               // intraday lookback in trading days
 let syncing     = false;
 
 // ══════════════════════════════════════════════════════════════════
@@ -551,8 +558,6 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(loadFunds, 60_000);
   setInterval(loadStats, 120_000);
   window.addEventListener('resize', onResize);
-  // default intraday date = today
-  document.getElementById('intraday-date').value = todayStr();
 });
 
 function todayStr() {
@@ -564,6 +569,24 @@ function todayStr() {
 //  Charts
 // ══════════════════════════════════════════════════════════════════
 function tvOpts(el, showTimeAxis) {
+  // Jalali tick formatter for the time-scale axis
+  const jalaliTickFmt = (time, tickMarkType) => {
+    if (typeof time === 'string') {
+      // Daily mode: "YYYY-MM-DD" string
+      const [gy, gm, gd] = time.split('-').map(Number);
+      const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+      if (tickMarkType === 0) return String(jy);
+      if (tickMarkType === 1) return String(jy) + '/' + String(jm).padStart(2,'0');
+      return String(jm).padStart(2,'0') + '/' + String(jd).padStart(2,'0');
+    } else {
+      // Intraday mode: Unix timestamp number
+      const { jy, jm, jd, hh, mm } = unixToJalali(time);
+      if (tickMarkType === 0) return String(jy);
+      if (tickMarkType === 1) return String(jy) + '/' + String(jm).padStart(2,'0');
+      if (tickMarkType === 2) return String(jm).padStart(2,'0') + '/' + String(jd).padStart(2,'0');
+      return String(hh).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+    }
+  };
   return {
     width: el.clientWidth, height: el.clientHeight,
     layout: { background: { color: TV.bg }, textColor: TV.txt,
@@ -571,11 +594,23 @@ function tvOpts(el, showTimeAxis) {
     grid:   { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
     crosshair: { mode: CrosshairMode.Normal },
     rightPriceScale: { borderColor: TV.brd },
+    localization: {
+      timeFormatter: (time) => {
+        if (typeof time === 'string') {
+          const [gy, gm, gd] = time.split('-').map(Number);
+          const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+          return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
+        }
+        const { jy, jm, jd, hh, mm } = unixToJalali(time);
+        return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')} ${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+      },
+    },
     timeScale: {
       borderColor: TV.brd,
       timeVisible: showTimeAxis,
       secondsVisible: false,
       fixLeftEdge: false, fixRightEdge: false,
+      tickMarkFormatter: jalaliTickFmt,
     },
     handleScroll: true, handleScale: true,
   };
@@ -667,9 +702,7 @@ async function loadStats() {
 const navCache = {};
 
 async function fetchRows(sym) {
-  const dateVal = document.getElementById('intraday-date').value || todayStr();
-  const dateInt = dateVal.replace(/-/g,'');
-  const key = `${sym}_${src}_${days}_${itvMin}_${dateInt}`;
+  const key = `${sym}_${src}_${days}_${itvMin}_${intraDays}`;
   if (cache[key]) return cache[key];
 
   let rows = [];
@@ -684,25 +717,24 @@ async function fetchRows(sym) {
     document.getElementById('boot-notice').style.display = 'none';
 
   } else {
-    // intraday — tick mode (itvMin===0) or bar mode
+    // intraday — multi-day, tick or bar mode
     if (itvMin === 0) {
-      // raw ticks
       const r = await fetch(
-        `/api/intraday_ticks?symbol=${E(sym)}&date=${dateInt}`
+        `/api/intraday_ticks?symbol=${E(sym)}&days=${intraDays}`
       ).catch(()=>null);
       if (r?.ok) {
         const j = await r.json();
         rows = j.ticks || [];
-        if (j.nav) navCache[sym+'_'+dateInt] = j.nav;
+        if (j.nav) navCache[sym] = j.nav;
       }
     } else {
       const r = await fetch(
-        `/api/intraday_bars?symbol=${E(sym)}&date=${dateInt}&interval=${itvMin}`
+        `/api/intraday_bars?symbol=${E(sym)}&days=${intraDays}&interval=${itvMin}`
       ).catch(()=>null);
       if (r?.ok) {
         const j = await r.json();
         rows = j.bars || [];
-        if (j.nav) navCache[sym+'_'+dateInt] = j.nav;
+        if (j.nav) navCache[sym] = j.nav;
       }
     }
     if (!rows.length) document.getElementById('boot-notice').style.display = '';
@@ -788,13 +820,8 @@ function afterSelect() {
   renderList();
   if (n === 1) renderStats([...selected][0]);
 
-  // In intraday mode: auto-pick latest available date for new selection
-  if (src === 'intraday' && n === 1) {
-    cache = {};
-    autoPickIntraDate([...selected][0]).then(() => redraw());
-  } else {
-    redraw();
-  }
+  cache = {};
+  redraw();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -811,20 +838,30 @@ function setTF(mode, val) {
     days = val;
     src  = 'daily';
   }
+  const isIntra = src === 'intraday';
+
   // Highlight the active pill
   document.querySelectorAll('#tf-grp .pill').forEach(b =>
     b.classList.toggle('on', b.dataset.tf === mode + '-' + val)
   );
-  // Show date picker only in intraday mode
-  document.getElementById('intraday-date').style.display = (src === 'intraday') ? '' : 'none';
+  // Show/hide intraday lookback group
+  document.getElementById('intra-days-grp').style.display = isIntra ? '' : 'none';
 
   cache = {};
-  if (src === 'intraday' && selected.size === 1) {
-    autoPickIntraDate([...selected][0]).then(() => redraw());
+  if (isIntra) {
+    redraw();
   } else {
-    if (src === 'daily') loadStats();
+    loadStats();
     redraw();
   }
+}
+
+function setIntraDays(n) {
+  intraDays = n;
+  document.querySelectorAll('#intra-days-grp .pill').forEach(b =>
+    b.classList.toggle('on', +b.dataset.id === n)
+  );
+  cache = {}; redraw();
 }
 
 // Internal-only source override for scan data (no UI button needed)
@@ -938,9 +975,7 @@ async function redraw() {
   );
   if (isIntra && selected.size === 1) {
     const sym0 = [...selected][0];
-    const dateVal = document.getElementById('intraday-date').value || todayStr();
-    const dateInt = dateVal.replace(/-/g,'');
-    const tickRows = cache[`${sym0}_${src}_${days}_${itvMin}_${dateInt}`] || [];
+    const tickRows = cache[`${sym0}_${src}_${days}_${itvMin}_${intraDays}`] || [];
     document.getElementById('ib-ticks').textContent =
       (tickRows.length).toLocaleString('fa-IR') + (itvMin === 0 ? ' معامله' : ' بار');
   }
@@ -1003,9 +1038,8 @@ function drawLine(sym, rows, col, showNav, showVol) {
 // ── Raw tick line (second-by-second price + premium) ───────────────
 function drawTicks(sym, rows, col, showVol) {
   if (!rows.length) return;
-  const dateVal = (document.getElementById('intraday-date').value || todayStr()).replace(/-/g,'');
-  const navKey  = sym + '_' + dateVal;
-  const nav     = navCache[navKey] || 0;
+  // Backend now returns unix_time directly (UTC Unix seconds, Asia/Tehran-aware)
+  const nav = navCache[sym] || 0;
 
   // Price line
   const ps = PC.addLineSeries({
@@ -1014,7 +1048,7 @@ function drawTicks(sym, rows, col, showVol) {
     crosshairMarkerVisible: false,
   });
   ps.setData(rows.map(t => ({
-    time:  hhmmss2unix(t.time, dateVal),
+    time:  t.unix_time,
     value: t.price,
   })).filter(d => d.value > 0));
   AS[sym] = { price: ps };
@@ -1027,7 +1061,7 @@ function drawTicks(sym, rows, col, showVol) {
     });
     PC.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, visible: false });
     vs.setData(rows.map(t => ({
-      time:  hhmmss2unix(t.time, dateVal),
+      time:  t.unix_time,
       value: t.volume,
       color: (t.premium_pct ?? 0) >= 0 ? 'rgba(239,83,80,.3)' : 'rgba(38,166,154,.3)',
     })));
@@ -1041,18 +1075,18 @@ function drawTicks(sym, rows, col, showVol) {
       priceLineVisible: false, lastValueVisible: true,
     });
     hs.setData(rows.map(t => ({
-      time:  hhmmss2unix(t.time, dateVal),
+      time:  t.unix_time,
       value: t.premium_pct ?? 0,
     })));
 
     // Zero + threshold lines
-    const zeroData = rows.map(t => ({ time: hhmmss2unix(t.time, dateVal), value: 0 }));
+    const zeroData = rows.map(t => ({ time: t.unix_time, value: 0 }));
     KC.addLineSeries({ color:'rgba(255,255,255,.12)', lineWidth:1,
       priceLineVisible:false, lastValueVisible:false }).setData(zeroData);
     [[0.3,'rgba(239,83,80,.5)'],[-.3,'rgba(38,166,154,.5)']].forEach(([v,c]) =>
       KC.addLineSeries({ color:c, lineWidth:1, lineStyle:LineStyle.Dashed,
         priceLineVisible:false, lastValueVisible:false })
-        .setData(rows.map(t => ({ time:hhmmss2unix(t.time,dateVal), value:+v })))
+        .setData(rows.map(t => ({ time: t.unix_time, value: +v })))
     );
     AS[sym].prem = hs;
   }
@@ -1065,9 +1099,9 @@ function drawIntraday(sym, rows, col, showVol) {
     borderUpColor:'#26a69a', borderDownColor:'#ef5350',
     wickUpColor:'#26a69a', wickDownColor:'#ef5350',
   });
-  const dateVal = (document.getElementById('intraday-date').value || todayStr()).replace(/-/g,'');
+  // Backend now returns r.time as UTC Unix seconds (Asia/Tehran-aware)
   cs.setData(rows.map(r => ({
-    time: hhmm2unix(r.time, dateVal),
+    time: r.time,
     open: r.open, high: r.high, low: r.low, close: r.close,
   })).filter(d => d.close > 0));
   AS[sym] = { price: cs };
@@ -1077,7 +1111,7 @@ function drawIntraday(sym, rows, col, showVol) {
       priceFormat:{type:'volume'}, priceScaleId:'vol' });
     PC.priceScale('vol').applyOptions({ scaleMargins:{top:0.8,bottom:0}, visible:false });
     vs.setData(rows.map(r => ({
-      time: hhmm2unix(r.time, dateVal),
+      time: r.time,
       value: r.volume,
       color: r.close >= r.open ? 'rgba(38,166,154,.3)' : 'rgba(239,83,80,.3)',
     })));
@@ -1105,20 +1139,17 @@ function drawPrem(sym, rows, col) {
   // For raw tick mode, premium is drawn inside drawTicks — skip here
   if (src === 'intraday' && itvMin === 0) return;
 
-  const dateVal = (document.getElementById('intraday-date').value || todayStr()).replace(/-/g,'');
-  const navKey  = sym + '_' + dateVal.replace(/-/g,'');
-
   let data;
   if (src === 'intraday') {
     // Intraday bars: use premium_pct embedded in each bar by the server
-    // Fall back to computing from navCache if field absent
-    const nav = navCache[navKey] || 0;
+    // r.time is already a UTC Unix timestamp; fall back to navCache if field absent
+    const nav = navCache[sym] || 0;
     data = rows.map(r => {
       const v = r.premium_pct != null
         ? r.premium_pct
         : (nav > 0 ? (r.close - nav) / nav * 100 : 0);
       return {
-        time:  hhmm2unix(r.time, dateVal.replace(/-/g,'')),
+        time:  r.time,
         value: v,
         color: v >= 0 ? 'rgba(239,83,80,.6)' : 'rgba(38,166,154,.6)',
       };
@@ -1332,6 +1363,59 @@ function onRowClick(sym) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+//  Jalali (Shamsi) calendar
+// ══════════════════════════════════════════════════════════════════
+/**
+ * Convert Gregorian date to Jalali (Shamsi).
+ * Returns [jYear, jMonth, jDay].
+ */
+function gregorianToJalali(gy, gm, gd) {
+  const g_d_no = [0,31,59,90,120,151,181,212,243,273,304,334];
+  const isLeapG = y => (y%4===0 && y%100!==0) || y%400===0;
+  const gy2 = gm > 2 ? gy + 1 : gy;
+  let g_day_no = 365*gy + Math.floor((gy2+3)/4) - Math.floor((gy2+99)/100) + Math.floor((gy2+399)/400);
+  for (let i = 0; i < gm-1; i++) g_day_no += g_d_no[i];
+  if (gm > 2 && isLeapG(gy)) g_day_no++;
+  g_day_no += gd;
+
+  let j_day_no = g_day_no - 79;
+  const j_np = Math.floor(j_day_no / 12053);
+  j_day_no %= 12053;
+  let jy = 979 + 33*j_np + 4*Math.floor(j_day_no/1461);
+  j_day_no %= 1461;
+  if (j_day_no >= 366) {
+    jy += Math.floor((j_day_no-1)/365);
+    j_day_no = (j_day_no-1) % 365;
+  }
+  const jml = [31,31,31,31,31,31,30,30,30,30,30,29];
+  let jm = 0;
+  for (jm = 0; jm < 11 && j_day_no >= jml[jm]; jm++) j_day_no -= jml[jm];
+  return [jy, jm+1, j_day_no+1];
+}
+
+/**
+ * Convert a UTC Unix timestamp to Jalali date + Iran local time.
+ * Uses Asia/Tehran timezone (handles IRST/IRDT automatically).
+ * Returns { jy, jm, jd, hh, mm, ss }.
+ */
+function unixToJalali(unix) {
+  const d = new Date(unix * 1000);
+  // Get Tehran local date/time via Intl
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(d);
+  const p = {};
+  parts.forEach(x => { p[x.type] = x.value; });
+  const gy = +p.year, gm = +p.month, gd = +p.day;
+  let hh = +p.hour; if (hh === 24) hh = 0;
+  const mm = +p.minute, ss = +p.second;
+  const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+  return { jy, jm, jd, hh, mm, ss };
+}
+
+// ══════════════════════════════════════════════════════════════════
 //  Helpers
 // ══════════════════════════════════════════════════════════════════
 function dStr(d) {
@@ -1363,10 +1447,22 @@ function hhmmss2unix(hhmmss, yyyymmdd) {
 }
 
 function fmtTime(t) {
-  if (typeof t === 'string') return t;
-  if (typeof t === 'number' && t > 20000000) return dStr(t);
-  const d = new Date(t * 1000);
-  return d.toLocaleString('fa-IR', {hour:'2-digit', minute:'2-digit'});
+  if (typeof t === 'string') {
+    // "YYYY-MM-DD" → Jalali date
+    const [gy, gm, gd] = t.split('-').map(Number);
+    const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+    return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
+  }
+  if (typeof t === 'number' && t > 20000000) {
+    // YYYYMMDD integer → Jalali date
+    const s = String(t);
+    const gy = +s.slice(0,4), gm = +s.slice(4,6), gd = +s.slice(6,8);
+    const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+    return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
+  }
+  // Unix timestamp (intraday) → Jalali date + Iran time
+  const { jy, jm, jd, hh, mm } = unixToJalali(t);
+  return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')} ${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
 }
 
 function fmtN(v) { return v ? Math.round(v).toLocaleString('fa-IR') : '—'; }
