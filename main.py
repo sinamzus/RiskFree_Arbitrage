@@ -292,8 +292,6 @@ def run_scan(aggregator: DataAggregator,
         from orderbook import compute_tradability
         tsetmc = aggregator.tsetmc
         enriched = 0
-        ob_saved = 0
-        time_int = int(scanned_at.strftime("%H%M%S"))
 
         for fd in fund_data:
             sym      = fd.get("symbol", "")
@@ -322,13 +320,12 @@ def run_scan(aggregator: DataAggregator,
                         sym, ctx.tick_count, ctx.trend_label, ctx.trend_slope,
                     )
 
-            # ── Fetch & store order-book snapshot ─────────────────────────
+            # ── Fetch live order book for tradability (not saved to DB) ───
+            # Order-book history is batch-collected via:
+            #   python tools/fetch_intraday.py --days N --orderbook
             ob = tsetmc.get_best_limits(ins_code)
             if ob:
-                fd["order_book"] = ob   # refresh with current book
-                if db.save_orderbook_snapshot(sym, ins_code, today_int,
-                                               time_int, ob):
-                    ob_saved += 1
+                fd["order_book"] = ob   # used by analyze_fund for snapshot
 
                 # Compute tradability and attach to fund data
                 price_data = fd.get("price_data") or {}
@@ -348,8 +345,8 @@ def run_scan(aggregator: DataAggregator,
                 fd["tradability"] = td
 
         logger.info(
-            "Intraday context enriched %d / %d funds; %d order-book snapshots saved",
-            enriched, len(fund_data), ob_saved,
+            "Intraday context enriched %d / %d funds",
+            enriched, len(fund_data),
         )
     # ────────────────────────────────────────────────────────────────────
 

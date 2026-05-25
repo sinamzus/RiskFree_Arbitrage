@@ -90,6 +90,47 @@ def fetch_ticks(ins_code: str, date_int: int) -> list[dict]:
         return []
 
 
+def fetch_orderbook(ins_code: str, date_int: int) -> list[dict]:
+    """Fetch historical order-book snapshots for ins_code on date_int.
+
+    Uses the TSETMC history API.  Returns [] if data is unavailable.
+    Each item: {time: HHMMSS, bids: [...x5], asks: [...x5]}
+    """
+    url = f"{TSETMC_CDN}/BestLimits/{ins_code}/{date_int}"
+    try:
+        r = S.get(url, timeout=20)
+        if r.status_code != 200:
+            return []
+        rows = r.json().get("bestLimitsHistory") or []
+        if not rows:
+            return []
+        from collections import defaultdict
+        by_time = defaultdict(lambda: {"bids": [], "asks": []})
+        for row in rows:
+            t = row.get("hEven", 0)
+            by_time[t]["bids"].append({
+                "price":  row.get("pMeDem", 0),
+                "volume": row.get("qTitMeDem", 0),
+                "count":  row.get("zOrdMeDem", 0),
+            })
+            by_time[t]["asks"].append({
+                "price":  row.get("pMeOf", 0),
+                "volume": row.get("qTitMeOf", 0),
+                "count":  row.get("zOrdMeOf", 0),
+            })
+        result = []
+        for t in sorted(by_time.keys()):
+            snap = by_time[t]
+            snap["time"] = t
+            snap["bids"].sort(key=lambda x: -x["price"])
+            snap["asks"].sort(key=lambda x:  x["price"])
+            result.append(snap)
+        return result
+    except Exception as e:
+        logger.debug("fetch_orderbook error %s %s: %s", ins_code, date_int, e)
+        return []
+
+
 def hhmm(t: int) -> str:
     """91530 → '09:15:30'"""
     s = str(t).zfill(6)
@@ -127,7 +168,8 @@ def show_status(symbol_filter: str | None):
 
 # ── main fetch ───────────────────────────────────────────────────────────────
 
-def fetch(dates: list[int], symbol_filter: str | None, force: bool):
+def fetch(dates: list[int], symbol_filter: str | None, force: bool, orderbook: bool = False):
+    args_orderbook = orderbook
     print()
     print("=" * 72)
     print(f"  دریافت داده معاملات درون‌روزی — {len(dates)} روز")
@@ -167,18 +209,34 @@ def fetch(dates: list[int], symbol_filter: str | None, force: bool):
             fund_new  += new_rows
             grand_new += new_rows
 
+            # Also fetch & save historical order-book snapshots for this date
+            if not args_orderbook:
+                ob_count = 0
+            else:
+                ob_snaps = fetch_orderbook(ins_code, date_int)
+                ob_count = 0
+                # Look up the cached daily NAV (cancel_nav) to store alongside OB snapshots
+                date_str = (f"{date_int}"[:4] + "-" + f"{date_int}"[4:6] + "-" + f"{date_int}"[6:])
+                nav_row = DB.get_cached_nav(sym, nav_date=date_str)
+                nav_val = nav_row["cancel_nav"] if nav_row else 0.0
+                for snap in ob_snaps:
+                    if DB.save_orderbook_snapshot(sym, ins_code, date_int,
+                                                   snap["time"], snap, nav=nav_val):
+                        ob_count += 1
+
             # Quick summary
             prices = [t["price"] for t in valid if t["price"] > 0]
             p_min  = min(prices) if prices else 0
             p_max  = max(prices) if prices else 0
             t_first = hhmm(valid[0]["time"]) if valid else "—"
             t_last  = hhmm(valid[-1]["time"]) if valid else "—"
+            ob_str = f"  اردربوک {ob_count} snapshot" if args_orderbook else ""
             print(
                 f"  [{i:2d}] {sym:12s}  {date_int}  "
                 f"{len(valid):>5,} تیک  "
                 f"قیمت {p_min:>10,.0f}–{p_max:>10,.0f}  "
                 f"زمان {t_first}–{t_last}  "
-                f"({new_rows} جدید)"
+                f"({new_rows} جدید){ob_str}"
             )
             time.sleep(0.25)
 
@@ -202,6 +260,8 @@ def main():
     ap.add_argument("--symbol", help="فقط یک نماد مشخص")
     ap.add_argument("--force",  action="store_true",
                     help="حتی اگر قبلاً دریافت شده، دوباره بگیر")
+    ap.add_argument("--orderbook", action="store_true",
+                    help="علاوه بر تیک‌ها، سابقه اردربوک را هم ذخیره کن")
     ap.add_argument("--status", action="store_true",
                     help="فقط نمایش وضعیت DB، بدون دریافت جدید")
     args = ap.parse_args()
@@ -220,7 +280,7 @@ def main():
     else:
         dates = trading_dates(args.days)
 
-    fetch(dates, args.symbol, args.force)
+    fetch(dates, args.symbol, args.force, orderbook=args.orderbook)
     show_status(args.symbol)
 
 

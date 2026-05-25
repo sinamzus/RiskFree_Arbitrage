@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS intraday_orderbook (
     spread_pct  REAL    DEFAULT 0,   -- (ask1 - bid1) / mid × 100
     bid_depth   INTEGER DEFAULT 0,   -- sum of bid1..bid5 volume
     ask_depth   INTEGER DEFAULT 0,   -- sum of ask1..ask5 volume
+    nav         REAL    DEFAULT 0,   -- cancel_nav at the time of this snapshot
     UNIQUE (symbol, date, time)
 );
 
@@ -174,6 +175,11 @@ class Database:
     def _init(self):
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            # ── migrate intraday_orderbook: add nav column if absent ──────────
+            existing_ob = {row[1] for row in conn.execute("PRAGMA table_info(intraday_orderbook)").fetchall()}
+            if "nav" not in existing_ob:
+                conn.execute("ALTER TABLE intraday_orderbook ADD COLUMN nav REAL DEFAULT 0")
+                logger.debug("Migrated intraday_orderbook: added column nav")
             # ── migrate existing DBs: add columns if absent ───────────────────
             existing_snap = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
             for col, defn in [
@@ -507,11 +513,13 @@ class Database:
 
     def save_orderbook_snapshot(self, symbol: str, ins_code: str,
                                 date_int: int, time_int: int,
-                                order_book: dict) -> bool:
+                                order_book: dict,
+                                nav: float = 0.0) -> bool:
         """Persist one order-book snapshot.
 
         *order_book* must be {"bids": [...x5], "asks": [...x5]}
         with each level having keys price, volume, count.
+        *nav* is the cancel_nav at the time of this snapshot (optional).
         Duplicate (symbol, date, time) rows are silently ignored.
         Returns True if the row was newly inserted.
         """
@@ -549,11 +557,11 @@ class Database:
                     ask3_price, ask3_vol, ask3_cnt,
                     ask4_price, ask4_vol, ask4_cnt,
                     ask5_price, ask5_vol, ask5_cnt,
-                    spread_pct, bid_depth, ask_depth)
+                    spread_pct, bid_depth, ask_depth, nav)
                    VALUES (?,?,?,?,
                            ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,
                            ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,
-                           ?,?,?)""",
+                           ?,?,?,?)""",
                 (symbol, ins_code, date_int, time_int,
                  _lv(bids,0,"price"), _lv(bids,0,"volume"), _lv(bids,0,"count"),
                  _lv(bids,1,"price"), _lv(bids,1,"volume"), _lv(bids,1,"count"),
@@ -565,7 +573,7 @@ class Database:
                  _lv(asks,2,"price"), _lv(asks,2,"volume"), _lv(asks,2,"count"),
                  _lv(asks,3,"price"), _lv(asks,3,"volume"), _lv(asks,3,"count"),
                  _lv(asks,4,"price"), _lv(asks,4,"volume"), _lv(asks,4,"count"),
-                 spread_pct, bid_depth, ask_depth),
+                 spread_pct, bid_depth, ask_depth, nav or 0.0),
             )
             inserted = cur.rowcount > 0
         return inserted

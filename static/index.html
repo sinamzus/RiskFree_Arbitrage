@@ -225,8 +225,8 @@ html, body {
 
 .fi-right { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
 .fi-pd { font-size: var(--fs-sm); font-weight: 700; }
-.fi-pd.pos  { color: var(--red); }
-.fi-pd.neg  { color: var(--green); }
+.fi-pd.pos  { color: var(--green); }
+.fi-pd.neg  { color: var(--red); }
 .fi-pd.zero { color: var(--muted); }
 
 .badge {
@@ -340,8 +340,8 @@ html, body {
   font-size: var(--fs-sm);
 }
 .sv { font-weight: 700; font-variant-numeric: tabular-nums; }
-.sv.pos  { color: var(--red); }
-.sv.neg  { color: var(--green); }
+.sv.pos  { color: var(--green); }
+.sv.neg  { color: var(--red); }
 .sv.warn { color: var(--yellow); }
 
 /* Table */
@@ -373,46 +373,103 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 /* ─── Order-book panel ───────────────────────────────────────── */
 #ob-panel {
   display: none;
+  flex-direction: column;
   background: var(--surf);
   border-top: 1px solid var(--brd);
-  padding: 8px 14px;
   flex-shrink: 0;
-}
-#ob-panel.visible { display: flex; gap: 18px; align-items: flex-start; }
-.ob-ladder {
-  flex: 1;
-  display: grid;
-  grid-template-columns: repeat(3,auto);
-  gap: 1px 10px;
-  font-size: var(--fs-xs);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
-.ob-header { color: var(--muted); font-weight: 600; font-size: 10px; text-align: center; }
-.ob-bid   { color: var(--green); text-align: left; }
-.ob-ask   { color: var(--red);   text-align: left; }
-.ob-price { text-align: right; }
-.ob-vol   { text-align: left; color: var(--muted); }
-.ob-depth-bar {
-  height: 3px; border-radius: 2px; margin-top: 1px;
-  background: rgba(255,255,255,.08);
+#ob-panel.visible { display: flex; }
+
+/* Header */
+#ob-hdr {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  font-size: 11px; color: var(--sub);
+}
+#ob-hdr-sym  { font-weight: 700; color: var(--txt); font-size: 12px; }
+#ob-hdr-spread { font-weight: 700; color: var(--yellow); }
+#ob-hdr-ts   { margin-right: auto; font-size: 10px; color: var(--muted); }
+
+/* Book grid: two equal columns */
+#ob-book {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/* Column header rows */
+.ob-col-hdr-row {
+  display: grid;
+  padding: 2px 10px;
+  font-size: 9px; font-weight: 700; letter-spacing: .3px;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.ob-col-hdr-row.bid {
+  grid-template-columns: 2.5fr 1.5fr 1fr;
+  background: rgba(38,166,154,.04);
+  border-left: 2px solid rgba(38,166,154,.35);
+}
+.ob-col-hdr-row.ask {
+  grid-template-columns: 2.5fr 1.5fr 1fr;
+  background: rgba(239,83,80,.04);
+  border-left: 2px solid rgba(239,83,80,.35);
+}
+
+/* Level rows */
+.ob-lvl-row {
+  display: grid;
+  padding: 2.5px 10px;
+  align-items: center;
+  position: relative;
   overflow: hidden;
+  border-bottom: 1px solid rgba(255,255,255,.025);
+  grid-template-columns: 2.5fr 1.5fr 1fr;
 }
-.ob-depth-fill { height: 100%; border-radius: 2px; }
-.ob-meta {
-  display: flex; flex-direction: column; gap: 5px;
-  min-width: 180px; font-size: var(--fs-xs);
+.ob-lvl-row.bid { border-left: 2px solid transparent; }
+.ob-lvl-row.ask { border-left: 2px solid transparent; }
+.ob-lvl-row.bid.best { border-left-color: rgba(38,166,154,.5); }
+.ob-lvl-row.ask.best { border-left-color: rgba(239,83,80,.5); }
+
+/* Depth fill bar (CSS custom property --pct set inline) */
+.ob-lvl-row::before {
+  content: '';
+  position: absolute; top: 1px; bottom: 1px;
+  width: var(--pct, 0%);
+  border-radius: 1px;
+  pointer-events: none;
+  opacity: 0.14;
 }
-.ob-meta-row { display: flex; justify-content: space-between; gap: 8px; }
-.ob-meta-lbl { color: var(--muted); }
-.ob-meta-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+.ob-lvl-row.bid::before { right: 0; background: var(--green); }
+.ob-lvl-row.ask::before { left: 0; background: var(--red); }
+
+.ob-lvl-price { font-weight: 700; position: relative; }
+.ob-lvl-vol   { position: relative; color: var(--sub); }
+.ob-lvl-cnt   { position: relative; color: var(--muted); font-size: 10px; }
+.ob-lvl-row.bid .ob-lvl-price { color: var(--green); }
+.ob-lvl-row.ask .ob-lvl-price { color: var(--red); }
+
+/* Footer */
+#ob-footer {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 5px 12px;
+  border-top: 1px solid rgba(255,255,255,.04);
+  font-size: 11px;
+}
+.ob-ft-lbl { color: var(--muted); }
+.ob-ft-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ob-ft-val.grn { color: var(--green); }
+.ob-ft-val.red { color: var(--red); }
+.ob-ft-sep { color: var(--brd2); }
 .ob-tradable-badge {
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700;
-  margin-top: 4px;
+  padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 700;
 }
 .ob-tradable-badge.yes { background: rgba(38,166,154,.18); color: var(--green); border: 1px solid rgba(38,166,154,.4); }
 .ob-tradable-badge.no  { background: rgba(239,83,80,.14);  color: var(--red);   border: 1px solid rgba(239,83,80,.35); }
-.ob-reason { font-size: 10px; color: var(--muted); margin-top: 3px; max-width: 240px; line-height: 1.4; }
+.ob-reason { font-size: 10px; color: var(--muted); line-height: 1.4; }
 
 /* tradability icon in fund list */
 .fi-exec { font-size: 9px; margin-top: 1px; }
@@ -543,22 +600,31 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
     <!-- Order-book panel (shown when a fund is selected) -->
     <div id="ob-panel">
-      <!-- Bid ladder -->
-      <div>
-        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-weight:600">📗 خریداران (Bids)</div>
-        <div class="ob-ladder" id="ob-bids"></div>
+      <!-- Header -->
+      <div id="ob-hdr">
+        <span>📊 سفارش‌های بازار —</span>
+        <span id="ob-hdr-sym">—</span>
+        <span class="ob-ft-sep">|</span>
+        <span class="ob-ft-lbl">اسپرد:</span>
+        <span id="ob-hdr-spread">—</span>
+        <span id="ob-hdr-ts"></span>
       </div>
-      <!-- Ask ladder -->
-      <div>
-        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-weight:600">📕 فروشندگان (Asks)</div>
-        <div class="ob-ladder" id="ob-asks"></div>
+      <!-- Bid / Ask ladder grid -->
+      <div id="ob-book">
+        <div id="ob-bid-side"></div>
+        <div id="ob-ask-side"></div>
       </div>
-      <!-- Tradability meta -->
-      <div class="ob-meta" id="ob-meta">
-        <div class="ob-meta-row"><span class="ob-meta-lbl">اسپرد:</span><span class="ob-meta-val" id="ob-spread">—</span></div>
-        <div class="ob-meta-row"><span class="ob-meta-lbl">عمق خرید:</span><span class="ob-meta-val" id="ob-bid-depth">—</span></div>
-        <div class="ob-meta-row"><span class="ob-meta-lbl">عمق فروش:</span><span class="ob-meta-val" id="ob-ask-depth">—</span></div>
-        <div class="ob-meta-row"><span class="ob-meta-lbl">امتیاز نقدشوندگی:</span><span class="ob-meta-val" id="ob-score">—</span></div>
+      <!-- Footer: totals + tradability -->
+      <div id="ob-footer">
+        <span class="ob-ft-lbl">عمق خرید:</span>
+        <span id="ob-bid-depth" class="ob-ft-val grn">—</span>
+        <span class="ob-ft-sep">|</span>
+        <span class="ob-ft-lbl">عمق فروش:</span>
+        <span id="ob-ask-depth" class="ob-ft-val red">—</span>
+        <span class="ob-ft-sep">|</span>
+        <span class="ob-ft-lbl">امتیاز نقدشوندگی:</span>
+        <span id="ob-score" class="ob-ft-val">—</span>
+        <span class="ob-ft-sep">|</span>
         <div id="ob-tradable-badge" class="ob-tradable-badge"></div>
         <div id="ob-reason" class="ob-reason"></div>
       </div>
@@ -849,54 +915,68 @@ function renderOrderBook(sym, data) {
   const snap  = data?.snapshot;
   const td    = data?.tradability;
 
-  if (!snap) {
-    panel.classList.remove('visible');
-    return;
-  }
+  if (!snap) { panel.classList.remove('visible'); return; }
   panel.classList.add('visible');
 
+  // Header
+  document.getElementById('ob-hdr-sym').textContent     = sym;
+  document.getElementById('ob-hdr-spread').textContent  = snap.spread_pct
+    ? snap.spread_pct.toFixed(3) + '%' : '—';
+  if (snap.time) {
+    const t = String(snap.time).padStart(6,'0');
+    document.getElementById('ob-hdr-ts').textContent =
+      t.slice(0,2) + ':' + t.slice(2,4) + ':' + t.slice(4,6);
+  }
+
+  // Max vol across all levels (for bar width calculation)
   const maxVol = Math.max(
     ...snap.bids.map(b => b.volume || 0),
     ...snap.asks.map(a => a.volume || 0),
     1,
   );
 
-  const ladderRow = (level, side) => {
-    if (!level.price) return '';
-    const bar = Math.round(level.volume / maxVol * 100);
-    const col = side === 'bid' ? 'var(--green)' : 'var(--red)';
-    return `
-      <span class="ob-${side}">${fmtN(level.price)}</span>
-      <span class="ob-vol">${fmtV(level.volume)}</span>
-      <span class="ob-vol" style="color:var(--muted);font-size:9px">${level.count || ''}×</span>
-      <div class="ob-depth-bar" style="grid-column:1/-1;margin:-2px 0 3px">
-        <div class="ob-depth-fill" style="width:${bar}%;background:${col}40"></div>
-      </div>`;
+  // Build one level row
+  const levelRow = (level, side, isFirst) => {
+    if (!level || !level.price) return '';
+    const pct = Math.min(100, Math.round(level.volume / maxVol * 100));
+    const cls = `ob-lvl-row ${side}${isFirst ? ' best' : ''}`;
+    return `<div class="${cls}" style="--pct:${pct}%">
+      <span class="ob-lvl-price">${fmtN(level.price)}</span>
+      <span class="ob-lvl-vol">${fmtV(level.volume)}</span>
+      <span class="ob-lvl-cnt">${level.count || 0}×</span>
+    </div>`;
   };
 
-  document.getElementById('ob-bids').innerHTML =
-    `<span class="ob-header">قیمت</span><span class="ob-header">حجم</span><span class="ob-header">تعداد</span>` +
-    snap.bids.map(b => ladderRow(b, 'bid')).join('');
+  const bidHdr = `<div class="ob-col-hdr-row bid">
+    <span>قیمت خرید</span><span>حجم</span><span>تعداد</span>
+  </div>`;
+  const askHdr = `<div class="ob-col-hdr-row ask">
+    <span>قیمت فروش</span><span>حجم</span><span>تعداد</span>
+  </div>`;
 
-  document.getElementById('ob-asks').innerHTML =
-    `<span class="ob-header">قیمت</span><span class="ob-header">حجم</span><span class="ob-header">تعداد</span>` +
-    snap.asks.map(a => ladderRow(a, 'ask')).join('');
+  document.getElementById('ob-bid-side').innerHTML =
+    bidHdr + snap.bids.map((b,i) => levelRow(b, 'bid', i===0)).join('');
+  document.getElementById('ob-ask-side').innerHTML =
+    askHdr + snap.asks.map((a,i) => levelRow(a, 'ask', i===0)).join('');
 
-  document.getElementById('ob-spread').textContent     = snap.spread_pct ? snap.spread_pct.toFixed(3) + '%' : '—';
-  document.getElementById('ob-bid-depth').textContent  = snap.bid_depth ? fmtV(snap.bid_depth) + ' واحد' : '—';
-  document.getElementById('ob-ask-depth').textContent  = snap.ask_depth ? fmtV(snap.ask_depth) + ' واحد' : '—';
-  document.getElementById('ob-score').textContent      = td ? td.book_depth_score.toFixed(1) + '/100' : '—';
+  // Footer stats
+  document.getElementById('ob-bid-depth').textContent  =
+    snap.bid_depth ? fmtV(snap.bid_depth) + ' واحد' : '—';
+  document.getElementById('ob-ask-depth').textContent  =
+    snap.ask_depth ? fmtV(snap.ask_depth) + ' واحد' : '—';
+  document.getElementById('ob-score').textContent      =
+    td ? td.book_depth_score.toFixed(1) + '/100' : '—';
 
   const badge  = document.getElementById('ob-tradable-badge');
   const reason = document.getElementById('ob-reason');
   if (td) {
-    badge.className = 'ob-tradable-badge ' + (td.tradeable ? 'yes' : 'no');
+    badge.className  = 'ob-tradable-badge ' + (td.tradeable ? 'yes' : 'no');
     badge.textContent = td.tradeable
       ? `✓ قابل اجرا — ${fmtV(td.executable_volume)} واحد`
       : '✗ غیرقابل اجرا';
     reason.textContent = td.reason || '';
   } else {
-    badge.className = 'ob-tradable-badge';
+    badge.className  = 'ob-tradable-badge';
     badge.textContent = '';
     reason.textContent = '';
   }
@@ -1230,7 +1310,7 @@ function drawTicks(sym, rows, col, showVol) {
     vs.setData(rows.map(t => ({
       time:  t.unix_time,
       value: t.volume,
-      color: (t.premium_pct ?? 0) >= 0 ? 'rgba(239,83,80,.3)' : 'rgba(38,166,154,.3)',
+      color: (t.premium_pct ?? 0) >= 0 ? 'rgba(38,166,154,.3)' : 'rgba(239,83,80,.3)',
     })));
     AS[sym].vol = vs;
   }
@@ -1250,7 +1330,7 @@ function drawTicks(sym, rows, col, showVol) {
     const zeroData = rows.map(t => ({ time: t.unix_time, value: 0 }));
     KC.addLineSeries({ color:'rgba(255,255,255,.12)', lineWidth:1,
       priceLineVisible:false, lastValueVisible:false }).setData(zeroData);
-    [[0.3,'rgba(239,83,80,.5)'],[-.3,'rgba(38,166,154,.5)']].forEach(([v,c]) =>
+    [[0.3,'rgba(38,166,154,.5)'],[-.3,'rgba(239,83,80,.5)']].forEach(([v,c]) =>
       KC.addLineSeries({ color:c, lineWidth:1, lineStyle:LineStyle.Dashed,
         priceLineVisible:false, lastValueVisible:false })
         .setData(rows.map(t => ({ time: t.unix_time, value: +v })))
@@ -1318,7 +1398,7 @@ function drawPrem(sym, rows, col) {
       return {
         time:  r.time,
         value: v,
-        color: v >= 0 ? 'rgba(239,83,80,.6)' : 'rgba(38,166,154,.6)',
+        color: v >= 0 ? 'rgba(38,166,154,.6)' : 'rgba(239,83,80,.6)',
       };
     });
   } else {
@@ -1329,7 +1409,7 @@ function drawPrem(sym, rows, col) {
       return {
         time:  toT(r[tk]),
         value: v,
-        color: v >= 0 ? 'rgba(239,83,80,.6)' : 'rgba(38,166,154,.6)',
+        color: v >= 0 ? 'rgba(38,166,154,.6)' : 'rgba(239,83,80,.6)',
       };
     });
   }
@@ -1343,7 +1423,7 @@ function drawPrem(sym, rows, col) {
 
   // ±0.3% thresholds for single fund
   if (selected.size === 1) {
-    [[0.3,'rgba(239,83,80,.5)'],[-0.3,'rgba(38,166,154,.5)']].forEach(([v,c]) => {
+    [[0.3,'rgba(38,166,154,.5)'],[-0.3,'rgba(239,83,80,.5)']].forEach(([v,c]) => {
       KC.addLineSeries({ color:c, lineWidth:1, lineStyle:LineStyle.Dashed,
         priceLineVisible:false, lastValueVisible:false })
         .setData(data.map(d => ({ time:d.time, value:v })));
@@ -1420,7 +1500,7 @@ function updateInfoDefault(sym, rows) {
   document.getElementById('ib-vol').textContent = vol ? fmtV(vol) : '—';
   const pe = document.getElementById('ib-prem');
   pe.textContent = (prem>=0?'+':'') + prem.toFixed(3) + '%';
-  pe.style.color = prem > 0.1 ? 'var(--red)' : prem < -0.1 ? 'var(--green)' : '';
+  pe.style.color = prem > 0.1 ? 'var(--green)' : prem < -0.1 ? 'var(--red)' : '';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1445,7 +1525,7 @@ function renderStats(sym) {
     const tIcon = {WIDENING:'↗',NARROWING:'↘',STABLE:'→'}[trend] || '';
     const tCol  = trend==='WIDENING'  ? 'var(--red)'   :
                   trend==='NARROWING' ? 'var(--green)' : 'var(--muted)';
-    const slopeCol = slope > 0 ? 'var(--red)' : slope < 0 ? 'var(--green)' : 'var(--muted)';
+    const slopeCol = slope > 0 ? 'var(--green)' : slope < 0 ? 'var(--red)' : 'var(--muted)';
     html += `
       <div style="font-size:var(--fs-xs);color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;margin-top:2px">درون‌روزی</div>
       <div class="sr"><span>معاملات امروز</span><span class="sv">${ticks.toLocaleString('fa-IR')}</span></div>
@@ -1470,7 +1550,7 @@ function renderStats(sym) {
       <div class="sr"><span>وضعیت</span><span class="sv ${(st.current||0)>0?'pos':'neg'}">${pct(st.current)}</span></div>
       <div class="sr"><span>Z-score</span><span class="sv ${zCls}">${(st.z_score||0)>=0?'▲':'▼'} ${(st.z_score||0).toFixed(2)}</span></div>
       <div class="sr"><span>نمونه</span><span class="sv">${(st.count||0).toLocaleString('fa-IR')}</span></div>
-      <div class="sr"><span>فرصت‌های قابل اجرا</span><span class="sv ${st.actionable_count>0?'neg':''}">${st.actionable_count||0}</span></div>
+      <div class="sr"><span>فرصت‌های قابل اجرا</span><span class="sv ${st.actionable_count>0?'pos':''}">${st.actionable_count||0}</span></div>
       ${zAbs>1.5?`<div style="margin-top:7px;padding:5px 8px;background:rgba(240,192,64,.07);border-radius:5px;font-size:var(--fs-xs);color:var(--yellow)">⚠ انحراف بزرگ از میانگین</div>`:''}
     `;
   }

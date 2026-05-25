@@ -597,6 +597,52 @@ class TSETMCFetcher:
                              "count":  row.get("zOrdMeOf", 0)})
         return {"bids": bids, "asks": asks}
 
+    def get_best_limits_history(self, ins_code: str, date_int: int) -> list[dict]:
+        """Fetch all historical order-book snapshots for ins_code on date_int.
+
+        TSETMC endpoint: /BestLimits/{insCode}/{YYYYMMDD}
+        Response key:    "bestLimitsHistory"
+
+        Each snapshot groups 5 bid+ask levels for a single point in time.
+        Returns list of dicts: [{time: HHMMSS, bids: [...x5], asks: [...x5]}]
+        sorted ascending by time.  Returns [] if the endpoint is unavailable.
+        """
+        data = self._get(
+            f"{TSETMC_CDN}/BestLimits/{ins_code}/{date_int}", silent=True
+        )
+        if not data:
+            return []
+
+        rows = data.get("bestLimitsHistory") or []
+        if not rows:
+            return []
+
+        # Group rows by time; each time has up to 5 levels
+        from collections import defaultdict
+        by_time: dict = defaultdict(lambda: {"bids": [], "asks": []})
+        for row in rows:
+            t = row.get("hEven", 0)
+            by_time[t]["bids"].append({
+                "price":  row.get("pMeDem",    0),
+                "volume": row.get("qTitMeDem", 0),
+                "count":  row.get("zOrdMeDem", 0),
+            })
+            by_time[t]["asks"].append({
+                "price":  row.get("pMeOf",    0),
+                "volume": row.get("qTitMeOf", 0),
+                "count":  row.get("zOrdMeOf", 0),
+            })
+
+        # Sort levels: bids descending price (best first), asks ascending price
+        result = []
+        for t in sorted(by_time.keys()):
+            snap = by_time[t]
+            snap["time"] = t
+            snap["bids"].sort(key=lambda x: -x["price"])
+            snap["asks"].sort(key=lambda x:  x["price"])
+            result.append(snap)
+        return result
+
     # ------------------------------------------------------------------ #
     #  Search (discover mode)                                              #
     # ------------------------------------------------------------------ #
