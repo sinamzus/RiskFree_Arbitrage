@@ -130,8 +130,8 @@ def compute_intraday_context(
         )
         return None
 
-    # Sort by seq (ascending) — DB already sorts but be safe
-    valid.sort(key=lambda t: t["seq"])
+    # Sort by seq then time (ascending) — DB already sorts but be safe
+    valid.sort(key=lambda t: (t.get("seq", 0), t.get("time", 0)))
 
     # ── VWAP ─────────────────────────────────────────────────────────────────
     total_value  = sum(t["price"] * t["volume"] for t in valid)
