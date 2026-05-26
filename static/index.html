@@ -1530,9 +1530,9 @@ async function onChartClick(param) {
     console.debug('[OB-Click] ignored: no fund selected');
     return;
   }
-  // OB panel must be visible (single fund selected)
-  if (!document.getElementById('ob-panel').classList.contains('visible')) {
-    console.debug('[OB-Click] ignored: OB panel not visible');
+  // Need exactly one fund selected to show OB
+  if (selected.size !== 1) {
+    console.debug('[OB-Click] ignored: need exactly 1 fund selected, got', selected.size);
     return;
   }
 
@@ -1607,8 +1607,11 @@ async function onChartClick(param) {
     const ds = String(dateInt);
     const [jy, jm, jd] = gregorianToJalali(+ds.slice(0,4), +ds.slice(4,6), +ds.slice(6,8));
     const p2 = n => String(n).padStart(2,'0');
-    document.getElementById('ob-hist-label').textContent = `${jy}/${p2(jm)}/${p2(jd)} — داده‌ای ثبت نشده`;
+    const noDataLabel = `${jy}/${p2(jm)}/${p2(jd)} — داده‌ای ثبت نشده`;
+    document.getElementById('ob-hist-label').textContent = noDataLabel;
     document.getElementById('ob-hist-badge').classList.add('visible');
+    // Make sure the panel itself is visible so user sees the notice
+    document.getElementById('ob-panel').classList.add('visible');
     console.debug('[OB-Click] no snapshots for this date');
     return;
   }

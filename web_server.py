@@ -525,6 +525,7 @@ def create_app(db, scan_callback=None):
             date_int = int(_dt.now(ZoneInfo("Asia/Tehran")).strftime("%Y%m%d"))
 
         rows = db.get_orderbook_history(symbol, date_int, limit)
+        logger.info("[OB-History] symbol=%s date=%s → %d snapshots", symbol, date_int, len(rows))
 
         # Convert to compact format for the chart:
         # Each entry: {time (HHMMSS), spread_pct, bid_depth, ask_depth,
