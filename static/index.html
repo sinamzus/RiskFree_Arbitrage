@@ -343,6 +343,15 @@ html, body {
 .ib-val  { font-weight: 600; }
 #ib-prem { }
 
+/* ─── Center row: charts + OB sidebar ───────────────────────── */
+#center-row {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 0;
+}
+
 /* ─── Charts ─────────────────────────────────────────────────── */
 #charts {
   flex: 1;
@@ -444,13 +453,17 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .tc-muted { color: var(--muted); }
 .tc-sym   { font-weight: 800; }
 
-/* ─── Order-book panel ───────────────────────────────────────── */
+/* ─── Order-book panel (right sidebar within center-row) ─────── */
 #ob-panel {
   display: none;
   flex-direction: column;
   background: var(--surf);
-  border-top: 1px solid var(--brd);
+  border-left: 1px solid var(--brd);   /* separator between OB and charts */
+  width: 272px;
+  min-width: 272px;
+  max-width: 272px;
   flex-shrink: 0;
+  overflow-y: auto;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -458,12 +471,24 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
 /* Header */
 #ob-hdr {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 12px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
   border-bottom: 1px solid rgba(255,255,255,.05);
   font-size: 11px; color: var(--sub);
+  flex-shrink: 0;
 }
 #ob-hdr-sym  { font-weight: 700; color: var(--txt); font-size: 12px; }
+
+/* Close button */
+#ob-close-btn {
+  margin-right: auto;
+  background: none; border: none;
+  color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1;
+  padding: 1px 4px; border-radius: 3px;
+  transition: color .15s, background .15s;
+}
+#ob-close-btn:hover { color: var(--txt); background: rgba(255,255,255,.07); }
 #ob-hdr-spread { font-weight: 700; color: var(--yellow); }
 #ob-hdr-ts   { margin-right: auto; font-size: 10px; color: var(--muted); }
 
@@ -527,10 +552,11 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
 /* Footer */
 #ob-footer {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 5px 12px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 10px;
   border-top: 1px solid rgba(255,255,255,.04);
   font-size: 11px;
+  flex-shrink: 0;
 }
 .ob-ft-lbl { color: var(--muted); }
 .ob-ft-val { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -810,81 +836,87 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <span class="ib-lbl" id="ib-ticks-lbl" style="display:none">تیک</span><span class="ib-val" id="ib-ticks" style="display:none">—</span>
     </div>
 
-    <!-- Charts -->
-    <div id="charts">
-      <div id="price-el">
-        <div class="chart-lbl" id="price-lbl">قیمت + NAV</div>
-        <div class="chart-lbl" id="click-hint" style="left:12px;right:auto;color:rgba(255,255,255,.18);font-size:9px;pointer-events:none">
-          کلیک روی کندل ← OB تاریخی
-        </div>
-        <!-- Chart controls: fit, auto-scale, log scale, scroll-to-latest -->
-        <div id="chart-controls">
-          <button class="cc-btn active" id="cc-autoscale" title="اسکیل خودکار" onclick="toggleAutoScale()">↕</button>
-          <button class="cc-btn" id="cc-log" title="مقیاس لگاریتمی" onclick="toggleLogScale()">㏒</button>
-          <button class="cc-btn" title="نمایش همه داده‌ها" onclick="chartFitContent()">⤢</button>
-          <button class="cc-btn" title="رفتن به آخرین بار" onclick="chartScrollToLatest()">⟳</button>
-        </div>
-      </div>
-      <div id="prem-el">
-        <div class="chart-lbl">صرف / تخفیف %</div>
-      </div>
-      <div id="boot-notice">
-        <div class="bn-title">⚠ تاریخچه روزانه موجود نیست</div>
-        <div class="bn-sub">ابتدا این دستور را اجرا کنید:</div>
-        <code>python main.py --bootstrap</code>
-      </div>
-    </div>
+    <!-- Center row: charts (main) + OB sidebar (right) -->
+    <div id="center-row">
 
-    <!-- Order-book panel (shown when a fund is selected) -->
-    <div id="ob-panel">
-      <!-- Header -->
-      <div id="ob-hdr">
-        <span id="ob-hdr-sym" style="font-weight:800;color:var(--txt);font-size:12px">—</span>
-        <span class="ob-ft-sep">|</span>
-        <span class="ob-ft-lbl">اسپرد:</span>
-        <span id="ob-hdr-spread">—</span>
-        <span id="ob-hdr-ts"></span>
-        <!-- Historical snapshot badge — shown when viewing past OB via chart click -->
-        <div id="ob-hist-badge">
-          <span>📅</span>
-          <span id="ob-hist-label">—</span>
-          <button title="بازگشت به OB زنده" onclick="clearOBHistorical()">✕ زنده</button>
+      <!-- Order-book panel — right sidebar (first in DOM = right in RTL) -->
+      <div id="ob-panel">
+        <!-- Header -->
+        <div id="ob-hdr">
+          <button id="ob-close-btn" onclick="closeOBPanel()" title="بستن پنل اردربوک">✕</button>
+          <span id="ob-hdr-sym" style="font-weight:800;color:var(--txt);font-size:12px">—</span>
+          <span class="ob-ft-sep">|</span>
+          <span class="ob-ft-lbl">اسپرد:</span>
+          <span id="ob-hdr-spread">—</span>
+          <span id="ob-hdr-ts"></span>
+          <!-- Historical snapshot badge — shown when viewing past OB via chart click -->
+          <div id="ob-hist-badge">
+            <span>📅</span>
+            <span id="ob-hist-label">—</span>
+            <button title="بازگشت به OB زنده" onclick="clearOBHistorical()">✕ زنده</button>
+          </div>
+          <div class="ob-toggle">
+            <button class="ob-toggle-btn active" onclick="setObView('ladder')">تابلو</button>
+            <button class="ob-toggle-btn"        onclick="setObView('chart')">نمودار</button>
+          </div>
         </div>
-        <div class="ob-toggle">
-          <button class="ob-toggle-btn active" onclick="setObView('ladder')">تابلو</button>
-          <button class="ob-toggle-btn"        onclick="setObView('chart')">نمودار</button>
+        <!-- Bid / Ask ladder grid (default view) -->
+        <div id="ob-book">
+          <div id="ob-bid-side"></div>
+          <div id="ob-ask-side"></div>
+        </div>
+        <!-- Imbalance bar -->
+        <div class="ob-imbalance">
+          <div class="ob-imb-bid" id="ob-imb-bid" style="width:50%"></div>
+          <div class="ob-imb-ask" id="ob-imb-ask" style="width:50%"></div>
+        </div>
+        <!-- OB history chart (toggled view) -->
+        <div id="ob-chart-wrap">
+          <span id="ob-chart-lbl">اسپرد % + عمق</span>
+          <div id="ob-chart-el"></div>
+        </div>
+        <!-- Footer: totals + tradability -->
+        <div id="ob-footer">
+          <span class="ob-ft-lbl">خرید:</span>
+          <span id="ob-bid-depth" class="ob-ft-val grn">—</span>
+          <span class="ob-ft-sep">|</span>
+          <span class="ob-ft-lbl">فروش:</span>
+          <span id="ob-ask-depth" class="ob-ft-val red">—</span>
+          <span class="ob-ft-sep">|</span>
+          <span class="ob-ft-lbl">نقدشوندگی:</span>
+          <span id="ob-score" class="ob-ft-val">—</span>
+          <span class="ob-ft-sep">|</span>
+          <div id="ob-tradable-badge" class="ob-tradable-badge"></div>
+          <div id="ob-reason" class="ob-reason"></div>
         </div>
       </div>
-      <!-- Bid / Ask ladder grid (default view) -->
-      <div id="ob-book">
-        <div id="ob-bid-side"></div>
-        <div id="ob-ask-side"></div>
+
+      <!-- Charts -->
+      <div id="charts">
+        <div id="price-el">
+          <div class="chart-lbl" id="price-lbl">قیمت + NAV</div>
+          <div class="chart-lbl" id="click-hint" style="left:12px;right:auto;color:rgba(255,255,255,.18);font-size:9px;pointer-events:none">
+            کلیک روی کندل ← OB تاریخی
+          </div>
+          <!-- Chart controls: fit, auto-scale, log scale, scroll-to-latest -->
+          <div id="chart-controls">
+            <button class="cc-btn active" id="cc-autoscale" title="اسکیل خودکار" onclick="toggleAutoScale()">↕</button>
+            <button class="cc-btn" id="cc-log" title="مقیاس لگاریتمی" onclick="toggleLogScale()">㏒</button>
+            <button class="cc-btn" title="نمایش همه داده‌ها" onclick="chartFitContent()">⤢</button>
+            <button class="cc-btn" title="رفتن به آخرین بار" onclick="chartScrollToLatest()">⟳</button>
+          </div>
+        </div>
+        <div id="prem-el">
+          <div class="chart-lbl">صرف / تخفیف %</div>
+        </div>
+        <div id="boot-notice">
+          <div class="bn-title">⚠ تاریخچه روزانه موجود نیست</div>
+          <div class="bn-sub">ابتدا این دستور را اجرا کنید:</div>
+          <code>python main.py --bootstrap</code>
+        </div>
       </div>
-      <!-- Imbalance bar -->
-      <div class="ob-imbalance">
-        <div class="ob-imb-bid" id="ob-imb-bid" style="width:50%"></div>
-        <div class="ob-imb-ask" id="ob-imb-ask" style="width:50%"></div>
-      </div>
-      <!-- OB history chart (toggled view) -->
-      <div id="ob-chart-wrap">
-        <span id="ob-chart-lbl">اسپرد % + عمق</span>
-        <div id="ob-chart-el"></div>
-      </div>
-      <!-- Footer: totals + tradability -->
-      <div id="ob-footer">
-        <span class="ob-ft-lbl">خرید:</span>
-        <span id="ob-bid-depth" class="ob-ft-val grn">—</span>
-        <span class="ob-ft-sep">|</span>
-        <span class="ob-ft-lbl">فروش:</span>
-        <span id="ob-ask-depth" class="ob-ft-val red">—</span>
-        <span class="ob-ft-sep">|</span>
-        <span class="ob-ft-lbl">نقدشوندگی:</span>
-        <span id="ob-score" class="ob-ft-val">—</span>
-        <span class="ob-ft-sep">|</span>
-        <div id="ob-tradable-badge" class="ob-tradable-badge"></div>
-        <div id="ob-reason" class="ob-reason"></div>
-      </div>
-    </div>
+
+    </div><!-- /#center-row -->
 
     <!-- Bottom -->
     <div id="bottom">
@@ -1697,6 +1729,11 @@ function clearOBHistorical() {
   document.getElementById('ob-hist-badge').classList.remove('visible');
   const sym = [...selected][0];
   if (sym) loadOrderBook(sym);   // reload live OB
+}
+
+function closeOBPanel() {
+  document.getElementById('ob-panel').classList.remove('visible');
+  document.getElementById('ob-hist-badge').classList.remove('visible');
 }
 
 // ══════════════════════════════════════════════════════════════════
