@@ -499,10 +499,19 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_intraday_dates(self, symbol: str) -> list[int]:
-        """Return sorted list of dates (YYYYMMDD) that have intraday data for *symbol*."""
+        """Return sorted list of dates (YYYYMMDD) that have intraday tick data for *symbol*."""
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT date FROM intraday_trades WHERE symbol=? ORDER BY date",
+                (symbol,),
+            ).fetchall()
+        return [r["date"] for r in rows]
+
+    def get_ob_dates(self, symbol: str) -> list[int]:
+        """Return sorted list of dates (YYYYMMDD) that have OB snapshots for *symbol*."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT date FROM intraday_orderbook WHERE symbol=? ORDER BY date",
                 (symbol,),
             ).fetchall()
         return [r["date"] for r in rows]

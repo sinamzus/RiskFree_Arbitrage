@@ -195,15 +195,38 @@ def show_status(symbol_filter: str | None):
 
 # ── main fetch ───────────────────────────────────────────────────────────────
 
-def fetch(dates: list[int], symbol_filter: str | None, force: bool, orderbook: bool = False):
-    args_orderbook = orderbook
+def _save_ob_for_date(sym: str, ins_code: str, date_int: int, label: str) -> int:
+    """Fetch and save OB snapshots for one (sym, date). Returns count saved."""
+    ob_snaps = fetch_orderbook(ins_code, date_int)
+    if not ob_snaps:
+        return 0
+    date_str = f"{date_int}"[:4] + "-" + f"{date_int}"[4:6] + "-" + f"{date_int}"[6:]
+    nav_row  = DB.get_cached_nav(sym, nav_date=date_str)
+    nav_val  = nav_row["cancel_nav"] if nav_row else 0.0
+    saved = sum(
+        1 for snap in ob_snaps
+        if DB.save_orderbook_snapshot(sym, ins_code, date_int, snap["time"], snap, nav=nav_val)
+    )
+    return saved
+
+
+def fetch(dates: list[int], symbol_filter: str | None, force: bool,
+          orderbook: bool = False, ob_only: bool = False):
+    """Fetch intraday ticks (and optionally order-book history) for all funds.
+
+    ob_only=True  — skip tick download, only collect OB for *all* dates
+                    (works even if ticks were already saved).
+    orderbook=True — collect OB in addition to ticks (only for newly-fetched dates).
+    """
+    mode = "اردربوک" if ob_only else ("تیک + اردربوک" if orderbook else "تیک")
     print()
     print("=" * 72)
-    print(f"  دریافت داده معاملات درون‌روزی — {len(dates)} روز")
+    print(f"  دریافت داده درون‌روزی — {mode} — {len(dates)} روز")
     print(f"  تاریخ‌ها: {dates}")
     print("=" * 72)
 
-    grand_new = 0
+    grand_new   = 0
+    grand_ob    = 0
 
     for i, fund in enumerate(FIXED_INCOME_ETFS, 1):
         sym      = fund["symbol"]
@@ -215,49 +238,62 @@ def fetch(dates: list[int], symbol_filter: str | None, force: bool, orderbook: b
             print(f"  [{i:2d}] {sym:12s}  ← بدون ins_code، رد شد")
             continue
 
-        fund_new = 0
+        # ── OB-only mode: skip tick download ────────────────────────────────
+        if ob_only:
+            # Find which dates already have OB snapshots in DB
+            have_ob = set(DB.get_ob_dates(sym))
+            for date_int in dates:
+                if date_int in have_ob and not force:
+                    print(f"  [{i:2d}] {sym:12s}  {date_int}  ← OB قبلاً ذخیره شده، رد شد")
+                    continue
+                ob_count = _save_ob_for_date(sym, ins_code, date_int, f"[{i:2d}] {sym}")
+                grand_ob += ob_count
+                tag = f"{ob_count} snapshot" if ob_count else "بدون داده"
+                print(f"  [{i:2d}] {sym:12s}  {date_int}  OB: {tag}")
+                time.sleep(0.3)
+            continue
+
+        # ── Normal mode: fetch ticks (+ optionally OB) ──────────────────────
+        fund_new  = 0
         have_dates = set(DB.get_intraday_dates(sym)) if not force else set()
 
         for date_int in dates:
             if date_int in have_dates:
-                print(f"  [{i:2d}] {sym:12s}  {date_int}  ← قبلاً دریافت شده، رد شد")
+                # Ticks already saved — still fetch OB if requested and missing
+                if orderbook:
+                    have_ob = DB.get_ob_dates(sym)
+                    if date_int not in have_ob:
+                        ob_count = _save_ob_for_date(sym, ins_code, date_int, "")
+                        grand_ob += ob_count
+                        print(f"  [{i:2d}] {sym:12s}  {date_int}  ← تیک موجود  OB: {ob_count} snapshot")
+                    else:
+                        print(f"  [{i:2d}] {sym:12s}  {date_int}  ← قبلاً دریافت شده، رد شد")
+                else:
+                    print(f"  [{i:2d}] {sym:12s}  {date_int}  ← قبلاً دریافت شده، رد شد")
                 continue
 
             ticks = fetch_ticks(ins_code, date_int)
-
             if not ticks:
                 print(f"  [{i:2d}] {sym:12s}  {date_int}  ← بدون داده (بازار بسته یا خطا)")
                 time.sleep(0.2)
                 continue
 
-            # Filter cancelled
-            valid = [t for t in ticks if not t["canceled"]]
+            valid    = [t for t in ticks if not t["canceled"]]
             new_rows = DB.save_intraday_trades(sym, ins_code, date_int, valid)
             fund_new  += new_rows
             grand_new += new_rows
 
-            # Also fetch & save historical order-book snapshots for this date
-            if not args_orderbook:
-                ob_count = 0
-            else:
-                ob_snaps = fetch_orderbook(ins_code, date_int)
-                ob_count = 0
-                # Look up the cached daily NAV (cancel_nav) to store alongside OB snapshots
-                date_str = (f"{date_int}"[:4] + "-" + f"{date_int}"[4:6] + "-" + f"{date_int}"[6:])
-                nav_row = DB.get_cached_nav(sym, nav_date=date_str)
-                nav_val = nav_row["cancel_nav"] if nav_row else 0.0
-                for snap in ob_snaps:
-                    if DB.save_orderbook_snapshot(sym, ins_code, date_int,
-                                                   snap["time"], snap, nav=nav_val):
-                        ob_count += 1
+            ob_count = 0
+            if orderbook:
+                ob_count  = _save_ob_for_date(sym, ins_code, date_int, "")
+                grand_ob += ob_count
 
-            # Quick summary
-            prices = [t["price"] for t in valid if t["price"] > 0]
-            p_min  = min(prices) if prices else 0
-            p_max  = max(prices) if prices else 0
+            prices  = [t["price"] for t in valid if t["price"] > 0]
+            p_min   = min(prices) if prices else 0
+            p_max   = max(prices) if prices else 0
             t_first = hhmm(valid[0]["time"]) if valid else "—"
             t_last  = hhmm(valid[-1]["time"]) if valid else "—"
-            ob_str = f"  اردربوک {ob_count} snapshot" if args_orderbook else ""
+            ob_str  = f"  OB: {ob_count}" if orderbook else ""
             print(
                 f"  [{i:2d}] {sym:12s}  {date_int}  "
                 f"{len(valid):>5,} تیک  "
@@ -267,11 +303,11 @@ def fetch(dates: list[int], symbol_filter: str | None, force: bool, orderbook: b
             )
             time.sleep(0.25)
 
-        if fund_new == 0 and symbol_filter is None:
-            pass  # already printed per-date
-
     print()
-    print(f"  ✓ مجموع تیک جدید ذخیره‌شده: {grand_new:,}")
+    if not ob_only:
+        print(f"  ✓ مجموع تیک جدید: {grand_new:,}")
+    if orderbook or ob_only:
+        print(f"  ✓ مجموع OB snapshot جدید: {grand_ob:,}")
     print()
 
 
@@ -279,7 +315,22 @@ def fetch(dates: list[int], symbol_filter: str | None, force: bool, orderbook: b
 
 def main():
     ap = argparse.ArgumentParser(
-        description="دریافت داده معاملات درون‌روزی (سابقه) برای همه صندوق‌ها"
+        description="دریافت داده معاملات درون‌روزی (سابقه) برای همه صندوق‌ها",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+مثال‌های رایج:
+  # دریافت تیک + اردربوک ۶۰ روز گذشته (اجرای اول)
+  python tools/fetch_intraday.py --days 60 --orderbook
+
+  # فقط اردربوک ۶۰ روز گذشته (تیک‌ها قبلاً دانلود شده)
+  python tools/fetch_intraday.py --days 60 --ob-only
+
+  # فقط امروز، هر دو
+  python tools/fetch_intraday.py --orderbook
+
+  # وضعیت فعلی DB
+  python tools/fetch_intraday.py --status
+""",
     )
     ap.add_argument("--date",   help="تاریخ YYYYMMDD (پیش‌فرض: امروز)")
     ap.add_argument("--days",   type=int, default=1,
@@ -288,7 +339,9 @@ def main():
     ap.add_argument("--force",  action="store_true",
                     help="حتی اگر قبلاً دریافت شده، دوباره بگیر")
     ap.add_argument("--orderbook", action="store_true",
-                    help="علاوه بر تیک‌ها، سابقه اردربوک را هم ذخیره کن")
+                    help="علاوه بر تیک‌ها، اردربوک تاریخی را هم ذخیره کن")
+    ap.add_argument("--ob-only", action="store_true",
+                    help="فقط اردربوک — تیک دانلود نمی‌شود (برای تاریخ‌های قبلاً ذخیره‌شده)")
     ap.add_argument("--status", action="store_true",
                     help="فقط نمایش وضعیت DB، بدون دریافت جدید")
     args = ap.parse_args()
@@ -307,7 +360,9 @@ def main():
     else:
         dates = trading_dates(args.days)
 
-    fetch(dates, args.symbol, args.force, orderbook=args.orderbook)
+    fetch(dates, args.symbol, args.force,
+          orderbook=args.orderbook,
+          ob_only=args.ob_only)
     show_status(args.symbol)
 
 
