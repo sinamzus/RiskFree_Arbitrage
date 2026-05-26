@@ -18,7 +18,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  /* TradingView dark palette */
+  /* TradingView dark palette (default) */
   --bg:        #131722;
   --surf:      #1e222d;
   --surf2:     #252a38;
@@ -33,6 +33,12 @@
   --blue:      #5b9cf6;
   --purple:    #9b8aff;
 
+  /* TV chart internals (dark) */
+  --tv-bg:     #131722;
+  --tv-brd:    #363c4e;
+  --tv-txt:    #9598a1;
+  --tv-grid:   #1e222d;
+
   /* Typography */
   --font: 'Vazirmatn', 'Segoe UI', Tahoma, Arial, sans-serif;
   --fs-xs: 11px;
@@ -41,6 +47,74 @@
   --fs-lg: 14px;
   --fs-xl: 16px;
 }
+
+/* ─── Light / Day theme ──────────────────────────────────────── */
+body.light {
+  --bg:     #f0f3fa;
+  --surf:   #ffffff;
+  --surf2:  #f5f7fd;
+  --brd:    #dde1ee;
+  --brd2:   #c4cad8;
+  --txt:    #1a1e2e;
+  --sub:    #4a5068;
+  --muted:  #848aa0;
+  --green:  #1a9488;
+  --red:    #d93025;
+  --yellow: #b45309;
+  --blue:   #2563eb;
+  --purple: #7c3aed;
+
+  --tv-bg:   #ffffff;
+  --tv-brd:  #dde1ee;
+  --tv-txt:  #4a5068;
+  --tv-grid: #f0f3fa;
+}
+
+/* Light-mode specific overrides (hardcoded colors in components) */
+body.light #chart-controls .cc-btn {
+  background: rgba(220,225,240,.85);
+  border-color: rgba(0,0,0,.1);
+  color: var(--sub);
+}
+body.light #chart-controls .cc-btn:hover {
+  background: rgba(0,0,0,.07);
+  color: var(--txt);
+}
+body.light #chart-controls .cc-btn.active {
+  background: rgba(37,99,235,.15);
+  border-color: rgba(37,99,235,.4);
+  color: var(--blue);
+}
+body.light #boot-notice {
+  background: rgba(240,243,250,.97);
+  border-color: rgba(180,83,9,.35);
+}
+body.light .ob-lvl-row::before { opacity: 0.10; }
+body.light .ob-lvl-row.bid { background: rgba(26,148,136,.03); }
+body.light .ob-lvl-row.ask { background: rgba(217,48,37,.03); }
+body.light table td { border-bottom-color: rgba(0,0,0,.04); }
+body.light tr:hover td { background: rgba(0,0,0,.03); }
+body.light #bootstrap-toast {
+  background: var(--surf2);
+  border-color: var(--brd);
+}
+body.light .scan-btn { background: var(--blue); }
+
+/* Theme toggle button */
+#theme-btn {
+  background: transparent;
+  border: 1px solid var(--brd2);
+  color: var(--muted);
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: background .12s, border-color .12s, color .12s;
+  user-select: none;
+}
+#theme-btn:hover { background: rgba(128,128,128,.1); color: var(--txt); }
 
 html, body {
   height: 100%;
@@ -580,6 +654,14 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   100% { background-position: -200% 0; }
 }
 
+/* OB book update flash */
+@keyframes ob-flash {
+  0%   { opacity: 1; }
+  25%  { opacity: .35; }
+  100% { opacity: 1; }
+}
+.ob-flash { animation: ob-flash .35s ease-out; }
+
 /* OB imbalance bar */
 .ob-imbalance {
   display: flex; height: 4px; border-radius: 2px; overflow: hidden;
@@ -686,6 +768,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   <span id="sel-badge"></span>
   <span id="last-scan">—</span>
+  <button id="theme-btn" onclick="toggleTheme()" title="حالت روز / شب">☀️</button>
   <button class="scan-btn" onclick="triggerScan()">🔄 اسکن</button>
 </div>
 
@@ -835,7 +918,16 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 // ══════════════════════════════════════════════════════════════════
 const { createChart, CrosshairMode, LineStyle } = LightweightCharts;
 
-const TV = { bg:'#131722', surf:'#1e222d', brd:'#2a2e39', txt:'#d1d4dc' };
+// TV color tokens — updated dynamically when theme changes
+// (tvOpts() reads these each time it's called via buildCharts → clearSeries)
+let TV = { bg:'#131722', surf:'#1e222d', brd:'#363c4e', txt:'#9598a1', grid:'#1e222d' };
+
+function _syncTV() {
+  const light = document.body.classList.contains('light');
+  TV = light
+    ? { bg:'#ffffff', surf:'#f5f7fd', brd:'#dde1ee', txt:'#4a5068', grid:'#f0f3fa' }
+    : { bg:'#131722', surf:'#1e222d', brd:'#363c4e', txt:'#9598a1', grid:'#1e222d' };
+}
 
 const PALETTE = [
   '#5b9cf6','#26a69a','#f0c040','#ef5350',
@@ -863,6 +955,7 @@ let syncing     = false;
 //  Init
 // ══════════════════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', () => {
+  initTheme();    // restore saved theme before first paint
   buildCharts();
   initSSE();
   checkBootstrapStatus();   // show banner if bootstrap already running
@@ -873,6 +966,36 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(() => { if (selected.size===1) loadOrderBook([...selected][0]); }, 30_000);
   window.addEventListener('resize', onResize);
 });
+
+// ══════════════════════════════════════════════════════════════════
+//  Theme (light / dark)
+// ══════════════════════════════════════════════════════════════════
+const _THEME_KEY = 'arb_theme';
+
+function initTheme() {
+  const saved = localStorage.getItem(_THEME_KEY) || 'dark';
+  _applyTheme(saved, false);
+}
+
+function toggleTheme() {
+  const isLight = document.body.classList.contains('light');
+  _applyTheme(isLight ? 'dark' : 'light', true);
+}
+
+function _applyTheme(theme, redrawNow) {
+  const isLight = theme === 'light';
+  document.body.classList.toggle('light', isLight);
+  const btn = document.getElementById('theme-btn');
+  if (btn) {
+    btn.textContent = isLight ? '🌙' : '☀️';
+    btn.title       = isLight ? 'حالت شب (Dark)' : 'حالت روز (Light)';
+  }
+  localStorage.setItem(_THEME_KEY, theme);
+  if (redrawNow) {
+    cache = {};
+    redraw();   // rebuilds charts with new TV colors via _syncTV()
+  }
+}
 
 function todayStr() {
   const d = new Date();
@@ -913,7 +1036,7 @@ function tvOpts(el, showTimeAxis) {
     width: el.clientWidth, height: el.clientHeight,
     layout: { background: { color: TV.bg }, textColor: TV.txt,
               fontFamily: "'Vazirmatn', 'Segoe UI', Tahoma, Arial, sans-serif" },
-    grid:   { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+    grid:   { vertLines: { color: TV.grid }, horzLines: { color: TV.grid } },
     crosshair: { mode: CrosshairMode.Normal },
     rightPriceScale: { borderColor: TV.brd, autoScale: true },
     localization: {
@@ -936,6 +1059,7 @@ function tvOpts(el, showTimeAxis) {
 }
 
 function buildCharts() {
+  _syncTV();   // pick up current theme before creating charts
   const pe = document.getElementById('price-el');
   const ke = document.getElementById('prem-el');
   if (PC) { PC.remove(); PC = null; }
@@ -1391,11 +1515,26 @@ function chartScrollToLatest() {
 const _obSnapCache = {};   // `${sym}_${dateInt}` → snapshots array
 
 async function onChartClick(param) {
-  if (!param?.time) return;
+  // ── Debug trace (open browser console to see) ─────────────────────
+  console.debug('[OB-Click] raw param.time =', param?.time,
+    '| typeof =', typeof param?.time,
+    '| src =', src,
+    '| selected =', [...selected]);
+
+  if (!param?.time) {
+    console.debug('[OB-Click] ignored: no param.time (empty chart area)');
+    return;
+  }
   const sym = [...selected][0];
-  if (!sym) return;
+  if (!sym) {
+    console.debug('[OB-Click] ignored: no fund selected');
+    return;
+  }
   // OB panel must be visible (single fund selected)
-  if (!document.getElementById('ob-panel').classList.contains('visible')) return;
+  if (!document.getElementById('ob-panel').classList.contains('visible')) {
+    console.debug('[OB-Click] ignored: OB panel not visible');
+    return;
+  }
 
   // Decode clicked time → Gregorian YYYYMMDD integer + HHMMSS
   let dateInt = 0, targetHHMMSS = 999999;
@@ -1419,7 +1558,6 @@ async function onChartClick(param) {
 
   } else if (src === 'intraday') {
     // param.time is a UTC Unix timestamp (seconds) — value is ~1.7 billion for 2025
-    // The old code mistakenly checked < 20_000_000 which is always false for real timestamps
     if (typeof param.time === 'number' && param.time > 0) {
       const d = new Date(param.time * 1000);
       const parts = new Intl.DateTimeFormat('en-US', {
@@ -1433,9 +1571,17 @@ async function onChartClick(param) {
       let hh = +p.hour; if (hh === 24) hh = 0;
       targetHHMMSS = hh * 10000 + +p.minute * 100 + +p.second;
     }
+  } else {
+    console.debug('[OB-Click] ignored: src =', src, '(not daily/intraday)');
+    return;
   }
 
-  if (!dateInt) return;
+  console.debug('[OB-Click] decoded → dateInt =', dateInt, 'targetHHMMSS =', targetHHMMSS);
+
+  if (!dateInt) {
+    console.debug('[OB-Click] ignored: could not decode date from param.time');
+    return;
+  }
 
   // Show a loading indicator in the OB header while fetching
   _setOBHistLoading(true);
@@ -1454,6 +1600,8 @@ async function onChartClick(param) {
     _setOBHistLoading(false);
   }
 
+  console.debug('[OB-Click] snaps for', sym, dateInt, '→', snaps.length, 'snapshots');
+
   if (!snaps.length) {
     // No OB data collected for this date — show a notice in the badge
     const ds = String(dateInt);
@@ -1461,6 +1609,7 @@ async function onChartClick(param) {
     const p2 = n => String(n).padStart(2,'0');
     document.getElementById('ob-hist-label').textContent = `${jy}/${p2(jm)}/${p2(jd)} — داده‌ای ثبت نشده`;
     document.getElementById('ob-hist-badge').classList.add('visible');
+    console.debug('[OB-Click] no snapshots for this date');
     return;
   }
 
@@ -1474,6 +1623,9 @@ async function onChartClick(param) {
       else break;
     }
   }
+
+  console.debug('[OB-Click] showing snapshot at time', closest.time,
+    'spread', closest.spread_pct, 'bid_depth', closest.bid_depth);
 
   // Render historical OB ladder
   _renderHistoricalOBSnap(sym, dateInt, closest);
@@ -1526,6 +1678,12 @@ function _renderHistoricalOBSnap(sym, dateInt, snap) {
   // Switch to ladder and render
   if (obView !== 'ladder') setObView('ladder');
   renderOrderBook(sym, fakeData);
+
+  // Flash the OB book to give clear visual feedback that data changed
+  const book = document.getElementById('ob-book');
+  book.classList.remove('ob-flash');
+  void book.offsetWidth;   // force reflow to restart animation
+  book.classList.add('ob-flash');
 
   // Show historical badge in OB header
   document.getElementById('ob-hist-label').textContent = label;
