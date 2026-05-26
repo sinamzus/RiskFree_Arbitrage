@@ -199,11 +199,50 @@ class Database:
     def _init(self):
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
-            # ── migrate intraday_orderbook: add nav column if absent ──────────
-            existing_ob = {row[1] for row in conn.execute("PRAGMA table_info(intraday_orderbook)").fetchall()}
-            if "nav" not in existing_ob:
-                conn.execute("ALTER TABLE intraday_orderbook ADD COLUMN nav REAL DEFAULT 0")
-                logger.debug("Migrated intraday_orderbook: added column nav")
+
+        # ── ensure intraday_orderbook exists (executescript can silently skip
+        #    new tables when the DB was created with an older schema version) ──
+        with self._conn() as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+            if "intraday_orderbook" not in tables:
+                logger.warning("intraday_orderbook missing — creating explicitly")
+                conn.executescript("""
+CREATE TABLE IF NOT EXISTS intraday_orderbook (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol      TEXT    NOT NULL,
+    ins_code    TEXT    NOT NULL,
+    date        INTEGER NOT NULL,
+    time        INTEGER NOT NULL,
+    bid1_price  REAL DEFAULT 0,  bid1_vol INTEGER DEFAULT 0,  bid1_cnt INTEGER DEFAULT 0,
+    bid2_price  REAL DEFAULT 0,  bid2_vol INTEGER DEFAULT 0,  bid2_cnt INTEGER DEFAULT 0,
+    bid3_price  REAL DEFAULT 0,  bid3_vol INTEGER DEFAULT 0,  bid3_cnt INTEGER DEFAULT 0,
+    bid4_price  REAL DEFAULT 0,  bid4_vol INTEGER DEFAULT 0,  bid4_cnt INTEGER DEFAULT 0,
+    bid5_price  REAL DEFAULT 0,  bid5_vol INTEGER DEFAULT 0,  bid5_cnt INTEGER DEFAULT 0,
+    ask1_price  REAL DEFAULT 0,  ask1_vol INTEGER DEFAULT 0,  ask1_cnt INTEGER DEFAULT 0,
+    ask2_price  REAL DEFAULT 0,  ask2_vol INTEGER DEFAULT 0,  ask2_cnt INTEGER DEFAULT 0,
+    ask3_price  REAL DEFAULT 0,  ask3_vol INTEGER DEFAULT 0,  ask3_cnt INTEGER DEFAULT 0,
+    ask4_price  REAL DEFAULT 0,  ask4_vol INTEGER DEFAULT 0,  ask4_cnt INTEGER DEFAULT 0,
+    ask5_price  REAL DEFAULT 0,  ask5_vol INTEGER DEFAULT 0,  ask5_cnt INTEGER DEFAULT 0,
+    spread_pct  REAL DEFAULT 0,
+    bid_depth   INTEGER DEFAULT 0,
+    ask_depth   INTEGER DEFAULT 0,
+    nav         REAL DEFAULT 0,
+    UNIQUE (symbol, date, time)
+);
+CREATE INDEX IF NOT EXISTS ix_ob_symbol_date ON intraday_orderbook(symbol, date);
+""")
+            else:
+                # ── migrate intraday_orderbook: add nav column if absent ────────
+                existing_ob = {row[1] for row in conn.execute(
+                    "PRAGMA table_info(intraday_orderbook)"
+                ).fetchall()}
+                if "nav" not in existing_ob:
+                    conn.execute(
+                        "ALTER TABLE intraday_orderbook ADD COLUMN nav REAL DEFAULT 0"
+                    )
+                    logger.debug("Migrated intraday_orderbook: added column nav")
             # ── migrate existing DBs: add columns if absent ───────────────────
             existing_snap = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
             for col, defn in [
