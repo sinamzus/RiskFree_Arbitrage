@@ -67,6 +67,30 @@ CREATE TABLE IF NOT EXISTS intraday_trades (
 
 CREATE INDEX IF NOT EXISTS ix_intraday_symbol_date ON intraday_trades(symbol, date);
 
+-- ── Raw order-book tick stream (tick-by-tick, for backtesting) ────────────
+-- One row per raw TSETMC delta event (ref_id + level).
+-- The API returns partial updates: each ref_id touches 1-5 levels.
+-- Sort by ref_id to replay and reconstruct the full book at any instant.
+-- Fields mirror TSETMC bestLimitsHistory exactly.
+CREATE TABLE IF NOT EXISTS ob_ticks (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol    TEXT    NOT NULL,
+    ins_code  TEXT    NOT NULL,
+    date      INTEGER NOT NULL,   -- YYYYMMDD
+    ref_id    INTEGER NOT NULL,   -- TSETMC global event sequence (sort key)
+    heven     INTEGER NOT NULL,   -- HHMMSS (time of this event)
+    level     INTEGER NOT NULL,   -- 1=best … 5=worst
+    bid_price REAL    DEFAULT 0,
+    bid_vol   INTEGER DEFAULT 0,
+    bid_cnt   INTEGER DEFAULT 0,
+    ask_price REAL    DEFAULT 0,
+    ask_vol   INTEGER DEFAULT 0,
+    ask_cnt   INTEGER DEFAULT 0,
+    UNIQUE (symbol, date, ref_id, level)
+);
+CREATE INDEX IF NOT EXISTS ix_ob_ticks_sym_date   ON ob_ticks(symbol, date);
+CREATE INDEX IF NOT EXISTS ix_ob_ticks_sym_ref    ON ob_ticks(symbol, date, ref_id);
+
 -- ── Intraday order-book snapshots ─────────────────────────────────────────
 -- One row per (symbol, date, time).  Captured at every scanner tick.
 -- Stores top-5 bid/ask levels so tradability can be analysed offline.
@@ -494,6 +518,70 @@ class Database:
                    FROM intraday_trades
                    WHERE symbol=? AND date=?
                    ORDER BY seq ASC""",
+                (symbol, date_int),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ #
+    #  Raw OB tick stream                                                 #
+    # ------------------------------------------------------------------ #
+
+    def save_ob_ticks(self, symbol: str, ins_code: str,
+                      date_int: int, raw_rows: list[dict]) -> int:
+        """Persist raw bestLimitsHistory rows for *symbol* on *date_int*.
+
+        *raw_rows* is the unmodified list from the TSETMC API (each dict has
+        refID, hEven, number, pMeDem, qTitMeDem, zOrdMeDem, pMeOf, qTitMeOf, zOrdMeOf).
+        Duplicate (symbol, date, ref_id, level) rows are silently ignored.
+        Returns the number of newly inserted rows.
+        """
+        if not raw_rows:
+            return 0
+        inserted = 0
+        with self._conn() as conn:
+            for row in raw_rows:
+                level = row.get("number", 0)
+                if not (1 <= level <= 5):
+                    continue
+                cur = conn.execute(
+                    """INSERT OR IGNORE INTO ob_ticks
+                       (symbol, ins_code, date, ref_id, heven, level,
+                        bid_price, bid_vol, bid_cnt,
+                        ask_price, ask_vol, ask_cnt)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (symbol, ins_code, date_int,
+                     row.get("refID",      0),
+                     row.get("hEven",      0),
+                     level,
+                     row.get("pMeDem",     0),
+                     row.get("qTitMeDem",  0),
+                     row.get("zOrdMeDem",  0),
+                     row.get("pMeOf",      0),
+                     row.get("qTitMeOf",   0),
+                     row.get("zOrdMeOf",   0)),
+                )
+                inserted += cur.rowcount
+        return inserted
+
+    def get_ob_tick_dates(self, symbol: str) -> list[int]:
+        """Return sorted list of dates that have raw OB ticks for *symbol*."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT date FROM ob_ticks WHERE symbol=? ORDER BY date",
+                (symbol,),
+            ).fetchall()
+        return [r["date"] for r in rows]
+
+    def get_ob_ticks(self, symbol: str, date_int: int) -> list[dict]:
+        """Return all raw OB tick rows for *symbol* on *date_int*, sorted by ref_id."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT ref_id, heven, level,
+                          bid_price, bid_vol, bid_cnt,
+                          ask_price, ask_vol, ask_cnt
+                   FROM ob_ticks
+                   WHERE symbol=? AND date=?
+                   ORDER BY ref_id ASC, level ASC""",
                 (symbol, date_int),
             ).fetchall()
         return [dict(r) for r in rows]
