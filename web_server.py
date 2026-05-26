@@ -492,6 +492,15 @@ def create_app(db, scan_callback=None):
         return jsonify({"symbol": symbol, "date": date_int,
                         "count": len(out), "snapshots": out})
 
+    @app.route("/api/orderbook_dates")
+    def api_orderbook_dates():
+        """Return dates with OB snapshots — union of intraday_orderbook dates."""
+        symbol = request.args.get("symbol", "")
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+        dates = db.get_ob_dates(symbol)
+        return jsonify({"symbol": symbol, "dates": dates})
+
     @app.route("/api/stream")
     def api_stream():
         """Server-Sent Events endpoint for real-time scan updates."""

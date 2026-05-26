@@ -471,6 +471,19 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .ob-tradable-badge.no  { background: rgba(239,83,80,.14);  color: var(--red);   border: 1px solid rgba(239,83,80,.35); }
 .ob-reason { font-size: 10px; color: var(--muted); line-height: 1.4; }
 
+/* OB view toggle pills (تابلو / نمودار) */
+.ob-toggle { display: inline-flex; border: 1px solid var(--brd); border-radius: 4px; overflow: hidden; margin-right: 6px; }
+.ob-toggle-btn {
+  background: none; border: none; color: var(--muted); padding: 2px 9px;
+  font-size: 10px; cursor: pointer; font-family: inherit;
+}
+.ob-toggle-btn.active { background: rgba(255,255,255,.08); color: var(--txt); font-weight: 700; }
+
+/* OB history chart container */
+#ob-chart-wrap { display: none; flex: 1; min-height: 120px; position: relative; }
+#ob-chart-wrap.active { display: block; }
+#ob-chart-el { width: 100%; height: 120px; }
+
 /* tradability icon in fund list */
 .fi-exec { font-size: 9px; margin-top: 1px; }
 .fi-exec.yes { color: var(--green); }
@@ -608,11 +621,19 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <span class="ob-ft-lbl">اسپرد:</span>
         <span id="ob-hdr-spread">—</span>
         <span id="ob-hdr-ts"></span>
+        <div class="ob-toggle">
+          <button class="ob-toggle-btn active" onclick="setObView('ladder')">تابلو</button>
+          <button class="ob-toggle-btn"        onclick="setObView('chart')">نمودار</button>
+        </div>
       </div>
-      <!-- Bid / Ask ladder grid -->
+      <!-- Bid / Ask ladder grid (default view) -->
       <div id="ob-book">
         <div id="ob-bid-side"></div>
         <div id="ob-ask-side"></div>
+      </div>
+      <!-- OB history chart (toggled view) -->
+      <div id="ob-chart-wrap">
+        <div id="ob-chart-el"></div>
       </div>
       <!-- Footer: totals + tradability -->
       <div id="ob-footer">
@@ -908,6 +929,9 @@ async function loadOrderBook(sym) {
   const j = await r.json();
   obCache[sym] = j;
   renderOrderBook(sym, j);
+
+  // Also load OB history chart if in chart mode
+  if (obView === 'chart') loadOBHistory(sym);
 }
 
 function renderOrderBook(sym, data) {
@@ -980,6 +1004,118 @@ function renderOrderBook(sym, data) {
     badge.textContent = '';
     reason.textContent = '';
   }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  OB history chart (spread + depth over time)
+// ══════════════════════════════════════════════════════════════════
+let obChartInstance = null;
+let obSpreadSeries  = null;
+let obBidDepthSeries = null;
+let obAskDepthSeries = null;
+let obView = 'ladder';   // 'ladder' | 'chart'
+
+function setObView(view) {
+  obView = view;
+  const btns = document.querySelectorAll('.ob-toggle-btn');
+  btns[0].classList.toggle('active', view === 'ladder');
+  btns[1].classList.toggle('active', view === 'chart');
+  document.getElementById('ob-book').style.display   = view === 'ladder' ? '' : 'none';
+  document.getElementById('ob-chart-wrap').className  = view === 'chart' ? 'active' : '';
+  if (view === 'chart') {
+    const sym = [...selected][0];
+    if (sym) loadOBHistory(sym);
+  }
+}
+
+function ensureOBChart() {
+  if (obChartInstance) return;
+  const el = document.getElementById('ob-chart-el');
+  obChartInstance = LightweightCharts.createChart(el, {
+    width: el.clientWidth,
+    height: 120,
+    layout:     { background: { color: 'transparent' }, textColor: '#787b86', fontSize: 10 },
+    grid:       { vertLines: { color: 'rgba(255,255,255,.03)' }, horzLines: { color: 'rgba(255,255,255,.03)' } },
+    rightPriceScale: { borderColor: 'rgba(255,255,255,.06)', scaleMargins: { top: 0.1, bottom: 0.05 } },
+    timeScale:  { borderColor: 'rgba(255,255,255,.06)', timeVisible: true, secondsVisible: false },
+    crosshair:  { mode: 0 },
+  });
+  obSpreadSeries = obChartInstance.addLineSeries({
+    color: 'rgba(255,235,59,.8)', lineWidth: 1.5,
+    title: 'اسپرد %',
+    priceFormat: { type: 'custom', formatter: v => v.toFixed(3) + '%' },
+  });
+  obBidDepthSeries = obChartInstance.addLineSeries({
+    color: 'rgba(38,166,154,.6)', lineWidth: 1,
+    title: 'عمق خرید',
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'depth',
+    lineType: 2,
+  });
+  obAskDepthSeries = obChartInstance.addLineSeries({
+    color: 'rgba(239,83,80,.6)', lineWidth: 1,
+    title: 'عمق فروش',
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'depth',
+    lineType: 2,
+  });
+  obChartInstance.priceScale('depth').applyOptions({
+    scaleMargins: { top: 0.5, bottom: 0 },
+    visible: false,
+  });
+  new ResizeObserver(() => {
+    obChartInstance.applyOptions({ width: el.clientWidth });
+  }).observe(el);
+}
+
+async function loadOBHistory(sym) {
+  if (!sym) return;
+  ensureOBChart();
+
+  const tz = 'Asia/Tehran';
+  // Determine which date to show: use today for live, or latest OB date
+  const todayInt = parseInt(new Date().toLocaleDateString('en-CA', {timeZone: tz}).replace(/-/g, ''));
+  const datesR = await fetch(`/api/orderbook_dates?symbol=${E(sym)}`).catch(() => null);
+  let dateInt = todayInt;
+  if (datesR?.ok) {
+    const dj = await datesR.json();
+    const dates = dj.dates || [];
+    if (dates.length) dateInt = dates[dates.length - 1];
+  }
+
+  const r = await fetch(`/api/orderbook_history?symbol=${E(sym)}&date=${dateInt}&limit=1000`).catch(() => null);
+  if (!r?.ok) return;
+  const j = await r.json();
+  const snaps = j.snapshots || [];
+  if (!snaps.length) {
+    obSpreadSeries.setData([]);
+    obBidDepthSeries.setData([]);
+    obAskDepthSeries.setData([]);
+    return;
+  }
+
+  const ds = String(dateInt);
+  const year = parseInt(ds.slice(0,4)), month = parseInt(ds.slice(4,6)), day = parseInt(ds.slice(6,8));
+
+  const spreadData = [], bidData = [], askData = [];
+  for (const s of snaps) {
+    const t = String(s.time).padStart(6, '0');
+    const h = parseInt(t.slice(0,2)), mi = parseInt(t.slice(2,4)), sec = parseInt(t.slice(4,6));
+    let unix;
+    try {
+      const d = new Date(year, month - 1, day, h, mi, sec);
+      // Approximate Iran UTC+3:30 offset
+      unix = Math.floor(d.getTime() / 1000) - (d.getTimezoneOffset() * 60) + 12600;
+    } catch { continue; }
+    spreadData.push({ time: unix, value: s.spread_pct || 0 });
+    bidData.push({ time: unix, value: s.bid_depth || 0 });
+    askData.push({ time: unix, value: s.ask_depth || 0 });
+  }
+
+  obSpreadSeries.setData(spreadData);
+  obBidDepthSeries.setData(bidData);
+  obAskDepthSeries.setData(askData);
+  obChartInstance.timeScale().fitContent();
 }
 
 // ══════════════════════════════════════════════════════════════════

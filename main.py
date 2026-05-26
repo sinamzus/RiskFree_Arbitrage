@@ -320,12 +320,18 @@ def run_scan(aggregator: DataAggregator,
                         sym, ctx.tick_count, ctx.trend_label, ctx.trend_slope,
                     )
 
-            # ── Fetch live order book for tradability (not saved to DB) ───
-            # Order-book history is batch-collected via:
-            #   python tools/fetch_intraday.py --days N --orderbook
+            # ── Fetch live order book — save snapshot + compute tradability ──
             ob = tsetmc.get_best_limits(ins_code)
             if ob:
-                fd["order_book"] = ob   # used by analyze_fund for snapshot
+                fd["order_book"] = ob
+
+                # Persist to intraday_orderbook so the UI can chart OB history
+                time_int = (scanned_at.hour * 10000
+                            + scanned_at.minute * 100
+                            + scanned_at.second)
+                db.save_orderbook_snapshot(
+                    sym, ins_code, today_int, time_int, ob, nav=nav,
+                )
 
                 # Compute tradability and attach to fund data
                 price_data = fd.get("price_data") or {}
