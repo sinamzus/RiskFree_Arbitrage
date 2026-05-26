@@ -579,11 +579,10 @@ def main():
         print()
         return
 
-    # ── bootstrap / incremental history update ─────────────────────────────
     fetch_intraday = not args.no_intraday
 
+    # ── --bootstrap: forced full re-download (CLI only, exits after) ───────
     if args.bootstrap:
-        # Explicit --bootstrap: force full 365-day re-download
         print("\n📥 در حال دانلود کامل تاریخچه (۳۶۵ روز) ...")
         update_history(
             aggregator, db,
@@ -593,20 +592,12 @@ def main():
             delay=args.delay,
         )
         return
-    else:
-        # Auto-bootstrap: run incremental update on every startup.
-        # This is cheap when data is fresh (fetches only the missing days).
-        logger.info("Running incremental history update ...")
-        update_history(
-            aggregator, db,
-            force_full=False,
-            fetch_intraday=fetch_intraday,
-            intraday_days=args.intraday_days,
-            delay=args.delay * 0.5,   # lighter delay for background update
-        )
 
-    # ── discover mode ──────────────────────────────────────────────────────
+    # ── --discover (CLI only, exits after) ────────────────────────────────
     if args.discover:
+        # Still need a quick incremental update before discovery
+        update_history(aggregator, db, force_full=False,
+                       fetch_intraday=False, delay=args.delay)
         new_funds = aggregator.discover_new_funds()
         if new_funds:
             print(f"\n{len(new_funds)} صندوق جدید یافت شد:")
@@ -616,7 +607,7 @@ def main():
             print("صندوق جدیدی یافت نشد.")
         return
 
-    # ── web server ─────────────────────────────────────────────────────────
+    # ── Web server — start FIRST so the browser is reachable immediately ──
     flask_app = None
     if args.serve:
         try:
@@ -634,9 +625,66 @@ def main():
         flask_app = run_server(db, host="0.0.0.0", port=args.port,
                                scan_callback=_scan_callback)
         print(f"\n🌐 داشبورد وب:  http://localhost:{args.port}")
+        print(f"   در حال بارگذاری تاریخچه در پس‌زمینه — داشبورد از هم‌اکنون در دسترس است")
         print(f"   Ctrl+C برای توقف\n")
 
-    # ── single scan (no watch) ─────────────────────────────────────────────
+    # ── Incremental history update ─────────────────────────────────────────
+    # In --serve mode: runs in a background daemon thread so the web server
+    # responds immediately.  After it completes the first scan fires and the
+    # dashboard populates with live data.
+    # In CLI mode (no --serve): runs synchronously (old behaviour).
+    bootstrap_done = threading.Event()
+
+    def _do_bootstrap():
+        """Download missing history then run the first scan."""
+        if flask_app:
+            try:
+                flask_app.push_to_sse({
+                    "type":    "bootstrap_start",
+                    "message": "در حال بارگذاری تاریخچه ...",
+                })
+            except Exception:
+                pass
+        logger.info("Running incremental history update ...")
+        try:
+            update_history(
+                aggregator, db,
+                force_full=False,
+                fetch_intraday=fetch_intraday,
+                intraday_days=args.intraday_days,
+                delay=args.delay * 0.5,
+            )
+        finally:
+            bootstrap_done.set()
+
+        if flask_app:
+            try:
+                flask_app.push_to_sse({
+                    "type":    "bootstrap_complete",
+                    "message": "تاریخچه به‌روز شد",
+                })
+            except Exception:
+                pass
+
+        # Run the very first scan immediately after bootstrap in serve mode
+        if args.serve:
+            logger.info("Running initial scan after bootstrap ...")
+            print("⏳ اسکن اولیه ...")
+            opps = run_scan(aggregator, db, use_nav)
+            if opps:
+                print("✅ اسکن اولیه تکمیل شد")
+                if flask_app:
+                    _push_scan(flask_app, opps)
+
+    if args.serve:
+        # Non-blocking: web server is already up, bootstrap runs alongside
+        threading.Thread(target=_do_bootstrap, daemon=True,
+                         name="bootstrap").start()
+    else:
+        # CLI mode: block until done (same behaviour as before)
+        _do_bootstrap()
+
+    # ── CLI single scan (no --serve, no --watch) ───────────────────────────
     if args.watch == 0 and not args.serve:
         print("\n⏳ در حال اسکن ...")
         try:
@@ -665,16 +713,9 @@ def main():
         print()
         return
 
-    # ── watch / serve loop ─────────────────────────────────────────────────
+    # ── Serve-only: keep main thread alive, manual scans via UI ───────────
     interval_sec = (args.watch or 15) * 60
     if args.serve and args.watch == 0:
-        # serve-only: scan once at startup then wait for POST /api/scan
-        print("⏳ اسکن اولیه ...")
-        opps = run_scan(aggregator, db, use_nav)
-        if flask_app and opps:
-            _push_scan(flask_app, opps)
-        print("✅ اسکن اولیه تکمیل شد — منتظر اسکن بعدی از طریق UI یا --watch")
-        # Keep main thread alive
         try:
             while True:
                 time.sleep(60)
@@ -682,6 +723,7 @@ def main():
             print("\n👋 متوقف شد.")
         return
 
+    # ── Watch loop (--watch N, with or without --serve) ────────────────────
     print(f"\n🔭 حالت مانیتور آربیتراژ بین‌روزی فعال شد")
     if args.serve:
         print(f"   داشبورد وب: http://localhost:{args.port}")
@@ -689,6 +731,13 @@ def main():
     print(f"   بازار: {MARKET_OPEN.strftime('%H:%M')}–{MARKET_CLOSE.strftime('%H:%M')}  "
           f"{'(بدون بررسی ساعت)' if args.no_market_check else ''}")
     print(f"   Ctrl+C برای توقف\n")
+
+    # In serve+watch mode the bootstrap thread already runs the first scan,
+    # so wait until it finishes before the regular interval loop starts.
+    if args.serve:
+        bootstrap_done.wait()
+        # Give the initial scan (started by bootstrap thread) a moment to land
+        time.sleep(2)
 
     prev_opps: list[ArbitrageOpportunity] = []
     scan_count = 0

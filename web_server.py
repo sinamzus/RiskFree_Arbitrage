@@ -106,6 +106,20 @@ def create_app(db, scan_callback=None):
             for q in dead:
                 _sse_queues.remove(q)
 
+    # Bootstrap state — updated by main.py via push_to_sse
+    _bootstrap_state = {"status": "idle", "message": ""}
+
+    _orig_push_to_sse = push_to_sse
+    def push_to_sse(data: dict):
+        # Track bootstrap status so late-connecting browsers can query it
+        if data.get("type") == "bootstrap_start":
+            _bootstrap_state["status"]  = "running"
+            _bootstrap_state["message"] = data.get("message", "")
+        elif data.get("type") == "bootstrap_complete":
+            _bootstrap_state["status"]  = "done"
+            _bootstrap_state["message"] = data.get("message", "")
+        _orig_push_to_sse(data)
+
     # Store push function so the scanner thread can call it
     app.push_to_sse = push_to_sse
 
@@ -114,6 +128,11 @@ def create_app(db, scan_callback=None):
     @app.route("/")
     def index():
         return send_from_directory(str(STATIC_DIR), "index.html")
+
+    @app.route("/api/bootstrap_status")
+    def api_bootstrap_status():
+        """Return current bootstrap state so the UI can show progress on page-load."""
+        return jsonify(_bootstrap_state)
 
     @app.route("/api/funds")
     def api_funds():

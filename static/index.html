@@ -534,6 +534,52 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .cc-btn:hover { background: rgba(255,255,255,.08); color: var(--txt); }
 .cc-btn.active { background: rgba(91,156,246,.22); color: var(--blue); border-color: rgba(91,156,246,.35); }
 
+/* Bootstrap progress banner */
+#bootstrap-banner {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  z-index: 99999;
+  background: linear-gradient(90deg,
+    var(--blue) 0%,
+    var(--purple) 40%,
+    var(--blue) 100%);
+  background-size: 200% 100%;
+  animation: bstrap-slide 1.8s linear infinite;
+}
+#bootstrap-banner.visible { display: block; }
+#bootstrap-toast {
+  display: none;
+  position: fixed;
+  bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--surf2);
+  border: 1px solid var(--brd2);
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: var(--fs-sm);
+  color: var(--sub);
+  z-index: 99998;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  gap: 8px;
+  align-items: center;
+}
+#bootstrap-toast.visible { display: flex; }
+#bootstrap-toast .bt-spin {
+  width: 12px; height: 12px;
+  border: 2px solid var(--brd2);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes bstrap-slide {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* OB imbalance bar */
 .ob-imbalance {
   display: flex; height: 4px; border-radius: 2px; overflow: hidden;
@@ -584,6 +630,13 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 </style>
 </head>
 <body>
+
+<!-- Bootstrap progress bar (top edge) + toast -->
+<div id="bootstrap-banner"></div>
+<div id="bootstrap-toast">
+  <div class="bt-spin"></div>
+  <span id="bootstrap-msg">در حال بارگذاری تاریخچه ...</span>
+</div>
 
 <div id="loading"><div class="spin"></div><span>در حال بارگذاری ...</span></div>
 
@@ -812,6 +865,7 @@ let syncing     = false;
 window.addEventListener('DOMContentLoaded', () => {
   buildCharts();
   initSSE();
+  checkBootstrapStatus();   // show banner if bootstrap already running
   loadFunds();
   loadStats();
   setInterval(loadFunds, 60_000);
@@ -922,7 +976,46 @@ function initSSE() {
   const es  = new EventSource('/api/stream');
   es.onmessage = e => {
     const d = JSON.parse(e.data);
-    if (d.type === 'connected') { dot.className = 'live'; return; }
+
+    if (d.type === 'connected') {
+      dot.className = 'live';
+      return;
+    }
+
+    if (d.type === 'bootstrap_start') {
+      // Show animated progress bar + toast while history downloads
+      document.getElementById('bootstrap-banner').classList.add('visible');
+      document.getElementById('bootstrap-toast').classList.add('visible');
+      document.getElementById('bootstrap-msg').textContent =
+        d.message || 'در حال بارگذاری تاریخچه ...';
+      dot.className = 'stale';
+      return;
+    }
+
+    if (d.type === 'bootstrap_complete') {
+      // Hide the progress indicator, show a brief success toast
+      document.getElementById('bootstrap-banner').classList.remove('visible');
+      const toast = document.getElementById('bootstrap-toast');
+      const spin  = toast.querySelector('.bt-spin');
+      spin.style.display = 'none';
+      document.getElementById('bootstrap-msg').textContent =
+        '✓ ' + (d.message || 'تاریخچه به‌روز شد');
+      toast.style.background = 'rgba(38,166,154,.12)';
+      toast.style.borderColor = 'rgba(38,166,154,.35)';
+      document.getElementById('bootstrap-msg').style.color = 'var(--green)';
+      setTimeout(() => {
+        toast.classList.remove('visible');
+        toast.style.background = '';
+        toast.style.borderColor = '';
+        spin.style.display = '';
+        document.getElementById('bootstrap-msg').style.color = '';
+      }, 3000);
+      dot.className = 'live';
+      // Reload fund list in case it loaded before bootstrap finished
+      loadFunds();
+      return;
+    }
+
     if (d.type === 'scan_complete') {
       dot.className = 'live';
       document.getElementById('last-scan').textContent =
@@ -946,6 +1039,21 @@ function initSSE() {
 // ══════════════════════════════════════════════════════════════════
 //  Data loading
 // ══════════════════════════════════════════════════════════════════
+
+// On page load: check if bootstrap is already in progress (user opened
+// the browser before the first scan completed)
+async function checkBootstrapStatus() {
+  const r = await fetch('/api/bootstrap_status').catch(() => null);
+  if (!r?.ok) return;
+  const d = await r.json();
+  if (d.status === 'running') {
+    document.getElementById('bootstrap-banner').classList.add('visible');
+    document.getElementById('bootstrap-toast').classList.add('visible');
+    document.getElementById('bootstrap-msg').textContent =
+      d.message || 'در حال بارگذاری تاریخچه ...';
+  }
+}
+
 async function loadFunds() {
   const r = await fetch('/api/funds').catch(() => null);
   if (!r?.ok) return;
