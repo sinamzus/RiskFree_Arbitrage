@@ -155,6 +155,12 @@ def create_app(db, scan_callback=None):
                     "vwap":                 0,
                     "vwap_premium_pct":     0,
                     "tick_count_today":     0,
+                    "tradable":             0,
+                    "tradable_volume":      0,
+                    "tradable_value":       0,
+                    "spread_pct":           0,
+                    "ob_score":             0,
+                    "tradability_reason":   "",
                     "scanned_at":           None,
                 }
             funds.append(row)

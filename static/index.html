@@ -477,12 +477,40 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   background: none; border: none; color: var(--muted); padding: 2px 9px;
   font-size: 10px; cursor: pointer; font-family: inherit;
 }
-.ob-toggle-btn.active { background: rgba(255,255,255,.08); color: var(--txt); font-weight: 700; }
+.ob-toggle-btn.active { background: rgba(91,156,246,.15); color: var(--blue); font-weight: 700; }
 
 /* OB history chart container */
-#ob-chart-wrap { display: none; flex: 1; min-height: 120px; position: relative; }
+#ob-chart-wrap { display: none; min-height: 130px; position: relative; }
 #ob-chart-wrap.active { display: block; }
-#ob-chart-el { width: 100%; height: 120px; }
+#ob-chart-el { width: 100%; height: 130px; }
+#ob-chart-lbl {
+  position: absolute; top: 5px; right: 10px; z-index: 3;
+  font-size: 9px; color: var(--muted); pointer-events: none;
+}
+
+/* OB imbalance bar */
+.ob-imbalance {
+  display: flex; height: 4px; border-radius: 2px; overflow: hidden;
+  background: var(--bg); margin: 0 12px;
+}
+.ob-imb-bid { background: var(--green); transition: width .3s; }
+.ob-imb-ask { background: var(--red);   transition: width .3s; }
+
+/* spread badge in fund list */
+.fi-spread {
+  font-size: 9px; font-weight: 600; padding: 0 5px;
+  border-radius: 3px; font-variant-numeric: tabular-nums;
+}
+.fi-spread.tight { color: var(--green); background: rgba(38,166,154,.1); }
+.fi-spread.mid   { color: var(--yellow); background: rgba(240,192,64,.08); }
+.fi-spread.wide  { color: var(--red); background: rgba(239,83,80,.1); }
+
+/* OB score mini bar in fund list */
+.fi-ob-bar {
+  width: 28px; height: 3px; border-radius: 2px;
+  background: var(--bg); overflow: hidden; margin-top: 2px;
+}
+.fi-ob-fill { height: 100%; border-radius: 2px; transition: width .3s; }
 
 /* tradability icon in fund list */
 .fi-exec { font-size: 9px; margin-top: 1px; }
@@ -573,6 +601,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <option value="pd">صرف%</option>
         <option value="price">قیمت</option>
         <option value="vol">حجم</option>
+        <option value="spread">اسپرد</option>
+        <option value="ob">نقدشوندگی</option>
         <option value="sym">نماد</option>
       </select>
     </div>
@@ -593,6 +623,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <span class="ib-lbl">NAV</span><span class="ib-val" id="ib-nav">—</span>
       <span class="ib-lbl">حجم</span><span class="ib-val" id="ib-vol">—</span>
       <span class="ib-lbl">صرف</span><span class="ib-val" id="ib-prem">—</span>
+      <span class="ib-lbl" id="ib-spread-lbl">اسپرد</span><span class="ib-val" id="ib-spread">—</span>
+      <span class="ib-lbl" id="ib-obs-lbl">OB</span><span class="ib-val" id="ib-obs">—</span>
       <span class="ib-lbl" id="ib-ticks-lbl" style="display:none">تیک</span><span class="ib-val" id="ib-ticks" style="display:none">—</span>
     </div>
 
@@ -615,8 +647,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div id="ob-panel">
       <!-- Header -->
       <div id="ob-hdr">
-        <span>📊 سفارش‌های بازار —</span>
-        <span id="ob-hdr-sym">—</span>
+        <span id="ob-hdr-sym" style="font-weight:800;color:var(--txt);font-size:12px">—</span>
         <span class="ob-ft-sep">|</span>
         <span class="ob-ft-lbl">اسپرد:</span>
         <span id="ob-hdr-spread">—</span>
@@ -631,19 +662,25 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <div id="ob-bid-side"></div>
         <div id="ob-ask-side"></div>
       </div>
+      <!-- Imbalance bar -->
+      <div class="ob-imbalance">
+        <div class="ob-imb-bid" id="ob-imb-bid" style="width:50%"></div>
+        <div class="ob-imb-ask" id="ob-imb-ask" style="width:50%"></div>
+      </div>
       <!-- OB history chart (toggled view) -->
       <div id="ob-chart-wrap">
+        <span id="ob-chart-lbl">اسپرد % + عمق</span>
         <div id="ob-chart-el"></div>
       </div>
       <!-- Footer: totals + tradability -->
       <div id="ob-footer">
-        <span class="ob-ft-lbl">عمق خرید:</span>
+        <span class="ob-ft-lbl">خرید:</span>
         <span id="ob-bid-depth" class="ob-ft-val grn">—</span>
         <span class="ob-ft-sep">|</span>
-        <span class="ob-ft-lbl">عمق فروش:</span>
+        <span class="ob-ft-lbl">فروش:</span>
         <span id="ob-ask-depth" class="ob-ft-val red">—</span>
         <span class="ob-ft-sep">|</span>
-        <span class="ob-ft-lbl">امتیاز نقدشوندگی:</span>
+        <span class="ob-ft-lbl">نقدشوندگی:</span>
         <span id="ob-score" class="ob-ft-val">—</span>
         <span class="ob-ft-sep">|</span>
         <div id="ob-tradable-badge" class="ob-tradable-badge"></div>
@@ -665,7 +702,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             <tr>
               <th>نماد</th><th>قیمت (ریال)</th><th>NAV</th>
               <th>صرف/تخفیف%</th><th>سود خالص%</th>
-              <th>حجم</th><th>روند درون‌روزی</th><th>سیگنال</th><th>Z-score</th>
+              <th>حجم</th><th>اسپرد%</th><th>OB</th>
+              <th>روند</th><th>سیگنال</th><th>Z-score</th>
             </tr>
           </thead>
           <tbody id="tbl-body"></tbody>
@@ -829,6 +867,12 @@ function initSSE() {
       renderList();
       renderTable(latestFunds);
       redraw();
+      // refresh OB panel + stats for selected fund
+      if (selected.size === 1) {
+        const sym = [...selected][0];
+        loadOrderBook(sym);
+        renderStats(sym);
+      }
     }
   };
   es.onerror = () => { dot.className = 'stale'; };
@@ -983,13 +1027,21 @@ function renderOrderBook(sym, data) {
   document.getElementById('ob-ask-side').innerHTML =
     askHdr + snap.asks.map((a,i) => levelRow(a, 'ask', i===0)).join('');
 
+  // Imbalance bar
+  const totalDepth = (snap.bid_depth || 0) + (snap.ask_depth || 0);
+  if (totalDepth > 0) {
+    const bidPct = Math.round((snap.bid_depth / totalDepth) * 100);
+    document.getElementById('ob-imb-bid').style.width = bidPct + '%';
+    document.getElementById('ob-imb-ask').style.width = (100 - bidPct) + '%';
+  }
+
   // Footer stats
   document.getElementById('ob-bid-depth').textContent  =
-    snap.bid_depth ? fmtV(snap.bid_depth) + ' واحد' : '—';
+    snap.bid_depth ? fmtV(snap.bid_depth) : '—';
   document.getElementById('ob-ask-depth').textContent  =
-    snap.ask_depth ? fmtV(snap.ask_depth) + ' واحد' : '—';
+    snap.ask_depth ? fmtV(snap.ask_depth) : '—';
   document.getElementById('ob-score').textContent      =
-    td ? td.book_depth_score.toFixed(1) + '/100' : '—';
+    td ? td.book_depth_score.toFixed(0) + '/100' : '—';
 
   const badge  = document.getElementById('ob-tradable-badge');
   const reason = document.getElementById('ob-reason');
@@ -1033,54 +1085,61 @@ function ensureOBChart() {
   const el = document.getElementById('ob-chart-el');
   obChartInstance = LightweightCharts.createChart(el, {
     width: el.clientWidth,
-    height: 120,
+    height: 130,
     layout:     { background: { color: 'transparent' }, textColor: '#787b86', fontSize: 10 },
-    grid:       { vertLines: { color: 'rgba(255,255,255,.03)' }, horzLines: { color: 'rgba(255,255,255,.03)' } },
-    rightPriceScale: { borderColor: 'rgba(255,255,255,.06)', scaleMargins: { top: 0.1, bottom: 0.05 } },
+    grid:       { vertLines: { color: 'rgba(255,255,255,.03)' }, horzLines: { color: 'rgba(255,255,255,.04)' } },
+    rightPriceScale: { borderColor: 'rgba(255,255,255,.06)', scaleMargins: { top: 0.08, bottom: 0.05 } },
     timeScale:  { borderColor: 'rgba(255,255,255,.06)', timeVisible: true, secondsVisible: false },
     crosshair:  { mode: 0 },
   });
   obSpreadSeries = obChartInstance.addLineSeries({
-    color: 'rgba(255,235,59,.8)', lineWidth: 1.5,
-    title: 'اسپرد %',
+    color: 'rgba(255,235,59,.85)', lineWidth: 2,
     priceFormat: { type: 'custom', formatter: v => v.toFixed(3) + '%' },
+    lastValueVisible: true, priceLineVisible: false,
   });
-  obBidDepthSeries = obChartInstance.addLineSeries({
-    color: 'rgba(38,166,154,.6)', lineWidth: 1,
-    title: 'عمق خرید',
+  obBidDepthSeries = obChartInstance.addAreaSeries({
+    topColor: 'rgba(38,166,154,.25)', bottomColor: 'rgba(38,166,154,.02)',
+    lineColor: 'rgba(38,166,154,.5)', lineWidth: 1,
     priceFormat: { type: 'volume' },
     priceScaleId: 'depth',
-    lineType: 2,
+    lastValueVisible: false, priceLineVisible: false,
   });
-  obAskDepthSeries = obChartInstance.addLineSeries({
-    color: 'rgba(239,83,80,.6)', lineWidth: 1,
-    title: 'عمق فروش',
+  obAskDepthSeries = obChartInstance.addAreaSeries({
+    topColor: 'rgba(239,83,80,.25)', bottomColor: 'rgba(239,83,80,.02)',
+    lineColor: 'rgba(239,83,80,.5)', lineWidth: 1,
     priceFormat: { type: 'volume' },
     priceScaleId: 'depth',
-    lineType: 2,
+    lastValueVisible: false, priceLineVisible: false,
   });
   obChartInstance.priceScale('depth').applyOptions({
-    scaleMargins: { top: 0.5, bottom: 0 },
+    scaleMargins: { top: 0.45, bottom: 0 },
     visible: false,
   });
   new ResizeObserver(() => {
-    obChartInstance.applyOptions({ width: el.clientWidth });
+    if (el.clientWidth > 0)
+      obChartInstance.applyOptions({ width: el.clientWidth });
   }).observe(el);
 }
 
+let _obHistSym = '';
 async function loadOBHistory(sym) {
   if (!sym) return;
   ensureOBChart();
 
-  const tz = 'Asia/Tehran';
-  // Determine which date to show: use today for live, or latest OB date
-  const todayInt = parseInt(new Date().toLocaleDateString('en-CA', {timeZone: tz}).replace(/-/g, ''));
+  // Determine which date to show: latest available OB date
   const datesR = await fetch(`/api/orderbook_dates?symbol=${E(sym)}`).catch(() => null);
-  let dateInt = todayInt;
+  let dateInt = 0;
   if (datesR?.ok) {
     const dj = await datesR.json();
     const dates = dj.dates || [];
     if (dates.length) dateInt = dates[dates.length - 1];
+  }
+  if (!dateInt) {
+    obSpreadSeries.setData([]);
+    obBidDepthSeries.setData([]);
+    obAskDepthSeries.setData([]);
+    document.getElementById('ob-chart-lbl').textContent = 'داده‌ای موجود نیست';
+    return;
   }
 
   const r = await fetch(`/api/orderbook_history?symbol=${E(sym)}&date=${dateInt}&limit=1000`).catch(() => null);
@@ -1095,18 +1154,10 @@ async function loadOBHistory(sym) {
   }
 
   const ds = String(dateInt);
-  const year = parseInt(ds.slice(0,4)), month = parseInt(ds.slice(4,6)), day = parseInt(ds.slice(6,8));
 
   const spreadData = [], bidData = [], askData = [];
   for (const s of snaps) {
-    const t = String(s.time).padStart(6, '0');
-    const h = parseInt(t.slice(0,2)), mi = parseInt(t.slice(2,4)), sec = parseInt(t.slice(4,6));
-    let unix;
-    try {
-      const d = new Date(year, month - 1, day, h, mi, sec);
-      // Approximate Iran UTC+3:30 offset
-      unix = Math.floor(d.getTime() / 1000) - (d.getTimezoneOffset() * 60) + 12600;
-    } catch { continue; }
+    const unix = hhmmss2unix(s.time, ds);
     spreadData.push({ time: unix, value: s.spread_pct || 0 });
     bidData.push({ time: unix, value: s.bid_depth || 0 });
     askData.push({ time: unix, value: s.ask_depth || 0 });
@@ -1116,6 +1167,13 @@ async function loadOBHistory(sym) {
   obBidDepthSeries.setData(bidData);
   obAskDepthSeries.setData(askData);
   obChartInstance.timeScale().fitContent();
+  _obHistSym = sym;
+
+  // Update chart label with Jalali date
+  const [jy, jm, jd] = gregorianToJalali(+ds.slice(0,4), +ds.slice(4,6), +ds.slice(6,8));
+  const p2 = n => String(n).padStart(2,'0');
+  document.getElementById('ob-chart-lbl').textContent =
+    `اسپرد % + عمق — ${sym} — ${jy}/${p2(jm)}/${p2(jd)}`;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1130,10 +1188,12 @@ function renderList() {
     f.symbol.toLowerCase().includes(q) || (f.name||'').includes(q)
   );
   list.sort((a,b) => ({
-    pd:    () => Math.abs(b.premium_discount_pct||0) - Math.abs(a.premium_discount_pct||0),
-    price: () => (b.market_price||0) - (a.market_price||0),
-    vol:   () => (b.volume||0) - (a.volume||0),
-    sym:   () => a.symbol.localeCompare(b.symbol),
+    pd:     () => Math.abs(b.premium_discount_pct||0) - Math.abs(a.premium_discount_pct||0),
+    price:  () => (b.market_price||0) - (a.market_price||0),
+    vol:    () => (b.volume||0) - (a.volume||0),
+    spread: () => (a.spread_pct||999) - (b.spread_pct||999),
+    ob:     () => (b.ob_score||0) - (a.ob_score||0),
+    sym:    () => a.symbol.localeCompare(b.symbol),
   }[srt] || (() => 0))());
 
   const el = document.getElementById('fl-items');
@@ -1160,6 +1220,18 @@ function renderList() {
     const execEl = hasSignal
       ? `<span class="fi-exec ${f.tradable ? 'yes' : 'no'}" title="${f.tradability_reason||''}">${f.tradable ? '✓exec' : '✗exec'}</span>`
       : '';
+    // spread badge
+    const sp = f.spread_pct || 0;
+    const spCls = sp > 0 && sp < 0.15 ? 'tight' : sp < 0.4 ? 'mid' : 'wide';
+    const spreadEl = sp > 0
+      ? `<span class="fi-spread ${spCls}">${sp.toFixed(2)}%</span>`
+      : '';
+    // OB score mini bar
+    const obs = f.ob_score || 0;
+    const obCol = obs >= 60 ? 'var(--green)' : obs >= 30 ? 'var(--yellow)' : 'var(--red)';
+    const obEl = obs > 0
+      ? `<div class="fi-ob-bar"><div class="fi-ob-fill" style="width:${Math.min(obs,100)}%;background:${obCol}"></div></div>`
+      : '';
     return `<div class="fi ${sc}" style="${unscanned?'opacity:.5':''}" onclick="onClick(event,'${f.symbol}')">
       <div>
         <div class="fi-name">${f.symbol}</div>
@@ -1167,9 +1239,15 @@ function renderList() {
       </div>
       <div class="fi-right">
         <span class="fi-pd ${cls}">${pd>=0?'+':''}${pd.toFixed(2)}%</span>
-        <span class="badge badge-${sig}">${sigLabel}</span>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span class="badge badge-${sig}">${sigLabel}</span>
+          ${spreadEl}
+        </div>
         ${trendEl}
-        ${execEl}
+        <div style="display:flex;align-items:center;gap:4px">
+          ${execEl}
+          ${obEl}
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -1617,7 +1695,7 @@ function updateInfoBar(param) {
 }
 
 function resetInfo() {
-  ['ib-o','ib-h','ib-l','ib-c','ib-nav','ib-vol','ib-prem']
+  ['ib-o','ib-h','ib-l','ib-c','ib-nav','ib-vol','ib-prem','ib-spread','ib-obs']
     .forEach(id => { document.getElementById(id).textContent = '—';
                      document.getElementById(id).style.color = ''; });
   document.getElementById('ib-time').textContent = '';
@@ -1637,6 +1715,29 @@ function updateInfoDefault(sym, rows) {
   const pe = document.getElementById('ib-prem');
   pe.textContent = (prem>=0?'+':'') + prem.toFixed(3) + '%';
   pe.style.color = prem > 0.1 ? 'var(--green)' : prem < -0.1 ? 'var(--red)' : '';
+
+  // OB metrics from fund data
+  const fd = latestFunds.find(f => f.symbol === sym);
+  if (fd) {
+    const sp  = fd.spread_pct || 0;
+    const obs = fd.ob_score || 0;
+    const spEl = document.getElementById('ib-spread');
+    if (sp > 0) {
+      spEl.textContent = sp.toFixed(3) + '%';
+      spEl.style.color = sp < 0.15 ? 'var(--green)' : sp < 0.4 ? 'var(--yellow)' : 'var(--red)';
+    } else {
+      spEl.textContent = '—';
+      spEl.style.color = '';
+    }
+    const obsEl = document.getElementById('ib-obs');
+    if (obs > 0) {
+      obsEl.textContent = obs.toFixed(0) + '/100';
+      obsEl.style.color = obs >= 60 ? 'var(--green)' : obs >= 30 ? 'var(--yellow)' : 'var(--red)';
+    } else {
+      obsEl.textContent = '—';
+      obsEl.style.color = '';
+    }
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1669,6 +1770,28 @@ function renderStats(sym) {
       <div class="sr"><span>صرف VWAP</span><span class="sv ${vwapP>0?'pos':vwapP<0?'neg':''}">${pct(vwapP)}</span></div>
       <div class="sr"><span>روند</span><span class="sv" style="color:${tCol}">${tIcon} ${trend||'—'}</span></div>
       <div class="sr"><span>slope</span><span class="sv" style="color:${slopeCol}">${slope>=0?'+':''}${slope.toFixed(4)}%/tick</span></div>
+      <div style="height:1px;background:var(--brd);margin:7px 0"></div>
+    `;
+  }
+
+  // ── Order-book block ─────────────────────────────────────────────────
+  if (fd && (fd.spread_pct > 0 || fd.ob_score > 0)) {
+    const sp   = fd.spread_pct || 0;
+    const obs  = fd.ob_score || 0;
+    const trdV = fd.tradable_volume || 0;
+    const trd  = fd.tradable;
+    const spCol = sp > 0 && sp < 0.15 ? 'pos' : sp < 0.4 ? 'warn' : 'neg';
+    const obsCol = obs >= 60 ? 'pos' : obs >= 30 ? 'warn' : 'neg';
+    const bidD = fd.best_bid || 0;
+    const askD = fd.best_ask || 0;
+    html += `
+      <div style="font-size:var(--fs-xs);color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;margin-top:2px">اردربوک</div>
+      <div class="sr"><span>اسپرد</span><span class="sv ${spCol}">${sp.toFixed(3)}%</span></div>
+      <div class="sr"><span>امتیاز نقدشوندگی</span><span class="sv ${obsCol}">${obs.toFixed(0)}/100</span></div>
+      <div class="sr"><span>بهترین خرید</span><span class="sv">${bidD ? fmtN(bidD) : '—'}</span></div>
+      <div class="sr"><span>بهترین فروش</span><span class="sv">${askD ? fmtN(askD) : '—'}</span></div>
+      ${trdV > 0 ? `<div class="sr"><span>حجم قابل اجرا</span><span class="sv ${trd?'pos':'neg'}">${fmtV(trdV)}</span></div>` : ''}
+      ${fd.tradability_reason ? `<div style="margin-top:4px;padding:4px 7px;background:${trd?'rgba(38,166,154,.07)':'rgba(239,83,80,.07)'};border-radius:4px;font-size:10px;color:${trd?'var(--green)':'var(--red)'}">${trd?'✓':'✗'} ${fd.tradability_reason}</div>` : ''}
       <div style="height:1px;background:var(--brd);margin:7px 0"></div>
     `;
   }
@@ -1725,6 +1848,20 @@ function renderTable(funds) {
          <span class="tc-muted" style="font-size:10px;margin-right:3px">(${ticks})</span>`
       : '<span class="tc-muted">—</span>';
 
+    // spread cell
+    const sp = f.spread_pct || 0;
+    const spCol = sp > 0 && sp < 0.15 ? 'var(--green)' : sp < 0.4 ? 'var(--yellow)' : 'var(--red)';
+    const spHtml = sp > 0
+      ? `<span style="color:${spCol}">${sp.toFixed(3)}%</span>`
+      : '<span class="tc-muted">—</span>';
+
+    // OB score cell
+    const obs = f.ob_score || 0;
+    const obsCol = obs >= 60 ? 'var(--green)' : obs >= 30 ? 'var(--yellow)' : 'var(--red)';
+    const obsHtml = obs > 0
+      ? `<span style="color:${obsCol}" title="${f.tradability_reason||''}">${obs.toFixed(0)}</span>`
+      : '<span class="tc-muted">—</span>';
+
     const unscanned = !f.scanned_at;
     return `<tr onclick="onRowClick('${f.symbol}')" ${unscanned?'style="opacity:.45"':''}>
       <td class="tc-sym">${f.symbol}</td>
@@ -1733,6 +1870,8 @@ function renderTable(funds) {
       <td class="${pd>0?'tc-sell':pd<0?'tc-buy':'tc-muted'}">${(pd>=0?'+':'')}${pd.toFixed(3)}%</td>
       <td class="${np>0?'tc-buy':np<0?'tc-sell':'tc-muted'}">${(np>=0?'+':'')}${np.toFixed(3)}%</td>
       <td class="tc-muted">${(f.volume||0).toLocaleString('fa-IR')}</td>
+      <td>${spHtml}</td>
+      <td>${obsHtml}</td>
       <td>${trendHtml}</td>
       <td>${sigHtml}</td>
       <td class="${Math.abs(z||0)>1.5?'tc-sell':'tc-muted'}">${zStr}</td>
