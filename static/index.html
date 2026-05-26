@@ -678,6 +678,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div id="charts">
       <div id="price-el">
         <div class="chart-lbl" id="price-lbl">قیمت + NAV</div>
+        <div class="chart-lbl" id="click-hint" style="left:12px;right:auto;color:rgba(255,255,255,.18);font-size:9px;pointer-events:none">
+          کلیک روی کندل ← OB تاریخی
+        </div>
         <!-- Chart controls: fit, auto-scale, log scale, scroll-to-latest -->
         <div id="chart-controls">
           <button class="cc-btn active" id="cc-autoscale" title="اسکیل خودکار" onclick="toggleAutoScale()">↕</button>
@@ -1283,18 +1286,22 @@ async function onChartClick(param) {
   if (!param?.time) return;
   const sym = [...selected][0];
   if (!sym) return;
+  // OB panel must be visible (single fund selected)
+  if (!document.getElementById('ob-panel').classList.contains('visible')) return;
 
   // Decode clicked time → Gregorian YYYYMMDD integer + HHMMSS
   let dateInt = 0, targetHHMMSS = 999999;
 
   if (src === 'daily') {
-    // time is either "YYYY-MM-DD" string or TradingView BusinessDay {year,month,day}
+    // TradingView v4 returns a BusinessDay object {year,month,day} for string-date series
+    // Older versions / edge cases may return "YYYY-MM-DD" string
     let yr, mo, dy;
-    if (typeof param.time === 'string') {
-      [yr, mo, dy] = param.time.split('-').map(Number);
-    } else if (typeof param.time === 'object' && 'year' in param.time) {
+    if (typeof param.time === 'object' && param.time !== null && 'year' in param.time) {
       yr = param.time.year; mo = param.time.month; dy = param.time.day;
-    } else if (typeof param.time === 'number' && param.time > 20000000) {
+    } else if (typeof param.time === 'string') {
+      [yr, mo, dy] = param.time.split('-').map(Number);
+    } else if (typeof param.time === 'number') {
+      // YYYYMMDD integer (rare fallback)
       yr = Math.floor(param.time / 10000);
       mo = Math.floor((param.time % 10000) / 100);
       dy = param.time % 100;
@@ -1303,8 +1310,9 @@ async function onChartClick(param) {
     targetHHMMSS = 999999;   // take last snapshot of that day
 
   } else if (src === 'intraday') {
-    // time is a UTC Unix timestamp
-    if (typeof param.time === 'number' && param.time < 20000000) {
+    // param.time is a UTC Unix timestamp (seconds) — value is ~1.7 billion for 2025
+    // The old code mistakenly checked < 20_000_000 which is always false for real timestamps
+    if (typeof param.time === 'number' && param.time > 0) {
       const d = new Date(param.time * 1000);
       const parts = new Intl.DateTimeFormat('en-US', {
         timeZone: 'Asia/Tehran',
@@ -1321,17 +1329,32 @@ async function onChartClick(param) {
 
   if (!dateInt) return;
 
+  // Show a loading indicator in the OB header while fetching
+  _setOBHistLoading(true);
+
   // Fetch and cache snapshots for this (sym, date)
   const cacheKey = `${sym}_${dateInt}`;
   let snaps = _obSnapCache[cacheKey];
   if (!snaps) {
     const r = await fetch(`/api/orderbook_history?symbol=${E(sym)}&date=${dateInt}&limit=2000`).catch(() => null);
+    _setOBHistLoading(false);
     if (!r?.ok) return;
     const j = await r.json();
     snaps = j.snapshots || [];
     _obSnapCache[cacheKey] = snaps;
+  } else {
+    _setOBHistLoading(false);
   }
-  if (!snaps.length) return;
+
+  if (!snaps.length) {
+    // No OB data collected for this date — show a notice in the badge
+    const ds = String(dateInt);
+    const [jy, jm, jd] = gregorianToJalali(+ds.slice(0,4), +ds.slice(4,6), +ds.slice(6,8));
+    const p2 = n => String(n).padStart(2,'0');
+    document.getElementById('ob-hist-label').textContent = `${jy}/${p2(jm)}/${p2(jd)} — داده‌ای ثبت نشده`;
+    document.getElementById('ob-hist-badge').classList.add('visible');
+    return;
+  }
 
   // Find the snapshot at or before targetHHMMSS (last snap of day when 999999)
   let closest = snaps[0];
@@ -1349,6 +1372,17 @@ async function onChartClick(param) {
 
   // If OB chart is active, also reload that date's chart
   if (obView === 'chart') loadOBHistory(sym, dateInt);
+}
+
+function _setOBHistLoading(on) {
+  const lbl = document.getElementById('ob-hist-label');
+  const badge = document.getElementById('ob-hist-badge');
+  if (on) {
+    lbl.textContent = '⏳ در حال بارگذاری...';
+    badge.classList.add('visible');
+  } else {
+    // Don't hide — caller will either update it or show a result
+  }
 }
 
 function _renderHistoricalOBSnap(sym, dateInt, snap) {
