@@ -598,13 +598,25 @@ class TSETMCFetcher:
         return {"bids": bids, "asks": asks}
 
     def get_best_limits_history(self, ins_code: str, date_int: int) -> list[dict]:
-        """Fetch all historical order-book snapshots for ins_code on date_int.
+        """Fetch historical order-book deltas and reconstruct minute-level snapshots.
 
-        TSETMC endpoint: /BestLimits/{insCode}/{YYYYMMDD}
-        Response key:    "bestLimitsHistory"
+        TSETMC `bestLimitsHistory` is a **stream of per-level delta updates**,
+        not full snapshots.  Each row updates exactly one bid+ask level (number 1-5);
+        `refID` is a monotonically increasing global event-sequence number.
 
-        Each snapshot groups 5 bid+ask levels for a single point in time.
-        Returns list of dicts: [{time: HHMMSS, bids: [...x5], asks: [...x5]}]
+        Fields per row:
+          number     – level (1=best … 5=worst)
+          hEven      – HHMMSS time of this change (int, no leading zero)
+          refID      – monotonic event ID (use for sort order)
+          pMeDem     – bid price    qTitMeDem – bid volume   zOrdMeDem – bid count
+          pMeOf      – ask price    qTitMeOf  – ask volume   zOrdMeOf  – ask count
+
+        Algorithm:
+          1. Sort all rows by refID (true chronological order — hEven collisions exist)
+          2. Replay deltas, maintaining a running 5-level book state
+          3. Emit one snapshot whenever the minute changes (≈ 360-400 snapshots/day)
+
+        Returns list[{time: HHMMSS, bids: [5 levels], asks: [5 levels]}]
         sorted ascending by time.  Returns [] if the endpoint is unavailable.
         """
         data = self._get(
@@ -617,30 +629,57 @@ class TSETMCFetcher:
         if not rows:
             return []
 
-        # Group rows by time; each time has up to 5 levels
-        from collections import defaultdict
-        by_time: dict = defaultdict(lambda: {"bids": [], "asks": []})
-        for row in rows:
-            t = row.get("hEven", 0)
-            by_time[t]["bids"].append({
-                "price":  row.get("pMeDem",    0),
-                "volume": row.get("qTitMeDem", 0),
-                "count":  row.get("zOrdMeDem", 0),
-            })
-            by_time[t]["asks"].append({
-                "price":  row.get("pMeOf",    0),
-                "volume": row.get("qTitMeOf", 0),
-                "count":  row.get("zOrdMeOf", 0),
-            })
+        # Sort by the global event-sequence ID (refID), not by hEven
+        rows_sorted = sorted(rows, key=lambda r: r.get("refID", 0))
 
-        # Sort levels: bids descending price (best first), asks ascending price
-        result = []
-        for t in sorted(by_time.keys()):
-            snap = by_time[t]
-            snap["time"] = t
-            snap["bids"].sort(key=lambda x: -x["price"])
-            snap["asks"].sort(key=lambda x:  x["price"])
-            result.append(snap)
+        # Running book state: level_number (1-5) → {bid_*, ask_*}
+        current: dict[int, dict] = {}
+        result: list[dict] = []
+        last_minute = -1
+
+        for row in rows_sorted:
+            level = row.get("number", 0)
+            if not (1 <= level <= 5):
+                continue
+
+            current[level] = {
+                "bid_price": row.get("pMeDem",    0),
+                "bid_vol":   row.get("qTitMeDem", 0),
+                "bid_cnt":   row.get("zOrdMeDem", 0),
+                "ask_price": row.get("pMeOf",     0),
+                "ask_vol":   row.get("qTitMeOf",  0),
+                "ask_cnt":   row.get("zOrdMeOf",  0),
+            }
+
+            # Wait until all 5 levels are populated before emitting snapshots
+            if len(current) < 5:
+                continue
+
+            # Sample once per minute (hEven is HHMMSS stored as int)
+            t = row.get("hEven", 0)
+            t_str = str(t).zfill(6)
+            minute = int(t_str[:4])   # HHMM as int
+
+            if minute != last_minute:
+                bids = [
+                    {"price": current[lvl]["bid_price"],
+                     "volume": current[lvl]["bid_vol"],
+                     "count":  current[lvl]["bid_cnt"]}
+                    for lvl in sorted(current)
+                ]
+                asks = [
+                    {"price": current[lvl]["ask_price"],
+                     "volume": current[lvl]["ask_vol"],
+                     "count":  current[lvl]["ask_cnt"]}
+                    for lvl in sorted(current)
+                ]
+                # Best bid = highest price; best ask = lowest price
+                bids.sort(key=lambda x: -x["price"])
+                asks.sort(key=lambda x:  x["price"])
+
+                result.append({"time": t, "bids": bids, "asks": asks})
+                last_minute = minute
+
         return result
 
     # ------------------------------------------------------------------ #

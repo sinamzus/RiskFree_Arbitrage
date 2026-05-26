@@ -91,10 +91,15 @@ def fetch_ticks(ins_code: str, date_int: int) -> list[dict]:
 
 
 def fetch_orderbook(ins_code: str, date_int: int) -> list[dict]:
-    """Fetch historical order-book snapshots for ins_code on date_int.
+    """Fetch and reconstruct historical order-book snapshots for ins_code on date_int.
 
-    Uses the TSETMC history API.  Returns [] if data is unavailable.
-    Each item: {time: HHMMSS, bids: [...x5], asks: [...x5]}
+    The TSETMC `bestLimitsHistory` endpoint returns a **stream of per-level
+    delta updates** (each row updates one of 5 levels).  This function:
+      1. Sorts deltas by `refID` (global monotonic event sequence)
+      2. Replays them, maintaining a running 5-level book state
+      3. Emits one snapshot whenever the minute changes (≈ 360-400 / day)
+
+    Returns list[{time: HHMMSS, bids: [...x5], asks: [...x5]}]
     """
     url = f"{TSETMC_CDN}/BestLimits/{ins_code}/{date_int}"
     try:
@@ -104,28 +109,50 @@ def fetch_orderbook(ins_code: str, date_int: int) -> list[dict]:
         rows = r.json().get("bestLimitsHistory") or []
         if not rows:
             return []
-        from collections import defaultdict
-        by_time = defaultdict(lambda: {"bids": [], "asks": []})
-        for row in rows:
+
+        # Sort by the monotonic global event sequence (refID)
+        rows_sorted = sorted(rows, key=lambda row: row.get("refID", 0))
+
+        current: dict[int, dict] = {}   # level (1-5) → {bid_*, ask_*}
+        result: list[dict] = []
+        last_minute = -1
+
+        for row in rows_sorted:
+            level = row.get("number", 0)
+            if not (1 <= level <= 5):
+                continue
+
+            current[level] = {
+                "bid_price": row.get("pMeDem",    0),
+                "bid_vol":   row.get("qTitMeDem", 0),
+                "bid_cnt":   row.get("zOrdMeDem", 0),
+                "ask_price": row.get("pMeOf",     0),
+                "ask_vol":   row.get("qTitMeOf",  0),
+                "ask_cnt":   row.get("zOrdMeOf",  0),
+            }
+
+            if len(current) < 5:   # wait until all 5 levels are known
+                continue
+
             t = row.get("hEven", 0)
-            by_time[t]["bids"].append({
-                "price":  row.get("pMeDem", 0),
-                "volume": row.get("qTitMeDem", 0),
-                "count":  row.get("zOrdMeDem", 0),
-            })
-            by_time[t]["asks"].append({
-                "price":  row.get("pMeOf", 0),
-                "volume": row.get("qTitMeOf", 0),
-                "count":  row.get("zOrdMeOf", 0),
-            })
-        result = []
-        for t in sorted(by_time.keys()):
-            snap = by_time[t]
-            snap["time"] = t
-            snap["bids"].sort(key=lambda x: -x["price"])
-            snap["asks"].sort(key=lambda x:  x["price"])
-            result.append(snap)
+            minute = int(str(t).zfill(6)[:4])   # HHMM
+
+            if minute != last_minute:
+                bids = [{"price": current[l]["bid_price"],
+                         "volume": current[l]["bid_vol"],
+                         "count":  current[l]["bid_cnt"]}
+                        for l in sorted(current)]
+                asks = [{"price": current[l]["ask_price"],
+                         "volume": current[l]["ask_vol"],
+                         "count":  current[l]["ask_cnt"]}
+                        for l in sorted(current)]
+                bids.sort(key=lambda x: -x["price"])
+                asks.sort(key=lambda x:  x["price"])
+                result.append({"time": t, "bids": bids, "asks": asks})
+                last_minute = minute
+
         return result
+
     except Exception as e:
         logger.debug("fetch_orderbook error %s %s: %s", ins_code, date_int, e)
         return []
