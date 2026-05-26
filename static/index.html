@@ -488,6 +488,52 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   font-size: 9px; color: var(--muted); pointer-events: none;
 }
 
+/* Historical OB indicator badge inside OB header */
+#ob-hist-badge {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  background: rgba(240,192,64,.1);
+  border: 1px solid rgba(240,192,64,.3);
+  border-radius: 10px;
+  font-size: 9px;
+  color: var(--yellow);
+  white-space: nowrap;
+}
+#ob-hist-badge.visible { display: inline-flex; }
+#ob-hist-badge button {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 9px; padding: 0 1px; line-height: 1;
+  font-family: inherit;
+}
+#ob-hist-badge button:hover { color: var(--txt); }
+
+/* Chart control buttons (floating on price chart) */
+#chart-controls {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  display: flex;
+  gap: 3px;
+  z-index: 10;
+}
+.cc-btn {
+  background: rgba(30,34,45,.82);
+  border: 1px solid rgba(255,255,255,.07);
+  color: var(--muted);
+  width: 24px; height: 24px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s;
+  user-select: none;
+  font-family: var(--font);
+}
+.cc-btn:hover { background: rgba(255,255,255,.08); color: var(--txt); }
+.cc-btn.active { background: rgba(91,156,246,.22); color: var(--blue); border-color: rgba(91,156,246,.35); }
+
 /* OB imbalance bar */
 .ob-imbalance {
   display: flex; height: 4px; border-radius: 2px; overflow: hidden;
@@ -632,6 +678,13 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div id="charts">
       <div id="price-el">
         <div class="chart-lbl" id="price-lbl">قیمت + NAV</div>
+        <!-- Chart controls: fit, auto-scale, log scale, scroll-to-latest -->
+        <div id="chart-controls">
+          <button class="cc-btn active" id="cc-autoscale" title="اسکیل خودکار" onclick="toggleAutoScale()">↕</button>
+          <button class="cc-btn" id="cc-log" title="مقیاس لگاریتمی" onclick="toggleLogScale()">㏒</button>
+          <button class="cc-btn" title="نمایش همه داده‌ها" onclick="chartFitContent()">⤢</button>
+          <button class="cc-btn" title="رفتن به آخرین بار" onclick="chartScrollToLatest()">⟳</button>
+        </div>
       </div>
       <div id="prem-el">
         <div class="chart-lbl">صرف / تخفیف %</div>
@@ -652,6 +705,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <span class="ob-ft-lbl">اسپرد:</span>
         <span id="ob-hdr-spread">—</span>
         <span id="ob-hdr-ts"></span>
+        <!-- Historical snapshot badge — shown when viewing past OB via chart click -->
+        <div id="ob-hist-badge">
+          <span>📅</span>
+          <span id="ob-hist-label">—</span>
+          <button title="بازگشت به OB زنده" onclick="clearOBHistorical()">✕ زنده</button>
+        </div>
         <div class="ob-toggle">
           <button class="ob-toggle-btn active" onclick="setObView('ladder')">تابلو</button>
           <button class="ob-toggle-btn"        onclick="setObView('chart')">نمودار</button>
@@ -799,7 +858,7 @@ function tvOpts(el, showTimeAxis) {
               fontFamily: "'Vazirmatn', 'Segoe UI', Tahoma, Arial, sans-serif" },
     grid:   { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
     crosshair: { mode: CrosshairMode.Normal },
-    rightPriceScale: { borderColor: TV.brd },
+    rightPriceScale: { borderColor: TV.brd, autoScale: true },
     localization: {
       timeFormatter: (time) => {
         const { jy, jm, jd, hh, mm } = jalaliFromTV(time);
@@ -840,6 +899,9 @@ function buildCharts() {
 
   // Crosshair info bar
   PC.subscribeCrosshairMove(p => updateInfoBar(p));
+
+  // Click on price chart → load historical OB for that date/time
+  PC.subscribeClick(p => onChartClick(p));
 }
 
 function onResize() {
@@ -960,6 +1022,9 @@ let obCache = {};   // sym → {snapshot, tradability}
 
 async function loadOrderBook(sym) {
   if (!sym) { document.getElementById('ob-panel').classList.remove('visible'); return; }
+
+  // Clear historical badge when loading live OB
+  document.getElementById('ob-hist-badge').classList.remove('visible');
 
   // Check fund signal direction from latest data
   const fund = latestFunds.find(f => f.symbol === sym) || {};
@@ -1122,17 +1187,20 @@ function ensureOBChart() {
 }
 
 let _obHistSym = '';
-async function loadOBHistory(sym) {
+async function loadOBHistory(sym, forceDateInt) {
   if (!sym) return;
   ensureOBChart();
 
-  // Determine which date to show: latest available OB date
-  const datesR = await fetch(`/api/orderbook_dates?symbol=${E(sym)}`).catch(() => null);
-  let dateInt = 0;
-  if (datesR?.ok) {
-    const dj = await datesR.json();
-    const dates = dj.dates || [];
-    if (dates.length) dateInt = dates[dates.length - 1];
+  let dateInt = forceDateInt || 0;
+
+  // If no date given, pick the latest available OB date
+  if (!dateInt) {
+    const datesR = await fetch(`/api/orderbook_dates?symbol=${E(sym)}`).catch(() => null);
+    if (datesR?.ok) {
+      const dj = await datesR.json();
+      const dates = dj.dates || [];
+      if (dates.length) dateInt = dates[dates.length - 1];
+    }
   }
   if (!dateInt) {
     obSpreadSeries.setData([]);
@@ -1174,6 +1242,158 @@ async function loadOBHistory(sym) {
   const p2 = n => String(n).padStart(2,'0');
   document.getElementById('ob-chart-lbl').textContent =
     `اسپرد % + عمق — ${sym} — ${jy}/${p2(jm)}/${p2(jd)}`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Chart controls
+// ══════════════════════════════════════════════════════════════════
+let _autoScale = true;
+let _logScale  = false;
+
+function toggleAutoScale() {
+  _autoScale = !_autoScale;
+  document.getElementById('cc-autoscale').classList.toggle('active', _autoScale);
+  if (PC) PC.priceScale('right').applyOptions({ autoScale: _autoScale });
+  if (KC) KC.priceScale('right').applyOptions({ autoScale: _autoScale });
+}
+
+function toggleLogScale() {
+  _logScale = !_logScale;
+  document.getElementById('cc-log').classList.toggle('active', _logScale);
+  const mode = _logScale ? 1 : 0;   // 1 = Logarithmic, 0 = Normal
+  if (PC) PC.priceScale('right').applyOptions({ mode });
+}
+
+function chartFitContent() {
+  if (PC) PC.timeScale().fitContent();
+  if (KC) KC.timeScale().fitContent();
+}
+
+function chartScrollToLatest() {
+  if (PC) PC.timeScale().scrollToRealTime();
+  if (KC) KC.timeScale().scrollToRealTime();
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Chart click → historical OB snapshot
+// ══════════════════════════════════════════════════════════════════
+const _obSnapCache = {};   // `${sym}_${dateInt}` → snapshots array
+
+async function onChartClick(param) {
+  if (!param?.time) return;
+  const sym = [...selected][0];
+  if (!sym) return;
+
+  // Decode clicked time → Gregorian YYYYMMDD integer + HHMMSS
+  let dateInt = 0, targetHHMMSS = 999999;
+
+  if (src === 'daily') {
+    // time is either "YYYY-MM-DD" string or TradingView BusinessDay {year,month,day}
+    let yr, mo, dy;
+    if (typeof param.time === 'string') {
+      [yr, mo, dy] = param.time.split('-').map(Number);
+    } else if (typeof param.time === 'object' && 'year' in param.time) {
+      yr = param.time.year; mo = param.time.month; dy = param.time.day;
+    } else if (typeof param.time === 'number' && param.time > 20000000) {
+      yr = Math.floor(param.time / 10000);
+      mo = Math.floor((param.time % 10000) / 100);
+      dy = param.time % 100;
+    }
+    if (yr) dateInt = yr * 10000 + mo * 100 + dy;
+    targetHHMMSS = 999999;   // take last snapshot of that day
+
+  } else if (src === 'intraday') {
+    // time is a UTC Unix timestamp
+    if (typeof param.time === 'number' && param.time < 20000000) {
+      const d = new Date(param.time * 1000);
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Tehran',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      }).formatToParts(d);
+      const p = {};
+      parts.forEach(x => { p[x.type] = x.value; });
+      dateInt = +p.year * 10000 + +p.month * 100 + +p.day;
+      let hh = +p.hour; if (hh === 24) hh = 0;
+      targetHHMMSS = hh * 10000 + +p.minute * 100 + +p.second;
+    }
+  }
+
+  if (!dateInt) return;
+
+  // Fetch and cache snapshots for this (sym, date)
+  const cacheKey = `${sym}_${dateInt}`;
+  let snaps = _obSnapCache[cacheKey];
+  if (!snaps) {
+    const r = await fetch(`/api/orderbook_history?symbol=${E(sym)}&date=${dateInt}&limit=2000`).catch(() => null);
+    if (!r?.ok) return;
+    const j = await r.json();
+    snaps = j.snapshots || [];
+    _obSnapCache[cacheKey] = snaps;
+  }
+  if (!snaps.length) return;
+
+  // Find the snapshot at or before targetHHMMSS (last snap of day when 999999)
+  let closest = snaps[0];
+  if (targetHHMMSS === 999999) {
+    closest = snaps[snaps.length - 1];
+  } else {
+    for (const s of snaps) {
+      if (s.time <= targetHHMMSS) closest = s;
+      else break;
+    }
+  }
+
+  // Render historical OB ladder
+  _renderHistoricalOBSnap(sym, dateInt, closest);
+
+  // If OB chart is active, also reload that date's chart
+  if (obView === 'chart') loadOBHistory(sym, dateInt);
+}
+
+function _renderHistoricalOBSnap(sym, dateInt, snap) {
+  const p2    = n => String(n).padStart(2,'0');
+  const t     = String(snap.time).padStart(6,'0');
+  const tStr  = `${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}`;
+  const ds    = String(dateInt);
+  const [jy, jm, jd] = gregorianToJalali(+ds.slice(0,4), +ds.slice(4,6), +ds.slice(6,8));
+  const label = `${jy}/${p2(jm)}/${p2(jd)} ${tStr}`;
+
+  // Build a fake OB response compatible with renderOrderBook
+  const fakeData = {
+    snapshot: {
+      date:       dateInt,
+      time:       snap.time,
+      spread_pct: snap.spread_pct,
+      bid_depth:  snap.bid_depth,
+      ask_depth:  snap.ask_depth,
+      bids: [1,2,3,4,5].map(i => ({
+        price:  snap[`b${i}p`] || 0,
+        volume: snap[`b${i}v`] || 0,
+        count:  0,
+      })),
+      asks: [1,2,3,4,5].map(i => ({
+        price:  snap[`a${i}p`] || 0,
+        volume: snap[`a${i}v`] || 0,
+        count:  0,
+      })),
+    },
+    tradability: null,   // historical snapshots don't have live tradability
+  };
+
+  // Switch to ladder and render
+  if (obView !== 'ladder') setObView('ladder');
+  renderOrderBook(sym, fakeData);
+
+  // Show historical badge in OB header
+  document.getElementById('ob-hist-label').textContent = label;
+  document.getElementById('ob-hist-badge').classList.add('visible');
+}
+
+function clearOBHistorical() {
+  document.getElementById('ob-hist-badge').classList.remove('visible');
+  const sym = [...selected][0];
+  if (sym) loadOrderBook(sym);   // reload live OB
 }
 
 // ══════════════════════════════════════════════════════════════════
