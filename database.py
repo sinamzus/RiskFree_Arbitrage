@@ -450,6 +450,36 @@ class Database:
         logger.debug("save_daily_history: %d new rows for %s", inserted, symbol)
         return inserted
 
+    def upsert_today_history(self, symbol: str, ins_code: str,
+                             date_int: int, entry: dict) -> None:
+        """Insert or REPLACE today's daily OHLCV row.
+
+        Called on every scan so today's bar stays current throughout the day.
+        Unlike save_daily_history (INSERT OR IGNORE), this always overwrites
+        the same-date row with fresher data.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO daily_history
+                   (symbol, ins_code, date, open_price, high_price, low_price,
+                    close_price, yesterday_price, volume, value, trade_count,
+                    price_change, premium_pct)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    symbol, ins_code, date_int,
+                    entry.get("open_price",      0),
+                    entry.get("high_price",      0),
+                    entry.get("low_price",       0),
+                    entry.get("close_price",     0),
+                    entry.get("yesterday_price", 0),
+                    entry.get("volume",          0),
+                    entry.get("value",           0),
+                    entry.get("trade_count",     0),
+                    entry.get("price_change",    0),
+                    entry.get("premium_pct",     0),
+                ),
+            )
+
     def get_daily_history(self, symbol: str, days: int = 365) -> list[dict]:
         """Return daily OHLCV rows for *symbol* (most recent *days* rows)."""
         with self._conn() as conn:

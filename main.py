@@ -366,6 +366,37 @@ def run_scan(aggregator: DataAggregator,
             if fd.get("nav_data") and fd["nav_data"].get("nav_per_unit", 0) > 0:
                 db.cache_nav(fd["symbol"], fd["nav_data"], today)
 
+    # ── Upsert today's OHLCV bar into daily_history ──────────────────────
+    # The bootstrap populates historical days; today's bar must be added
+    # (and refreshed) on every scan so the daily chart shows today.
+    tsetmc = aggregator.tsetmc
+    for fd in fund_data:
+        price = fd.get("price_data") or {}
+        nav_d = fd.get("nav_data") or {}
+        sym      = fd.get("symbol", "")
+        ins_code = fd.get("ins_code") or tsetmc._ins_code_cache.get(sym, "")
+        close    = price.get("close_price") or 0
+        if not sym or not ins_code or not close:
+            continue
+        nav = (nav_d.get("cancel_nav")
+               or nav_d.get("nav_per_unit")
+               or price.get("yesterday_price")
+               or 0)
+        prev_close = price.get("yesterday_price") or nav or 0
+        prem = round((close - nav) / nav * 100, 4) if nav > 0 else 0
+        db.upsert_today_history(sym, ins_code, today_int, {
+            "open_price":      price.get("open_price",  0),
+            "high_price":      price.get("high_price",  0),
+            "low_price":       price.get("low_price",   0),
+            "close_price":     close,
+            "yesterday_price": nav,          # cancel_nav used as today's NAV
+            "volume":          price.get("volume",      0),
+            "value":           price.get("value",       0),
+            "trade_count":     price.get("trade_count", 0),
+            "price_change":    close - prev_close,
+            "premium_pct":     prem,
+        })
+
     return opps
 
 
