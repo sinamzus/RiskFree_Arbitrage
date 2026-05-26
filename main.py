@@ -375,8 +375,11 @@ def run_scan(aggregator: DataAggregator,
         nav_d = fd.get("nav_data") or {}
         sym      = fd.get("symbol", "")
         ins_code = fd.get("ins_code") or tsetmc._ins_code_cache.get(sym, "")
-        close    = price.get("close_price") or 0
-        if not sym or not ins_code or not close:
+        if not sym or not ins_code:
+            continue
+        # Use last_price as fallback for close_price (close may be 0 pre-market)
+        close = (price.get("close_price") or price.get("last_price") or 0)
+        if not close:
             continue
         nav = (nav_d.get("cancel_nav")
                or nav_d.get("nav_per_unit")
@@ -384,12 +387,15 @@ def run_scan(aggregator: DataAggregator,
                or 0)
         prev_close = price.get("yesterday_price") or nav or 0
         prem = round((close - nav) / nav * 100, 4) if nav > 0 else 0
+        op  = price.get("open_price", 0) or close
+        hi  = price.get("high_price", 0) or close
+        lo  = price.get("low_price",  0) or close
         db.upsert_today_history(sym, ins_code, today_int, {
-            "open_price":      price.get("open_price",  0),
-            "high_price":      price.get("high_price",  0),
-            "low_price":       price.get("low_price",   0),
+            "open_price":      op,
+            "high_price":      hi,
+            "low_price":       lo,
             "close_price":     close,
-            "yesterday_price": nav,          # cancel_nav used as today's NAV
+            "yesterday_price": nav,
             "volume":          price.get("volume",      0),
             "value":           price.get("value",       0),
             "trade_count":     price.get("trade_count", 0),

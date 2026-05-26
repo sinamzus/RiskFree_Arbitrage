@@ -204,6 +204,37 @@ def create_app(db, scan_callback=None):
         if not symbol:
             return jsonify({"error": "symbol required"}), 400
         history = db.get_daily_history(symbol, days)
+
+        # Belt-and-suspenders: if today's bar is missing (scan hasn't written it
+        # yet, or the fund had close_price=0 at bootstrap time), synthesise it
+        # from the most recent snapshot row so the daily chart always shows today.
+        today_int = int(datetime.now().strftime("%Y%m%d"))
+        has_today = any(r.get("date") == today_int for r in history)
+        if not has_today:
+            latest_map = {r["symbol"]: r for r in db.get_latest()}
+            snap = latest_map.get(symbol)
+            if snap:
+                close  = (snap.get("market_price") or snap.get("best_bid") or 0)
+                nav    = (snap.get("cancel_nav") or snap.get("nav") or 0)
+                prem   = round((close - nav) / nav * 100, 4) if nav > 0 and close > 0 else 0
+                prev   = history[-1].get("close_price", 0) if history else 0
+                today_row = {
+                    "symbol":          symbol,
+                    "ins_code":        snap.get("ins_code", ""),
+                    "date":            today_int,
+                    "open_price":      close,
+                    "high_price":      close,
+                    "low_price":       close,
+                    "close_price":     close,
+                    "yesterday_price": nav,
+                    "volume":          snap.get("volume", 0),
+                    "value":           snap.get("value", 0),
+                    "trade_count":     snap.get("trade_count", 0),
+                    "price_change":    close - prev,
+                    "premium_pct":     prem,
+                }
+                history = history + [today_row]
+
         return jsonify({"symbol": symbol, "days": days, "history": history})
 
     def _nav_for_date(symbol: str, date_int: int) -> float:
