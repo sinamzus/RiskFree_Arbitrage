@@ -12,3 +12,4 @@ data/arbitrage.db
 data/
 tools/raw/
 tools/tsetmc_history_*.html
+logs/ob_debug_*.txt

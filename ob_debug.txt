@@ -1,0 +1,77 @@
+OB Diagnostic Log — 2026-05-26 17:11:58
+DB: /home/user/RiskFree_Arbitrage/data/arbitrage.db
+
+══════════════════════════════════════════════════════════════════════
+  1. DATABASE FILE
+══════════════════════════════════════════════════════════════════════
+  [✓] DB file exists  →  /home/user/RiskFree_Arbitrage/data/arbitrage.db
+
+══════════════════════════════════════════════════════════════════════
+  2. TABLES
+══════════════════════════════════════════════════════════════════════
+  [✓] daily_history  →  0 rows
+  [✓] intraday_trades  →  0 rows
+  [✓] intraday_orderbook  →  0 rows
+  [✓] ob_ticks  →  0 rows
+  [✓] snapshots  →  1 rows
+  [✓] nav_cache  →  0 rows
+
+══════════════════════════════════════════════════════════════════════
+  3. intraday_orderbook COLUMNS
+══════════════════════════════════════════════════════════════════════
+  Columns (39): id, symbol, ins_code, date, time, bid1_price, bid1_vol, bid1_cnt, bid2_price, bid2_vol, bid2_cnt, bid3_price, bid3_vol, bid3_cnt, bid4_price, bid4_vol, bid4_cnt, bid5_price, bid5_vol, bid5_cnt, ask1_price, ask1_vol, ask1_cnt, ask2_price, ask2_vol, ask2_cnt, ask3_price, ask3_vol, ask3_cnt, ask4_price, ask4_vol, ask4_cnt, ask5_price, ask5_vol, ask5_cnt, spread_pct, bid_depth, ask_depth, nav
+  [✓] column 'nav'
+  [✓] column 'spread_pct'
+  [✓] column 'bid_depth'
+  [✓] column 'ask_depth'
+
+══════════════════════════════════════════════════════════════════════
+  4. OB SNAPSHOTS BY DATE
+══════════════════════════════════════════════════════════════════════
+  ⚠  No OB snapshots found in database!
+  This means run_scan() has never successfully saved an OB snapshot.
+
+══════════════════════════════════════════════════════════════════════
+  5. OB SNAPSHOTS PER SYMBOL (most recent date)
+══════════════════════════════════════════════════════════════════════
+  No data
+
+══════════════════════════════════════════════════════════════════════
+  6. SAMPLE OB ROW (most recent)
+══════════════════════════════════════════════════════════════════════
+  No rows
+
+══════════════════════════════════════════════════════════════════════
+  7. SCAN HISTORY (snapshots table)
+══════════════════════════════════════════════════════════════════════
+  2026-05-24  symbols=1  scans=1  2026-05-24 11:50:28 → 2026-05-24 11:50:28
+
+══════════════════════════════════════════════════════════════════════
+  8. DAILY HISTORY COVERAGE
+══════════════════════════════════════════════════════════════════════
+  Dates: 0  (None → None)
+  Symbols: 0
+
+══════════════════════════════════════════════════════════════════════
+  9. CODE PATH CHECK
+══════════════════════════════════════════════════════════════════════
+  [✓] Database() instantiation OK
+  [✓] intraday_orderbook table exists post-init
+  [✓] TSETMCFetcher import OK
+  [✓] run_scan calls save_orderbook_snapshot
+
+══════════════════════════════════════════════════════════════════════
+  10. DIAGNOSIS
+══════════════════════════════════════════════════════════════════════
+  ✗ CRITICAL: intraday_orderbook has 0 rows.
+
+  Cause: Table exists but no snapshots saved. Possible reasons:
+   a) run_scan() has never been called (no --watch or --serve run)
+   b) All get_best_limits() calls returned empty (network issue)
+   c) Exception in save_orderbook_snapshot silently skipped
+
+  Action: Run the backfill tool to populate historical data:
+          python tools/backfill_ob.py
+
+  Then run live scanner:
+          python main.py --serve --watch 15
