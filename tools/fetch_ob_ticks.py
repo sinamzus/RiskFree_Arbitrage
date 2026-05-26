@@ -13,6 +13,9 @@
   python tools/fetch_ob_ticks.py --days 180 --workers 5   # سریع‌تر (با احتیاط)
   python tools/fetch_ob_ticks.py --probe                   # تا کجا تاریخ موجود است؟
   python tools/fetch_ob_ticks.py --status                  # وضعیت DB
+  python tools/fetch_ob_ticks.py --check                   # گپ‌ها را نشان بده (بدون دانلود)
+  python tools/fetch_ob_ticks.py --fill                    # گپ‌ها را پیدا و دوباره دانلود کن
+  python tools/fetch_ob_ticks.py --fill --symbol XXXXXX   # گپ فقط یک نماد
   python tools/fetch_ob_ticks.py --days 30 --dry-run      # بدون ذخیره
 """
 from __future__ import annotations
@@ -207,24 +210,39 @@ def fmt_eta(seconds: float) -> str:
 
 def fetch_all(dates: list[int], symbol_filter: str | None,
               force: bool, dry_run: bool,
-              workers: int, max_rps: float):
+              workers: int, max_rps: float,
+              task_list: list[tuple[str, str, int]] | None = None):
+    """
+    task_list: اگر داده شود، از dates/symbol_filter صرف‌نظر می‌شود.
+               برای gap-fill از find_gaps() استفاده کنید.
+    """
 
-    funds = [f for f in FIXED_INCOME_ETFS
-             if (not symbol_filter or f["symbol"] == symbol_filter)
-             and f.get("ins_code", "").strip()]
+    if task_list is not None:
+        # حالت gap-fill: task های از پیش مشخص
+        tasks       = task_list
+        funds_count = len({t[0] for t in tasks})
+        dates_count = len({t[2] for t in tasks})
+        skipped     = 0
+    else:
+        funds = [f for f in FIXED_INCOME_ETFS
+                 if (not symbol_filter or f["symbol"] == symbol_filter)
+                 and f.get("ins_code", "").strip()]
 
-    # ساخت لیست task های (sym, ins_code, date_int)
-    tasks: list[tuple[str, str, int]] = []
-    for fund in funds:
-        sym      = fund["symbol"]
-        ins_code = fund["ins_code"].strip()
-        have     = set(DB.get_ob_tick_dates(sym)) if not force else set()
-        for d in dates:
-            if d not in have:
-                tasks.append((sym, ins_code, d))
+        # ساخت لیست task های (sym, ins_code, date_int)
+        tasks: list[tuple[str, str, int]] = []
+        for fund in funds:
+            sym      = fund["symbol"]
+            ins_code = fund["ins_code"].strip()
+            have     = set(DB.get_ob_tick_dates(sym)) if not force else set()
+            for d in dates:
+                if d not in have:
+                    tasks.append((sym, ins_code, d))
 
-    total   = len(tasks)
-    skipped = len(funds) * len(dates) - total
+        funds_count = len(funds)
+        dates_count = len(dates)
+        skipped     = funds_count * dates_count - len(tasks)
+
+    total = len(tasks)
 
     if total == 0:
         print("  همه داده‌ها قبلاً ذخیره شده‌اند. برای re-fetch از --force استفاده کنید.")
@@ -235,7 +253,7 @@ def fetch_all(dates: list[int], symbol_filter: str | None,
     print()
     print("═" * 72)
     print(f"  جمع‌آوری OB tick-by-tick (موازی)")
-    print(f"  صندوق‌ها: {len(funds)}  تاریخ‌ها: {len(dates)}  task: {total:,}  رد شده: {skipped:,}")
+    print(f"  صندوق‌ها: {funds_count}  تاریخ‌ها: {dates_count}  task: {total:,}  رد شده: {skipped:,}")
     print(f"  workers: {workers}  rate limit: {max_rps:.1f} req/s")
     print(f"  تخمین زمان: {fmt_eta(est_sec)} (بهترین حالت)")
     if dry_run:
@@ -324,6 +342,93 @@ def probe_history(ins_code: str = "3846143218462419"):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  gap detection
+# ═══════════════════════════════════════════════════════════════════════════
+
+def find_gaps(symbol_filter: str | None) -> dict[str, list[int]]:
+    """تشخیص (symbol, date) های ناقص در DB.
+
+    مرجع: اتحاد همه تاریخ‌های موجود برای همه نمادها (= بازار در آن روز باز بوده).
+    خروجی: {symbol: [missing_dates]} — فقط برای نمادهایی که حداقل یک روز داده دارند.
+    نمادهایی که اصلاً داده ندارند در خروجی نیستند (نمی‌دانیم آیا گپ‌اند یا نه).
+    """
+    funds = [f for f in FIXED_INCOME_ETFS
+             if (not symbol_filter or f["symbol"] == symbol_filter)
+             and f.get("ins_code", "").strip()]
+
+    # جمع‌آوری تاریخ‌های ذخیره‌شده هر نماد
+    sym_dates: dict[str, set[int]] = {}
+    for fund in funds:
+        sym = fund["symbol"]
+        dates = DB.get_ob_tick_dates(sym)
+        if dates:
+            sym_dates[sym] = set(dates)
+
+    if not sym_dates:
+        return {}
+
+    # مرجع: اتحاد همه تاریخ‌ها (روزهایی که حداقل یک نماد داده دارد)
+    all_dates: set[int] = set()
+    for dates in sym_dates.values():
+        all_dates |= dates
+
+    # گپ هر نماد = تاریخ‌های مرجع که نماد ندارد
+    gaps: dict[str, list[int]] = {}
+    for sym, dates in sym_dates.items():
+        missing = sorted(all_dates - dates)
+        if missing:
+            gaps[sym] = missing
+
+    return gaps
+
+
+def _ins_code_map() -> dict[str, str]:
+    """نقشه symbol → ins_code از FIXED_INCOME_ETFS."""
+    return {f["symbol"]: f["ins_code"].strip()
+            for f in FIXED_INCOME_ETFS
+            if f.get("ins_code", "").strip()}
+
+
+def show_gaps(symbol_filter: str | None) -> dict[str, list[int]]:
+    """نمایش گزارش گپ‌ها و برگرداندن dict برای fill."""
+    gaps = find_gaps(symbol_filter)
+
+    print()
+    print("═" * 72)
+    print("  بررسی گپ‌های داده در ob_ticks")
+    print("═" * 72)
+
+    if not gaps:
+        has_any = any(
+            DB.get_ob_tick_dates(f["symbol"])
+            for f in FIXED_INCOME_ETFS
+            if f.get("ins_code", "").strip()
+        )
+        if has_any:
+            print("  ✓ هیچ گپی یافت نشد — همه نمادها تاریخ‌های یکسانی دارند")
+        else:
+            print("  ⚠ هیچ داده‌ای در DB وجود ندارد")
+        print()
+        return gaps
+
+    total_missing = sum(len(v) for v in gaps.values())
+
+    print(f"  {'نماد':12s}  {'روز مفقود':>10}  {'تاریخ‌های مفقود (نمونه)'}")
+    print("  " + "─" * 68)
+
+    for sym, missing in sorted(gaps.items(), key=lambda x: -len(x[1])):
+        sample = "  ".join(str(d) for d in missing[:5])
+        if len(missing) > 5:
+            sample += f"  … (+{len(missing) - 5})"
+        print(f"  {sym:12s}  {len(missing):>10}  {sample}")
+
+    print()
+    print(f"  مجموع گپ: {total_missing:,} جفت (symbol, date)")
+    print()
+    return gaps
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  status
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -382,6 +487,10 @@ def main():
                     help="دانلود کن ولی ذخیره نکن")
     ap.add_argument("--status",  action="store_true",
                     help="فقط وضعیت DB")
+    ap.add_argument("--check",   action="store_true",
+                    help="گپ‌های داده را نشان بده (بدون دانلود)")
+    ap.add_argument("--fill",    action="store_true",
+                    help="گپ‌ها را پیدا و دوباره دانلود کن")
     args = ap.parse_args()
 
     # اعتبارسنجی
@@ -396,6 +505,43 @@ def main():
 
     if args.probe:
         probe_history()
+        return
+
+    if args.check:
+        show_gaps(args.symbol)
+        return
+
+    if args.fill:
+        gaps = show_gaps(args.symbol)
+        if not gaps:
+            return
+        # ساخت task list از گپ‌ها
+        ins_map = _ins_code_map()
+        gap_tasks: list[tuple[str, str, int]] = []
+        for sym, missing_dates in gaps.items():
+            ins_code = ins_map.get(sym, "")
+            if not ins_code:
+                print(f"  ⚠ ins_code برای {sym} پیدا نشد — رد شد")
+                continue
+            for d in missing_dates:
+                gap_tasks.append((sym, ins_code, d))
+
+        if not gap_tasks:
+            print("  هیچ task قابل اجرایی وجود ندارد.")
+            return
+
+        print(f"  جمع‌آوری {len(gap_tasks):,} گپ شناسایی‌شده …")
+        fetch_all(
+            dates         = [],
+            symbol_filter = args.symbol,
+            force         = False,
+            dry_run       = args.dry_run,
+            workers       = args.workers,
+            max_rps       = args.rps,
+            task_list     = gap_tasks,
+        )
+        show_gaps(args.symbol)   # گزارش نهایی گپ باقی‌مانده
+        show_status(args.symbol)
         return
 
     end = None
