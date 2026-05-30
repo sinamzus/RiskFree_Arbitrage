@@ -1,14 +1,106 @@
-Traceback (most recent call last):
-  File "C:\Users\Part Laptop\RiskFree_Arbitrage\tools\analyze_tsetmc_api.py", line 346, in <module>
-    main()
-    ~~~~^^
-  File "C:\Users\Part Laptop\RiskFree_Arbitrage\tools\analyze_tsetmc_api.py", line 342, in main
-    analyze(ins_code, symbol)
-    ~~~~~~~^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Part Laptop\RiskFree_Arbitrage\tools\analyze_tsetmc_api.py", line 73, in analyze
-    print(f"\n{'\u2550'*70}")
-    ~~~~~^^^^^^^^^^^^^^^
-  File "C:\Users\Part Laptop\AppData\Local\Python\pythoncore-3.14-64\Lib\encodings\cp1252.py", line 19, in encode
-    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
-           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-71: character maps to <undefined>
+  Found ins_code=53251602435454519 for کیان in DB
+
+══════════════════════════════════════════════════════════════════════
+  TSETMC API Analyzer
+  Symbol: کیان   insCode: 53251602435454519
+  Date:   20260530    Yesterday: 20260529
+══════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────────────────────
+  1. ClosingPrice/GetClosingPriceInfo  (live OHLCV)
+──────────────────────────────────────────────────────────────────────
+  ✓  endpoint responded
+    closingPriceInfo: dict  keys=['instrumentState', 'instrument', 'lastHEven', 'finalLastDate', 'nvt', 'mop', 'pRedTran', 'thirtyDayClosingHistory', 'priceChange', 'priceMin', 'priceMax', 'priceYesterday', 'priceFirst', 'last', 'id', 'insCode', 'dEven', 'hEven', 'pClosing', 'iClose', 'yClose', 'pDrCotVal', 'zTotTran', 'qTotTran5J', 'qTotCap']
+    last=100795.0  close=100795.0  open=100795.0  high=100796.0  low=100795.0  volume=60351355.0  trades=3560.0
+
+──────────────────────────────────────────────────────────────────────
+  2. Trade/GetTradeHistory/53251602435454519/20260530/false  (today's ticks)
+──────────────────────────────────────────────────────────────────────
+  ✓  endpoint responded
+    tradeHistory: list[0]
+  ✓  trades count: 0
+
+──────────────────────────────────────────────────────────────────────
+  3. Trade/GetTradeHistory/53251602435454519/20260529/false  (yesterday ticks)
+──────────────────────────────────────────────────────────────────────
+  ✓  trades count: 0
+
+──────────────────────────────────────────────────────────────────────
+  4. Trade/GetTradeHistory/53251602435454519/20260530/true  (with canceled trades)
+──────────────────────────────────────────────────────────────────────
+  ✓  trades count (with canceled): 0
+  ✓  canceled trades: 0
+
+──────────────────────────────────────────────────────────────────────
+  5. BestLimits/53251602435454519  (live order book)
+──────────────────────────────────────────────────────────────────────
+  ✓  endpoint responded
+    bestLimits: list[5]  keys=['number', 'qTitMeDem', 'zOrdMeDem', 'pMeDem', 'pMeOf', 'zOrdMeOf', 'qTitMeOf', 'title', 'insCode']
+  ✓  levels: 5
+    {"number": 1, "qTitMeDem": 122979400, "zOrdMeDem": 41, "pMeDem": 100795.0, "pMeOf": 100796.0, "zOrdMeOf": 6, "qTitMeOf": 33099530, "title": null, "insCode": null}
+    {"number": 2, "qTitMeDem": 1072693, "zOrdMeDem": 4, "pMeDem": 100794.0, "pMeOf": 100797.0, "zOrdMeOf": 3, "qTitMeOf": 506000, "title": null, "insCode": null}
+
+──────────────────────────────────────────────────────────────────────
+  6. BestLimits/53251602435454519/20260530  (today OB history)
+──────────────────────────────────────────────────────────────────────
+  ✓  endpoint responded
+  ✓  delta rows: 0
+
+──────────────────────────────────────────────────────────────────────
+  7. BestLimits/53251602435454519/20260529  (yesterday OB history)
+──────────────────────────────────────────────────────────────────────
+  ✓  delta rows: 0
+
+──────────────────────────────────────────────────────────────────────
+  8. ClosingPrice/GetClosingPriceDailyList/53251602435454519/30  (30-day OHLCV)
+──────────────────────────────────────────────────────────────────────
+  ✓  endpoint responded
+    closingPriceDaily: list[30]  keys=['priceChange', 'priceMin', 'priceMax', 'priceYesterday', 'priceFirst', 'last', 'id', 'insCode', 'dEven', 'hEven', 'pClosing', 'iClose', 'yClose', 'pDrCotVal', 'zTotTran', 'qTotTran5J', 'qTotCap']
+  ✓  daily bars: 0
+
+──────────────────────────────────────────────────────────────────────
+  9. Instrument/GetInstrumentInfo/53251602435454519  (fund metadata)
+──────────────────────────────────────────────────────────────────────
+  ✓  endpoint responded
+    instrumentInfo: dict  keys=['eps', 'sector', 'staticThreshold', 'minWeek', 'maxWeek', 'minYear', 'maxYear', 'qTotTran5JAvg', 'kAjCapValCpsIdx', 'dEven', 'topInst', 'faraDesc', 'contractSize', 'nav', 'underSupervision', 'etfIssuedUnit', 'etfUnitDeven', 'cValMne', 'lVal18', 'cSocCSAC', 'lSoc30', 'yMarNSC', 'yVal', 'insCode', 'lVal30', 'lVal18AFC', 'flow', 'cIsin', 'zTitad', 'baseVol', 'instrumentID', 'cgrValCot', 'cComVal', 'lastDate', 'sourceID', 'flowTitle', 'cgrValCotTitle']
+
+──────────────────────────────────────────────────────────────────────
+  10. Additional endpoints (experimental)
+──────────────────────────────────────────────────────────────────────
+  ·  (empty) Instrument/GetInstrumentStatistic
+  ·  (empty) Trade/GetFutureStateStats
+  ✓  FOUND: ClosingPrice/GetClosingPriceHistory/1
+    closingPriceHistory: list[0]
+  ·  (empty) MarketData/GetTseClientTypeAll
+  ·  (empty) Trade/GetClientTypeHistory/{today}
+  ·  (empty) Trade/GetClientTypeHistory/0 (live?)
+
+──────────────────────────────────────────────────────────────────────
+  11. Cross-check: DB intraday_trades for this symbol
+──────────────────────────────────────────────────────────────────────
+  ✓  intraday_trades found for کیان
+    date=20260526  ticks=6173
+    date=20260525  ticks=6229
+    date=20260524  ticks=7733
+    date=20260523  ticks=8687
+    date=20260520  ticks=6322
+    date=20260519  ticks=6664
+    date=20260518  ticks=5195
+    date=20260517  ticks=4390
+    date=20260516  ticks=5946
+    First 5 ticks on 20260526:
+      08:30:00  price=100,676.0  vol=444,766
+      08:30:00  price=100,676.0  vol=200,000
+      08:30:00  price=100,676.0  vol=174,130
+      08:30:00  price=100,676.0  vol=40,000
+      08:30:00  price=100,676.0  vol=36,000
+
+══════════════════════════════════════════════════════════════════════
+  SUMMARY
+══════════════════════════════════════════════════════════════════════
+  Trade ticks (today):                 0 rows   ← Trade/GetTradeHistory
+  OB deltas (today):                   0 rows   ← BestLimits/53251602435454519/20260530
+  OB deltas (yesterday):               0 rows   ← BestLimits/53251602435454519/20260529
+
+  ⚠ داده تیک امروز دریافت نشد (بازار بسته یا خارج از ساعت کاری)
+
