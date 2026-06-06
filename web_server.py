@@ -807,17 +807,25 @@ def create_app(db, scan_callback=None):
         dates = db.get_ob_dates(symbol)
         return jsonify({"symbol": symbol, "dates": dates})
 
+    @app.route("/api/strategies")
+    def api_strategies():
+        """Return the catalogue of available NAV-free backtest strategies."""
+        from backtest import STRATEGIES
+        return jsonify({"strategies": STRATEGIES})
+
     @app.route("/api/backtest")
     def api_backtest():
-        """Backtest the long-only intraday round-trip strategy for *symbol*.
+        """Backtest a NAV-free intraday reversion strategy for *symbol*.
 
         Query params:
           symbol   – fund symbol (required)
+          strategy – vwap | sma | prev_close (optional, default vwap)
           start    – YYYYMMDD inclusive (optional)
           end      – YYYYMMDD inclusive (optional)
           capital  – max Rials per position (optional)
-          entry    – entry discount %  (optional, default 0.30)
-          exit     – exit premium %    (optional, default 0.30)
+          entry    – entry discount % vs reference (optional, default 0.15)
+          exit     – exit premium % vs reference   (optional, default 0.15)
+          window   – moving-average window in snapshots, "sma" only (default 20)
           force_eod– "1"/"0" liquidate open positions at day end (default 1)
         """
         from backtest import run_backtest, BacktestParams
@@ -839,8 +847,10 @@ def create_app(db, scan_callback=None):
 
         params = BacktestParams(
             capital=_float("capital", 1_000_000_000),
-            entry_discount_pct=_float("entry", 0.30),
-            exit_premium_pct=_float("exit", 0.30),
+            strategy=request.args.get("strategy", "vwap") or "vwap",
+            entry_discount_pct=_float("entry", 0.15),
+            exit_premium_pct=_float("exit", 0.15),
+            ma_window=int(_float("window", 20)) or 20,
             force_eod=request.args.get("force_eod", "1") != "0",
         )
 

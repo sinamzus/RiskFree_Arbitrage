@@ -1,45 +1,62 @@
 """Intraday backtest engine for the fixed-income ETF arbitrage strategy.
 
-Strategy under test (long-only, secondary market round-trips)
--------------------------------------------------------------
-The scanner suggests a BUY when the market price trades at a *discount* to NAV
-and a SELL when it trades at a *premium*. In a long-only world you can only:
+Why this engine does *not* use NAV
+----------------------------------
+The live scanner ranks BUY/SELL signals against the published NAV. But NAV is
+only published **once per day, after the close**, and we never stored an
+intraday NAV series — for every back-filled historical day the
+``intraday_orderbook.nav`` column is ``0`` and ``daily_history.yesterday_price``
+is a single end-of-day number. Back-testing a NAV-referenced rule on history is
+therefore impossible to do honestly.
 
-  1. ENTER  — buy units on-exchange when the best ask sits below
-              NAV × (1 − entry_discount).  You *lift the ask queue*, so the
-              fill is limited by the volume actually offered (ask ladder).
-  2. EXIT   — sell those units when the best bid rises to
-              NAV × (1 + exit_premium).  You *hit the bid queue*, so the fill
-              is limited by the volume actually bid (bid ladder).
+So this engine drops NAV entirely and tests **price/order-book reversion**
+strategies that depend only on data we actually recorded tick-by-tick:
 
-Every fill is constrained by the real order-book depth recorded in
-``intraday_orderbook`` — you can never trade more than the book shows, and the
-average fill price walks down/up the ladder as size grows. This makes the
-backtest *executable and realistic* rather than assuming infinite liquidity at
-the touch.
+  * the top-5 order book (``intraday_orderbook``)          → always available
+  * cumulative price/volume (``intraday_price_history``)   → running VWAP
+  * raw tick trades (``intraday_trades``)                  → VWAP fallback
 
-Costs
------
-Round-trip on the secondary market (no creation/redemption):
+These are well suited to fixed-income ETFs, which trade in a *very* tight band:
+the price oscillates by a few basis points around its own short-term mean, so a
+mean-reversion proxy (VWAP / moving-average / prior close) is a sound fair-value
+estimate without ever needing NAV.
+
+Strategies (all NAV-free, long-only, secondary-market round-trips)
+-----------------------------------------------------------------
+``vwap``        Fair value = running session VWAP (volume-weighted avg traded
+                price so far today). BUY when the best ask falls below
+                VWAP·(1−entry), SELL when the best bid rises above VWAP·(1+exit).
+                Uses intraday_price_history (cum_value/cum_volume), falling back
+                to tick trades. Best fit for these funds.
+
+``sma``         Fair value = trailing simple moving average of the order-book
+                mid price over the last ``ma_window`` snapshots. Uses ONLY the
+                order book, so it works on every back-filled day. BUY below the
+                MA by ``entry``, SELL above it by ``exit``.
+
+``prev_close``  Fair value = the *previous* day's published close
+                (``daily_history.yesterday_price``) — a known constant for the
+                day, the closest NAV-free proxy to "yesterday's NAV". BUY when
+                ask ≤ prev_close·(1−entry), SELL when bid ≥ prev_close·(1+exit).
+
+Execution model (shared by every strategy)
+------------------------------------------
+Every fill is constrained by the *real* recorded order-book depth: you lift the
+ask ladder on entry and hit the bid ladder on exit, the average price walks the
+ladder as size grows, and size is also capped by ``capital``. You can never
+trade more than the book showed. A position still open at the last snapshot is
+liquidated against the final bid ladder (any price), flagged ``eod``.
+
+Costs (round-trip, no creation/redemption):
   buy  side: BUYER_COMMISSION
   sell side: SELLER_COMMISSION + SELLER_TAX
-
-NAV reference
--------------
-Per (symbol, day) NAV is taken from the live OB snapshot's ``nav`` column when
-present (days collected live), otherwise from ``daily_history.yesterday_price``
-(≈ published NAV for fixed-income ETFs) for that date.
-
-Force close
------------
-A position still open at the last snapshot of the day is liquidated against the
-final bid ladder (any price) — an honest worst-case exit, flagged ``eod``.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, asdict
+from collections import deque
+from dataclasses import dataclass, asdict
 
 from config import (
     BUYER_COMMISSION,
@@ -52,6 +69,13 @@ logger = logging.getLogger(__name__)
 BUY_COST  = BUYER_COMMISSION                  # paid on buy notional
 SELL_COST = SELLER_COMMISSION + SELLER_TAX    # paid on sell notional
 
+# Human-readable catalogue surfaced to the UI.
+STRATEGIES = {
+    "vwap":       "بازگشت به VWAP — مرجع: میانگین وزنی قیمت معاملات همان روز",
+    "sma":        "بازگشت به میانگین متحرک — مرجع: میانگین متحرک قیمت میانی اردربوک",
+    "prev_close": "لنگر قیمت پایانی دیروز — مرجع: قیمت پایانی روز قبل",
+}
+
 
 # --------------------------------------------------------------------------- #
 #  Parameters & results                                                        #
@@ -60,8 +84,10 @@ SELL_COST = SELLER_COMMISSION + SELLER_TAX    # paid on sell notional
 @dataclass
 class BacktestParams:
     capital: float = 1_000_000_000      # max Rials deployed per open position
-    entry_discount_pct: float = 0.30    # enter when ask ≤ NAV·(1−this/100)
-    exit_premium_pct: float = 0.30      # exit  when bid ≥ NAV·(1+this/100)
+    strategy: str = "vwap"              # vwap | sma | prev_close
+    entry_discount_pct: float = 0.15    # enter when ask ≤ ref·(1−this/100)
+    exit_premium_pct: float = 0.15      # exit  when bid ≥ ref·(1+this/100)
+    ma_window: int = 20                 # snapshots, for the "sma" strategy
     force_eod: bool = True              # liquidate any open position at day end
 
 
@@ -74,7 +100,7 @@ class Trade:
     volume: int              # units traded (round trip)
     entry_price: float       # avg fill (Rials/unit)
     exit_price: float        # avg fill (Rials/unit)
-    nav: float
+    ref_price: float         # fair-value reference at entry (NAV-free)
     buy_notional: float      # volume·entry_price
     sell_notional: float     # volume·exit_price
     fees: float              # total buy+sell commissions
@@ -97,6 +123,15 @@ def _ladder(row: dict, side: str) -> list[tuple[float, int]]:
         if p > 0 and v > 0:
             out.append((float(p), int(v)))
     return out
+
+
+def _mid(row: dict) -> float:
+    """Order-book mid price = (best_bid + best_ask) / 2, with graceful fallback."""
+    b = row.get("bid1_price", 0) or 0
+    a = row.get("ask1_price", 0) or 0
+    if b > 0 and a > 0:
+        return (a + b) / 2.0
+    return float(a or b or 0)
 
 
 def _buy_against_asks(asks, price_ceiling, capital_left):
@@ -142,22 +177,105 @@ def _secs(hhmmss: int) -> int:
 
 
 # --------------------------------------------------------------------------- #
+#  Reference-price series builders (one value per snapshot, NAV-free)           #
+# --------------------------------------------------------------------------- #
+
+def _refs_sma(snaps: list[dict], window: int) -> list[float]:
+    """Trailing simple moving average of the mid price, aligned to *snaps*.
+
+    Pure order-book — available for every back-filled day. The reference for
+    snapshot *i* is the mean of the last ``window`` valid mids up to and
+    including *i* (expanding until the window fills).
+    """
+    window = max(1, int(window))
+    dq: deque[float] = deque()
+    run = 0.0
+    refs: list[float] = []
+    for s in snaps:
+        m = _mid(s)
+        if m > 0:
+            dq.append(m)
+            run += m
+            if len(dq) > window:
+                run -= dq.popleft()
+            refs.append(run / len(dq))
+        else:
+            refs.append(refs[-1] if refs else 0.0)
+    return refs
+
+
+def _refs_vwap(db, symbol: str, date_int: int, snaps: list[dict]) -> list[float]:
+    """Running session VWAP aligned to each snapshot's time.
+
+    Source order: intraday_price_history (cum_value/cum_volume) → tick trades.
+    For each snapshot we use the most recent VWAP at-or-before its time, so the
+    reference never peeks into the future.
+    """
+    series: list[tuple[int, float]] = []
+
+    for r in db.get_intraday_price_history(symbol, date_int):
+        cv = r.get("cum_volume", 0) or 0
+        cval = r.get("cum_value", 0) or 0
+        if cv > 0 and cval > 0:
+            series.append((int(r["time"]), cval / cv))
+
+    if not series:  # fall back to reconstructing VWAP from raw ticks
+        cum_v = 0
+        cum_pv = 0.0
+        for t in db.get_intraday_trades(symbol, date_int):
+            if t.get("canceled"):
+                continue
+            v = t.get("volume", 0) or 0
+            pr = t.get("price", 0) or 0
+            if v <= 0 or pr <= 0:
+                continue
+            cum_v += v
+            cum_pv += v * pr
+            series.append((int(t["time"]), cum_pv / cum_v))
+
+    if not series:
+        return [0.0] * len(snaps)
+
+    series.sort(key=lambda x: x[0])
+    refs: list[float] = []
+    j = 0
+    last = 0.0
+    for s in snaps:
+        st = int(s.get("time", 0))
+        while j < len(series) and series[j][0] <= st:
+            last = series[j][1]
+            j += 1
+        refs.append(last)
+    return refs
+
+
+def _build_refs(db, symbol: str, date_int: int, snaps: list[dict],
+                p: BacktestParams, prev_close: float) -> list[float]:
+    """Dispatch to the chosen strategy's reference-price series."""
+    if p.strategy == "sma":
+        return _refs_sma(snaps, p.ma_window)
+    if p.strategy == "prev_close":
+        return [float(prev_close)] * len(snaps) if prev_close > 0 else [0.0] * len(snaps)
+    # default: vwap
+    return _refs_vwap(db, symbol, date_int, snaps)
+
+
+# --------------------------------------------------------------------------- #
 #  Per-day simulation                                                           #
 # --------------------------------------------------------------------------- #
 
-def _simulate_day(symbol: str, date_int: int, nav: float,
-                  snaps: list[dict], p: BacktestParams) -> list[Trade]:
-    """Run the long-only round-trip state machine over one day's OB snapshots."""
-    if nav <= 0 or not snaps:
+def _simulate_day(symbol: str, date_int: int,
+                  snaps: list[dict], refs: list[float],
+                  p: BacktestParams) -> list[Trade]:
+    """Long-only round-trip state machine against a per-snapshot reference."""
+    if not snaps:
         return []
-
-    entry_ceiling = nav * (1 - p.entry_discount_pct / 100.0)
-    exit_floor    = nav * (1 + p.exit_premium_pct / 100.0)
 
     trades: list[Trade] = []
     position = 0            # units held
     buy_notional = 0.0      # cost basis of the held units
     entry_time = 0
+    entry_ref = 0.0         # reference price captured at entry (for reporting)
 
     def _close(exit_units, sell_notional, t_exit, reason):
         nonlocal position, buy_notional
@@ -173,7 +291,7 @@ def _simulate_day(symbol: str, date_int: int, nav: float,
             volume=int(exit_units),
             entry_price=round(cost_part / exit_units, 2) if exit_units else 0,
             exit_price=round(sell_notional / exit_units, 2) if exit_units else 0,
-            nav=round(nav, 2),
+            ref_price=round(entry_ref, 2),
             buy_notional=round(cost_part, 0),
             sell_notional=round(sell_notional, 0),
             fees=round(buy_fee + sell_fee, 0),
@@ -185,7 +303,14 @@ def _simulate_day(symbol: str, date_int: int, nav: float,
         position -= exit_units
         buy_notional -= cost_part
 
-    for snap in snaps:
+    for idx, snap in enumerate(snaps):
+        ref = refs[idx] if idx < len(refs) else 0.0
+        if ref <= 0:
+            continue  # no fair-value reference yet — cannot evaluate
+
+        entry_ceiling = ref * (1 - p.entry_discount_pct / 100.0)
+        exit_floor    = ref * (1 + p.exit_premium_pct / 100.0)
+
         asks = _ladder(snap, "ask")
         bids = _ladder(snap, "bid")
         best_ask = asks[0][0] if asks else 0
@@ -193,15 +318,16 @@ def _simulate_day(symbol: str, date_int: int, nav: float,
         t = int(snap.get("time", 0))
 
         if position == 0:
-            # ── Entry: market offered below the discount threshold ──────────
+            # ── Entry: best offer sits below fair value by the entry margin ──
             if best_ask > 0 and best_ask <= entry_ceiling:
                 units, notional = _buy_against_asks(asks, entry_ceiling, p.capital)
                 if units > 0:
                     position = units
                     buy_notional = notional
                     entry_time = t
+                    entry_ref = ref
         else:
-            # ── Exit: market bidding above the premium threshold ────────────
+            # ── Exit: best bid sits above fair value by the exit margin ──────
             if best_bid > 0 and best_bid >= exit_floor:
                 units, notional = _sell_against_bids(bids, exit_floor, position)
                 if units > 0:
@@ -213,7 +339,6 @@ def _simulate_day(symbol: str, date_int: int, nav: float,
         bids = _ladder(last, "bid")
         t = int(last.get("time", 0))
         if bids:
-            # Liquidate at any price (walk the whole ladder)
             units, notional = _sell_against_bids(bids, 0, position)
             if units < position:
                 # Book too thin — value the remainder at the worst available bid
@@ -260,27 +385,33 @@ def run_backtest(db, symbol: str,
                  start_date: int | None = None,
                  end_date: int | None = None,
                  params: BacktestParams | None = None) -> dict:
-    """Backtest the long-only round-trip strategy for *symbol*.
+    """Backtest a NAV-free reversion strategy for *symbol* over recorded history.
 
     Parameters
     ----------
-    db          : Database — provides OB history + daily NAV
+    db          : Database — provides OB history, tick/VWAP data and daily close
     symbol      : fund symbol
     start_date  : YYYYMMDD (inclusive) or None for all available
     end_date    : YYYYMMDD (inclusive) or None for all available
     params      : BacktestParams (defaults applied if None)
 
-    Returns a dict: {symbol, params, days_tested, trades:[…], summary:{…}}.
+    Returns a dict:
+        {symbol, strategy, strategy_label, params, days_tested,
+         days_skipped, trades:[…], summary:{…}}.
     """
     p = params or BacktestParams()
+    if p.strategy not in STRATEGIES:
+        p.strategy = "vwap"
 
-    # NAV per day from daily history (yesterday_price ≈ NAV)
-    nav_by_date: dict[int, float] = {}
+    # Previous-day published close per date (only needed for prev_close strategy,
+    # but cheap to build and useful for reporting). yesterday_price on day D is
+    # the close of the trading day before D — exactly the NAV-free "prior close".
+    prev_close_by_date: dict[int, float] = {}
     for row in db.get_daily_history(symbol, days=400):
         d = row["date"]
-        nav = row.get("yesterday_price") or row.get("close_price") or 0
-        if nav > 0:
-            nav_by_date[d] = float(nav)
+        yc = row.get("yesterday_price") or 0
+        if yc > 0:
+            prev_close_by_date[d] = float(yc)
 
     dates = db.get_ob_dates(symbol)
     if start_date:
@@ -290,23 +421,30 @@ def run_backtest(db, symbol: str,
 
     all_trades: list[Trade] = []
     days_tested = 0
+    days_skipped = 0
     for date_int in dates:
         snaps = db.get_orderbook_history(symbol, date_int, limit=5000)
         if not snaps:
             continue
-        # Prefer the snapshot NAV (live days) else fall back to daily NAV
-        snap_nav = next((s.get("nav") for s in snaps if (s.get("nav") or 0) > 0), 0)
-        nav = float(snap_nav) if snap_nav else nav_by_date.get(date_int, 0)
-        if nav <= 0:
-            logger.debug("backtest %s %d: no NAV — skipping", symbol, date_int)
+        prev_close = prev_close_by_date.get(date_int, 0.0)
+        refs = _build_refs(db, symbol, date_int, snaps, p, prev_close)
+        if not any(r > 0 for r in refs):
+            # strategy has no usable reference for this day (e.g. vwap with no
+            # tick/price history, or prev_close missing) — skip honestly
+            days_skipped += 1
+            logger.debug("backtest %s %d: no '%s' reference — skipping",
+                         symbol, date_int, p.strategy)
             continue
         days_tested += 1
-        all_trades.extend(_simulate_day(symbol, date_int, nav, snaps, p))
+        all_trades.extend(_simulate_day(symbol, date_int, snaps, refs, p))
 
     return {
         "symbol": symbol,
+        "strategy": p.strategy,
+        "strategy_label": STRATEGIES.get(p.strategy, p.strategy),
         "params": asdict(p),
         "days_tested": days_tested,
+        "days_skipped": days_skipped,
         "trades": [asdict(t) for t in all_trades],
         "summary": _summarize(all_trades),
     }

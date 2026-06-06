@@ -927,6 +927,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
                  font-variant-numeric: tabular-nums; }
 .bt-card .bt-v.pos { color: var(--green); }
 .bt-card .bt-v.neg { color: var(--red); }
+.bt-strat { grid-column: 1 / -1; font-size: var(--fs-xs); color: var(--sub);
+            padding: 6px 10px; background: var(--surf2);
+            border: 1px solid var(--brd); border-radius: 8px; }
+.bt-strat b { color: var(--txt); }
 
 /* trades table */
 #bt-trades { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
@@ -964,7 +968,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <div id="bt-modal">
     <div id="bt-head">
       <span class="bt-title">🧪 بک‌تست استراتژی</span>
-      <span class="bt-sub">لانگ-اونلی · خرید در تخفیف، فروش در صرف · اجرای واقعی روی اردربوک تاریخی</span>
+      <span class="bt-sub">لانگ-اونلی · بازگشت به میانگین (بدون NAV) · اجرای واقعی روی اردربوک تاریخی</span>
       <button id="bt-close" onclick="closeBacktest()" title="بستن">×</button>
     </div>
     <div id="bt-body">
@@ -972,6 +976,14 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <div class="bt-field">
           <label>صندوق</label>
           <select id="bt-symbol"></select>
+        </div>
+        <div class="bt-field">
+          <label>استراتژی</label>
+          <select id="bt-strategy" onchange="onStrategyChange()">
+            <option value="vwap">بازگشت به VWAP</option>
+            <option value="sma">بازگشت به میانگین متحرک</option>
+            <option value="prev_close">لنگر پایانی دیروز</option>
+          </select>
         </div>
         <div class="bt-field">
           <label>از تاریخ (YYYYMMDD)</label>
@@ -986,12 +998,16 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <input id="bt-capital" type="number" value="1000000000">
         </div>
         <div class="bt-field">
-          <label>آستانه تخفیف ورود ٪</label>
-          <input id="bt-entry" type="number" step="0.05" value="0.30">
+          <label>آستانه ورود (زیر مرجع) ٪</label>
+          <input id="bt-entry" type="number" step="0.05" value="0.15">
         </div>
         <div class="bt-field">
-          <label>آستانه صرف خروج ٪</label>
-          <input id="bt-exit" type="number" step="0.05" value="0.30">
+          <label>آستانه خروج (بالای مرجع) ٪</label>
+          <input id="bt-exit" type="number" step="0.05" value="0.15">
+        </div>
+        <div class="bt-field" id="bt-window-field">
+          <label>پنجره میانگین (کندل)</label>
+          <input id="bt-window" type="number" step="1" value="20">
         </div>
         <div class="bt-field chk">
           <input id="bt-eod" type="checkbox" checked>
@@ -999,11 +1015,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         </div>
         <button id="bt-run" onclick="runBacktest()">اجرا ▸</button>
       </div>
-      <div class="bt-hint">
-        موتور هر کندل اردربوک روز را مرور می‌کند: وقتی بهترین فروشنده زیر
-        NAV×(۱−تخفیف) باشد به‌اندازه‌ی حجم واقعی صف فروش (و سقف سرمایه) می‌خرد،
-        و وقتی بهترین خریدار بالای NAV×(۱+صرف) برود به‌اندازه‌ی حجم واقعی صف خرید
-        می‌فروشد. کارمزد خرید و فروش لحاظ می‌شود.
+      <div class="bt-hint" id="bt-hint">
+        موتور هر کندل اردربوک روز را مرور می‌کند و قیمت را با یک «مرجع ارزش منصفانه»
+        مقایسه می‌کند که <b>به NAV نیاز ندارد</b> (چون NAV درون‌روزِ تاریخی نداریم).
+        وقتی بهترین فروشنده زیر مرجع×(۱−ورود) باشد به‌اندازه‌ی حجم واقعی صف فروش و سقف
+        سرمایه می‌خرد، و وقتی بهترین خریدار بالای مرجع×(۱+خروج) برود به‌اندازه‌ی حجم
+        واقعی صف خرید می‌فروشد. کارمزد خرید و فروش لحاظ می‌شود.
       </div>
       <div id="bt-summary"></div>
       <div id="bt-result"></div>
@@ -3068,6 +3085,7 @@ function openBacktest() {
   // Default to the currently-selected symbol if any
   const cur = [...selected][0];
   if (cur && syms.includes(cur)) sel.value = cur;
+  onStrategyChange();
   document.getElementById('bt-overlay').classList.add('visible');
 }
 
@@ -3075,21 +3093,32 @@ function closeBacktest() {
   document.getElementById('bt-overlay').classList.remove('visible');
 }
 
+// The moving-average window only matters for the "sma" strategy
+function onStrategyChange() {
+  const strat = document.getElementById('bt-strategy').value;
+  document.getElementById('bt-window-field').style.display =
+    (strat === 'sma') ? '' : 'none';
+}
+
 async function runBacktest() {
   const sym = document.getElementById('bt-symbol').value;
   if (!sym) { showError('صندوقی انتخاب نشده'); return; }
 
   const q = new URLSearchParams({ symbol: sym });
+  const strat   = document.getElementById('bt-strategy').value;
   const start   = document.getElementById('bt-start').value.trim();
   const end     = document.getElementById('bt-end').value.trim();
   const capital = document.getElementById('bt-capital').value.trim();
   const entry   = document.getElementById('bt-entry').value.trim();
   const exit    = document.getElementById('bt-exit').value.trim();
+  const window_ = document.getElementById('bt-window').value.trim();
+  if (strat)   q.set('strategy', strat);
   if (start)   q.set('start', start);
   if (end)     q.set('end', end);
   if (capital) q.set('capital', capital);
   if (entry)   q.set('entry', entry);
   if (exit)    q.set('exit', exit);
+  if (window_) q.set('window', window_);
   q.set('force_eod', document.getElementById('bt-eod').checked ? '1' : '0');
 
   const btn = document.getElementById('bt-run');
@@ -3142,9 +3171,14 @@ function renderBacktest(res) {
     ['بسته‌شده در پایان روز', (s.eod_count||0).toLocaleString('fa-IR'), ''],
     ['روزهای آزمون', (res.days_tested||0).toLocaleString('fa-IR'), ''],
   ];
-  document.getElementById('bt-summary').innerHTML = cards.map(([k,v,c]) =>
-    `<div class="bt-card"><div class="bt-k">${k}</div><div class="bt-v ${c}">${v}</div></div>`
-  ).join('');
+  if (res.days_skipped)
+    cards.push(['روزهای بدون مرجع', (res.days_skipped||0).toLocaleString('fa-IR'), 'neg']);
+  document.getElementById('bt-summary').innerHTML =
+    (res.strategy_label
+      ? `<div class="bt-strat">استراتژی: <b>${res.strategy_label}</b></div>` : '') +
+    cards.map(([k,v,c]) =>
+      `<div class="bt-card"><div class="bt-k">${k}</div><div class="bt-v ${c}">${v}</div></div>`
+    ).join('');
 
   // ── Trades table ──────────────────────────────────────────────────
   const trades = res.trades || [];
@@ -3163,7 +3197,7 @@ function renderBacktest(res) {
       <td>${_btTime(t.exit_time)}</td>
       <td>${fmtN(t.exit_price)}</td>
       <td>${(t.volume||0).toLocaleString('fa-IR')}</td>
-      <td>${fmtN(t.nav)}</td>
+      <td>${fmtN(t.ref_price)}</td>
       <td class="${sgn(t.net_pnl)}">${fmtN(t.net_pnl)}</td>
       <td class="${sgn(t.net_pct)}">${pct(t.net_pct)}</td>
       <td><span class="bt-tag ${t.exit_reason}">${t.exit_reason === 'eod' ? 'پایان روز' : 'سیگنال'}</span></td>
@@ -3173,7 +3207,7 @@ function renderBacktest(res) {
     <table id="bt-trades">
       <thead><tr>
         <th>تاریخ</th><th>ساعت خرید</th><th>قیمت خرید</th>
-        <th>ساعت فروش</th><th>قیمت فروش</th><th>حجم</th><th>NAV</th>
+        <th>ساعت فروش</th><th>قیمت فروش</th><th>حجم</th><th>مرجع</th>
         <th>سود/زیان (ریال)</th><th>بازده٪</th><th>نوع خروج</th>
       </tr></thead>
       <tbody>${rows}</tbody>
