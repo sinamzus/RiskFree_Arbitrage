@@ -114,9 +114,59 @@ def _days_since(date_int: int) -> int:
     return max(1, (datetime.now() - dt).days)
 
 
+def _backfill_ob_history(fetcher, db: Database, symbol: str, ins_code: str,
+                         recent_dates: list[int], today_int: int,
+                         delay: float = 0.3) -> int:
+    """Backfill historical order-book snapshots for *symbol* over *recent_dates*.
+
+    Today is skipped — run_scan collects today's OB live. Past days are skipped
+    if they already have snapshots in the DB. Returns the number of newly
+    inserted snapshots.
+
+    Uses fetcher.get_best_limits_history(), which reconstructs per-minute OB
+    snapshots from the TSETMC BestLimits history (delta) endpoint.
+    """
+    logger = logging.getLogger(__name__)
+    have_dates = set(db.get_ob_dates(symbol))
+    inserted_total = 0
+
+    for date_int in recent_dates:
+        # Today's OB is collected live by run_scan; don't backfill it here.
+        if date_int >= today_int:
+            continue
+        # Skip days we already have OB snapshots for.
+        if date_int in have_dates:
+            logger.debug("  OB %s: already have snapshots for %d", symbol, date_int)
+            continue
+
+        snapshots = fetcher.get_best_limits_history(ins_code, date_int)
+        if not snapshots:
+            logger.debug("  No OB history for %s on %d", symbol, date_int)
+            time.sleep(delay * 0.5)
+            continue
+
+        inserted = 0
+        for snap in snapshots:
+            ok = db.save_orderbook_snapshot(
+                symbol, ins_code, date_int, snap.get("time", 0),
+                {"bids": snap.get("bids", []), "asks": snap.get("asks", [])},
+                nav=0.0,
+            )
+            if ok:
+                inserted += 1
+
+        inserted_total += inserted
+        logger.info("  OB %s on %d: fetched=%d new=%d",
+                    symbol, date_int, len(snapshots), inserted)
+        time.sleep(delay)
+
+    return inserted_total
+
+
 def update_history(aggregator: DataAggregator, db: Database,
                    force_full: bool = False,
                    fetch_intraday: bool = True,
+                   fetch_ob: bool = True,
                    intraday_days: int = 7,
                    delay: float = 0.3) -> None:
     """Bootstrap or incrementally update daily OHLCV + intraday trade history.
@@ -133,12 +183,19 @@ def update_history(aggregator: DataAggregator, db: Database,
     - Only new ticks (dates not yet in DB) are inserted.
     - Set *fetch_intraday=False* to skip tick data (faster on slow connections).
 
+    **Order-book history (BestLimits history)**
+    - Reconstructs per-minute OB snapshots for the last *intraday_days* trading
+      days (excluding today, which run_scan collects live).
+    - Past days with existing snapshots are skipped.
+    - Set *fetch_ob=False* to skip OB backfill.
+
     Parameters
     ----------
     aggregator   : DataAggregator — provides tsetmc fetcher
     db           : Database       — where to persist the data
     force_full   : bool           — force full 365-day re-download
     fetch_intraday: bool          — also download intraday ticks
+    fetch_ob     : bool           — also backfill historical order-book snapshots
     intraday_days: int            — how many recent dates to fetch intraday for
     delay        : float          — seconds to sleep between API calls
     """
@@ -155,10 +212,12 @@ def update_history(aggregator: DataAggregator, db: Database,
             d -= timedelta(days=1)
         return dates
 
-    recent_dates = _recent_trading_dates(intraday_days) if fetch_intraday else []
+    recent_dates = (_recent_trading_dates(intraday_days)
+                    if (fetch_intraday or fetch_ob) else [])
 
-    total_daily_new   = 0
+    total_daily_new    = 0
     total_intraday_new = 0
+    total_ob_new       = 0
 
     for i, fund in enumerate(FIXED_INCOME_ETFS):
         symbol   = fund["symbol"]
@@ -195,53 +254,63 @@ def update_history(aggregator: DataAggregator, db: Database,
         time.sleep(delay)
 
         # ── 2. Intraday ticks ────────────────────────────────────────────
-        if not fetch_intraday:
-            continue
+        if fetch_intraday:
 
-        # Build a map of date → tick count already in DB
-        # Today is ALWAYS re-fetched (new ticks arrive every minute during session)
-        # Past days are skipped only when they already have a meaningful number of ticks
-        MIN_TICKS_COMPLETE = 10   # a day with < this is considered incomplete
-        intraday_have_map: dict[int, int] = {}
-        for d in db.get_intraday_dates(symbol):
-            rows = db.get_intraday_trades(symbol, d)
-            intraday_have_map[d] = len(rows)
+            # Build a map of date → tick count already in DB
+            # Today is ALWAYS re-fetched (new ticks arrive every minute during session)
+            # Past days are skipped only when they already have a meaningful number of ticks
+            MIN_TICKS_COMPLETE = 10   # a day with < this is considered incomplete
+            intraday_have_map: dict[int, int] = {}
+            for d in db.get_intraday_dates(symbol):
+                rows = db.get_intraday_trades(symbol, d)
+                intraday_have_map[d] = len(rows)
 
-        for date_int in recent_dates:
-            if date_int > today_int:
-                continue
+            for date_int in recent_dates:
+                if date_int > today_int:
+                    continue
 
-            existing = intraday_have_map.get(date_int, 0)
-            is_today = (date_int == today_int)
+                existing = intraday_have_map.get(date_int, 0)
+                is_today = (date_int == today_int)
 
-            # Skip past days that already have a full set of ticks
-            if not is_today and existing >= MIN_TICKS_COMPLETE:
-                logger.debug("  Intraday %s: already have %d ticks for %d",
-                             symbol, existing, date_int)
-                continue
+                # Skip past days that already have a full set of ticks
+                if not is_today and existing >= MIN_TICKS_COMPLETE:
+                    logger.debug("  Intraday %s: already have %d ticks for %d",
+                                 symbol, existing, date_int)
+                    continue
 
-            logger.info("  Fetching intraday ticks for %s on %d (have=%d) ...",
-                        symbol, date_int, existing)
-            trades = fetcher.get_intraday_trades(ins_code, date_int)
-            if trades:
-                new_rows = db.save_intraday_trades(
-                    symbol, ins_code, date_int, trades
-                )
-                total_intraday_new += new_rows
-                logger.info("  %d new tick rows for %s on %d (total in DB: %d)",
-                            new_rows, symbol, date_int, existing + new_rows)
-            else:
-                logger.debug("  No intraday data for %s on %d", symbol, date_int)
+                logger.info("  Fetching intraday ticks for %s on %d (have=%d) ...",
+                            symbol, date_int, existing)
+                trades = fetcher.get_intraday_trades(ins_code, date_int)
+                if trades:
+                    new_rows = db.save_intraday_trades(
+                        symbol, ins_code, date_int, trades
+                    )
+                    total_intraday_new += new_rows
+                    logger.info("  %d new tick rows for %s on %d (total in DB: %d)",
+                                new_rows, symbol, date_int, existing + new_rows)
+                else:
+                    logger.debug("  No intraday data for %s on %d", symbol, date_int)
 
-            time.sleep(delay)
+                time.sleep(delay)
+
+        # ── 3. Order-book history ─────────────────────────────────────────
+        # Past days' order book is NOT available live — it must be reconstructed
+        # from the BestLimits history endpoint. Without this, the OB ladder only
+        # shows data for today (collected live by run_scan).
+        if fetch_ob:
+            total_ob_new += _backfill_ob_history(
+                fetcher, db, symbol, ins_code, recent_dates, today_int, delay,
+            )
 
     logger.info(
-        "update_history complete: %d new daily rows, %d new tick rows",
-        total_daily_new, total_intraday_new,
+        "update_history complete: %d new daily rows, %d new tick rows, "
+        "%d new OB snapshots",
+        total_daily_new, total_intraday_new, total_ob_new,
     )
     print(f"\n✅ تاریخچه به‌روز شد — "
           f"{total_daily_new} سطر روزانه جدید، "
-          f"{total_intraday_new} سطر درون‌روزی جدید")
+          f"{total_intraday_new} سطر درون‌روزی جدید، "
+          f"{total_ob_new} اسنپ‌شات اردربوک جدید")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -542,6 +611,10 @@ def main():
         help="در bootstrap/update تیک‌های درون‌روزی دانلود نشوند",
     )
     parser.add_argument(
+        "--no-ob", action="store_true",
+        help="در bootstrap/update تاریخچه اردربوک دانلود نشود",
+    )
+    parser.add_argument(
         "--intraday-days", type=int, default=7,
         help="تعداد روزهای اخیر برای دریافت داده تیک‌به‌تیک (پیش‌فرض: 7)",
     )
@@ -590,6 +663,7 @@ def main():
         return
 
     fetch_intraday = not args.no_intraday
+    fetch_ob       = not args.no_ob
 
     # ── --bootstrap: forced full re-download (CLI only, exits after) ───────
     if args.bootstrap:
@@ -598,6 +672,7 @@ def main():
             aggregator, db,
             force_full=True,
             fetch_intraday=fetch_intraday,
+            fetch_ob=fetch_ob,
             intraday_days=args.intraday_days,
             delay=args.delay,
         )
@@ -607,7 +682,7 @@ def main():
     if args.discover:
         # Still need a quick incremental update before discovery
         update_history(aggregator, db, force_full=False,
-                       fetch_intraday=False, delay=args.delay)
+                       fetch_intraday=False, fetch_ob=False, delay=args.delay)
         new_funds = aggregator.discover_new_funds()
         if new_funds:
             print(f"\n{len(new_funds)} صندوق جدید یافت شد:")
@@ -661,6 +736,7 @@ def main():
                 aggregator, db,
                 force_full=False,
                 fetch_intraday=fetch_intraday,
+                fetch_ob=fetch_ob,
                 intraday_days=args.intraday_days,
                 delay=args.delay * 0.5,
             )
