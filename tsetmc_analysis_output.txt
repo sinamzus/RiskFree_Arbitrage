@@ -2,7 +2,7 @@
   آنالیز TSETMC — جستجوی منبع جدول «ریز قیمت» درون‌روز
   insCode = 3846143218462419
   تاریخ امروز (YYYYMMDD) = 20260606
-  زمان اجرا = 2026-06-06 10:48:27
+  زمان اجرا = 2026-06-06 10:48:50
 ╚════════════════════════════════════════════════════════════════════╝
 
 ══════════════════════════════════════════════════════════════════════
@@ -10,8 +10,8 @@
   URL: https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceInfo/3846143218462419
   وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 626
     نوع: dict | کلیدها: ['closingPriceInfo']
-    dict 'closingPriceInfo': {"instrumentState": {"idn": 0, "dEven": 0, "hEven": 0, "insCode": null, "lVal18AFC": null, "lVal30": null, "cEtaval": "A ", "realHeven": 0, "underSupervision": 0, "cEtavalTitle": "مجاز"}, "instrument": null, "lastHEven": 104818, "finalLastDate": 20260606, "nvt": 0.0, "mop": 0, "pRedTran": 0.0, "thir
-    ⏱ تعداد رکورد زمان‌دار: 2 | اولین: 00:00:00 | آخرین: 10:48:18
+    dict 'closingPriceInfo': {"instrumentState": {"idn": 0, "dEven": 0, "hEven": 0, "insCode": null, "lVal18AFC": null, "lVal30": null, "cEtaval": "A ", "realHeven": 0, "underSupervision": 0, "cEtavalTitle": "مجاز"}, "instrument": null, "lastHEven": 104841, "finalLastDate": 20260606, "nvt": 0.0, "mop": 0, "pRedTran": 0.0, "thir
+    ⏱ تعداد رکورد زمان‌دار: 2 | اولین: 00:00:00 | آخرین: 10:48:41
 
 ══════════════════════════════════════════════════════════════════════
 ► ClosingPriceHistory/{today}
@@ -29,30 +29,28 @@
 ══════════════════════════════════════════════════════════════════════
 ► ClosingPriceDaily/{today}
   URL: https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDaily/3846143218462419/20260606
-  وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 351
-    نوع: dict | کلیدها: ['closingPriceDaily']
-    dict 'closingPriceDaily': {"priceChange": 67.0, "priceMin": 48928.0, "priceMax": 48930.0, "priceYesterday": 48861.0, "priceFirst": 48928.0, "last": false, "id": 0, "insCode": "3846143218462419", "dEven": 20260606, "hEven": 104821, "pClosing": 48928.0, "iClose": false, "yClose": true, "pDrCotVal": 48928.0, "zTotTran": 4520.0,
-    ⏱ تعداد رکورد زمان‌دار: 1 | اولین: 10:48:21 | آخرین: 10:48:21
+  وضعیت: 502 | نوع محتوا: text/html | طول: 559
+  بدنه: <html> <head><title>502 Bad Gateway</title></head> <body> <center><h1>502 Bad Gateway</h1></center> <hr><center>nginx/1.27.0</center> </body> </html> <!-- a padding to disable MSIE and Chrome f
 
 ══════════════════════════════════════════════════════════════════════
 ► Trade/GetTrade (تیک‌های امروز)
   URL: https://cdn.tsetmc.com/api/Trade/GetTrade/3846143218462419
-  وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 899080
+  وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 903681
     نوع: dict | کلیدها: ['trade']
-    لیست 'trade': 4518 ردیف
+    لیست 'trade': 4541 ردیف
       ردیف اول: {"insCode": null, "dEven": 0, "nTran": 1, "hEven": 83000, "qTitTran": 770000, "pTran": 48928.0, "qTitNgJ": 0, "iSensVarP": "\u0000", "pPhSeaCotJ": 0.0, "pPbSeaCotJ": 0.0, "iAnuTran": 0, "xqVarPJDrPRf": 0.0, "canceled": 0}
-      ردیف آخر: {"insCode": null, "dEven": 0, "nTran": 4518, "hEven": 104806, "qTitTran": 500, "pTran": 48928.0, "qTitNgJ": 0, "iSensVarP": "\u0000", "pPhSeaCotJ": 0.0, "pPbSeaCotJ": 0.0, "iAnuTran": 0, "xqVarPJDrPRf": 0.0, "canceled": 0}
-    ⏱ تعداد رکورد زمان‌دار: 4518 | اولین: 08:30:00 | آخرین: 10:48:06
+      ردیف آخر: {"insCode": null, "dEven": 0, "nTran": 4541, "hEven": 104852, "qTitTran": 20430, "pTran": 48928.0, "qTitNgJ": 0, "iSensVarP": "\u0000", "pPhSeaCotJ": 0.0, "pPbSeaCotJ": 0.0, "iAnuTran": 0, "xqVarPJDrPRf": 0.0, "canceled": 0}
+    ⏱ تعداد رکورد زمان‌دار: 4541 | اولین: 08:30:00 | آخرین: 10:48:52
 
 ══════════════════════════════════════════════════════════════════════
 ► Trade/GetTradeIntraday
   URL: https://cdn.tsetmc.com/api/Trade/GetTradeIntraday/3846143218462419
-  وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 5832
+  وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 6288
     نوع: dict | کلیدها: ['tradeIntraDay']
-    لیست 'tradeIntraDay': 51 ردیف
+    لیست 'tradeIntraDay': 55 ردیف
       ردیف اول: {"hEven": 83000, "minPrice": 48928.0, "maxPrice": 48929.0, "openPrice": 48928.0, "closePrice": 48928.0, "volume": 26874680.0}
-      ردیف آخر: {"hEven": 103915, "minPrice": 48928.0, "maxPrice": 48929.0, "openPrice": 48928.0, "closePrice": 48928.0, "volume": 132133.0}
-    ⏱ تعداد رکورد زمان‌دار: 51 | اولین: 08:30:00 | آخرین: 10:39:15
+      ردیف آخر: {"hEven": 104707, "minPrice": 48928.0, "maxPrice": 48929.0, "openPrice": 48928.0, "closePrice": 48928.0, "volume": 560547.0}
+    ⏱ تعداد رکورد زمان‌دار: 55 | اولین: 08:30:00 | آخرین: 10:47:07
 
 ══════════════════════════════════════════════════════════════════════
 ► Trade/GetTradeHistory/{today}/false
@@ -74,7 +72,7 @@
   وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 742
     نوع: dict | کلیدها: ['bestLimits']
     لیست 'bestLimits': 5 ردیف
-      ردیف اول: {"number": 1, "qTitMeDem": 298376712, "zOrdMeDem": 32, "pMeDem": 48928.0, "pMeOf": 48929.0, "zOrdMeOf": 16, "qTitMeOf": 16185616, "title": null, "insCode": null}
+      ردیف اول: {"number": 1, "qTitMeDem": 298414670, "zOrdMeDem": 26, "pMeDem": 48928.0, "pMeOf": 48929.0, "zOrdMeOf": 17, "qTitMeOf": 16134550, "title": null, "insCode": null}
       ردیف آخر: {"number": 5, "qTitMeDem": 1000000, "zOrdMeDem": 1, "pMeDem": 48924.0, "pMeOf": 48933.0, "zOrdMeOf": 5, "qTitMeOf": 1017953, "title": null, "insCode": null}
 
 ══════════════════════════════════════════════════════════════════════
