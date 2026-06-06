@@ -2440,7 +2440,8 @@ function renderStats(sym) {
   // also pull intraday data from latest fund snapshot
   const fd = latestFunds.find(f => f.symbol === sym);
 
-  document.getElementById('stats-title').textContent = 'آمار — ' + sym;
+  const _titleEl = document.getElementById('stats-title');
+  if (_titleEl) _titleEl.textContent = 'آمار — ' + sym;
 
   let html = '';
 
