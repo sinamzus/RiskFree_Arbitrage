@@ -578,6 +578,130 @@ class TSETMCFetcher:
         return result
 
     # ------------------------------------------------------------------ #
+    #  Intraday price snapshots (historical, ≈ per-minute aggregates)      #
+    # ------------------------------------------------------------------ #
+
+    def get_intraday_price_history(self, ins_code: str, date_int: int) -> list[dict]:
+        """Fetch intraday price/volume snapshots for *date_int* (YYYYMMDD).
+
+        Endpoint: ``ClosingPrice/GetClosingPriceHistory/{insCode}/{YYYYMMDD}``
+
+        Returns ~3000-6000 rows per trading day — one snapshot every few seconds
+        capturing cumulative state at that instant.  Fields per row:
+            time (HHMMSS int), last_price, close_price, trade_count,
+            cum_volume, cum_value
+
+        Sorted ascending by time.  Returns [] if no data.
+        """
+        url  = f"{TSETMC_CDN}/ClosingPrice/GetClosingPriceHistory/{ins_code}/{date_int}"
+        data = self._get(url, silent=True)
+        if not data:
+            return []
+        rows = data.get("closingPriceHistory") or []
+        out = []
+        for r in rows:
+            t = r.get("hEven", 0)
+            if not t:
+                continue
+            out.append({
+                "time":        t,
+                "last_price":  r.get("pDrCotVal", 0),
+                "close_price": r.get("pClosing",  0),
+                "trade_count": int(r.get("zTotTran",   0) or 0),
+                "cum_volume":  int(r.get("qTotTran5J", 0) or 0),
+                "cum_value":   r.get("qTotCap", 0),
+            })
+        out.sort(key=lambda x: x["time"])
+        logger.debug("get_intraday_price_history: %d snapshots for %s on %s",
+                     len(out), ins_code, date_int)
+        return out
+
+    def get_today_intraday_bars(self, ins_code: str) -> list[dict]:
+        """Fetch today's per-minute OHLCV bars (only available for TODAY).
+
+        Endpoint: ``Trade/GetTradeIntraday/{insCode}``  (no date param)
+
+        Returns list of {time, open, high, low, close, volume} sorted by time.
+        """
+        url  = f"{TSETMC_CDN}/Trade/GetTradeIntraday/{ins_code}"
+        data = self._get(url, silent=True)
+        if not data:
+            return []
+        rows = data.get("tradeIntraDay") or []
+        bars = [{
+            "time":   r.get("hEven", 0),
+            "open":   r.get("openPrice",  0),
+            "high":   r.get("maxPrice",   0),
+            "low":    r.get("minPrice",   0),
+            "close":  r.get("closePrice", 0),
+            "volume": int(r.get("volume", 0) or 0),
+        } for r in rows if r.get("hEven")]
+        bars.sort(key=lambda x: x["time"])
+        return bars
+
+    def get_today_trades(self, ins_code: str) -> list[dict]:
+        """Fetch today's tick-by-tick trades (live, accumulating since open).
+
+        Endpoint: ``Trade/GetTrade/{insCode}``
+
+        Returns list of {seq, time, price, volume, canceled} sorted by seq.
+        """
+        url  = f"{TSETMC_CDN}/Trade/GetTrade/{ins_code}"
+        data = self._get(url, silent=True)
+        if not data:
+            return []
+        trades = data.get("trade") or []
+        out = [{
+            "seq":      t.get("nTran",    0),
+            "time":     t.get("hEven",    0),
+            "price":    t.get("pTran",    0),
+            "volume":   int(t.get("qTitTran", 0) or 0),
+            "canceled": 1 if t.get("canceled") else 0,
+        } for t in trades]
+        out.sort(key=lambda x: x["seq"])
+        return out
+
+    # ------------------------------------------------------------------ #
+    #  Client type (Individual vs Legal) breakdown                         #
+    # ------------------------------------------------------------------ #
+
+    def get_client_type(self, ins_code: str, date_int: int) -> Optional[dict]:
+        """Fetch buy/sell volume split between individuals (حقیقی) and
+        legal entities (حقوقی) for *date_int*.
+
+        Endpoint: ``ClientType/GetClientTypeHistory/{insCode}/{YYYYMMDD}``
+
+        Returns dict with keys:
+            date, buy_i_vol, buy_n_vol, buy_i_val, buy_n_val,
+            buy_i_cnt, buy_n_cnt, sell_i_vol, sell_n_vol,
+            sell_i_val, sell_n_val, sell_i_cnt, sell_n_cnt
+        I = حقیقی (individual), N = حقوقی (legal entity).
+        Returns None for non-trading days (API returns HTTP 500).
+        """
+        url  = f"{TSETMC_CDN}/ClientType/GetClientTypeHistory/{ins_code}/{date_int}"
+        data = self._get(url, silent=True)
+        if not data:
+            return None
+        ct = data.get("clientType") if isinstance(data, dict) else None
+        if not isinstance(ct, dict):
+            return None
+        return {
+            "date":       ct.get("recDate", date_int),
+            "buy_i_vol":  int(ct.get("buy_I_Volume",  0) or 0),
+            "buy_n_vol":  int(ct.get("buy_N_Volume",  0) or 0),
+            "buy_i_val":  ct.get("buy_I_Value",   0) or 0,
+            "buy_n_val":  ct.get("buy_N_Value",   0) or 0,
+            "buy_i_cnt":  int(ct.get("buy_I_Count",  0) or 0),
+            "buy_n_cnt":  int(ct.get("buy_N_Count",  0) or 0),
+            "sell_i_vol": int(ct.get("sell_I_Volume", 0) or 0),
+            "sell_n_vol": int(ct.get("sell_N_Volume", 0) or 0),
+            "sell_i_val": ct.get("sell_I_Value",  0) or 0,
+            "sell_n_val": ct.get("sell_N_Value",  0) or 0,
+            "sell_i_cnt": int(ct.get("sell_I_Count", 0) or 0),
+            "sell_n_cnt": int(ct.get("sell_N_Count", 0) or 0),
+        }
+
+    # ------------------------------------------------------------------ #
     #  Order book                                                          #
     # ------------------------------------------------------------------ #
 

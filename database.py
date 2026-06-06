@@ -161,6 +161,43 @@ CREATE INDEX IF NOT EXISTS ix_symbol_date
 CREATE INDEX IF NOT EXISTS ix_date
     ON snapshots(date);
 
+-- ── Intraday price snapshots (cumulative per-instant from TSETMC) ────────
+-- One row per (symbol, date, time).  Fetched from
+-- ``ClosingPrice/GetClosingPriceHistory/{insCode}/{date}`` which returns
+-- ~3000-6000 rows per trading day (one snapshot every few seconds).
+-- Use for historical intraday price/volume charts at sub-minute resolution.
+CREATE TABLE IF NOT EXISTS intraday_price_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol      TEXT    NOT NULL,
+    ins_code    TEXT    NOT NULL,
+    date        INTEGER NOT NULL,   -- YYYYMMDD
+    time        INTEGER NOT NULL,   -- HHMMSS
+    last_price  REAL    DEFAULT 0,  -- pDrCotVal (last traded)
+    close_price REAL    DEFAULT 0,  -- pClosing
+    trade_count INTEGER DEFAULT 0,  -- zTotTran (cumulative since open)
+    cum_volume  INTEGER DEFAULT 0,  -- qTotTran5J (cumulative)
+    cum_value   REAL    DEFAULT 0,  -- qTotCap (cumulative)
+    UNIQUE (symbol, date, time)
+);
+CREATE INDEX IF NOT EXISTS ix_iph_sym_date ON intraday_price_history(symbol, date);
+
+-- ── Client type daily aggregate (حقیقی / حقوقی per day) ────────────────────
+-- One row per (symbol, date).  From ClientType/GetClientTypeHistory.
+-- I = Individual (حقیقی), N = Legal entity (حقوقی).
+CREATE TABLE IF NOT EXISTS client_type_daily (
+    symbol     TEXT    NOT NULL,
+    ins_code   TEXT    NOT NULL,
+    date       INTEGER NOT NULL,   -- YYYYMMDD
+    buy_i_vol  INTEGER DEFAULT 0,  buy_n_vol  INTEGER DEFAULT 0,
+    buy_i_val  REAL    DEFAULT 0,  buy_n_val  REAL    DEFAULT 0,
+    buy_i_cnt  INTEGER DEFAULT 0,  buy_n_cnt  INTEGER DEFAULT 0,
+    sell_i_vol INTEGER DEFAULT 0,  sell_n_vol INTEGER DEFAULT 0,
+    sell_i_val REAL    DEFAULT 0,  sell_n_val REAL    DEFAULT 0,
+    sell_i_cnt INTEGER DEFAULT 0,  sell_n_cnt INTEGER DEFAULT 0,
+    PRIMARY KEY (symbol, date)
+);
+CREATE INDEX IF NOT EXISTS ix_ctd_date ON client_type_daily(date);
+
 -- NAV cache: reuse today's NAV without re-hitting FIPIRAN/Rahavard
 CREATE TABLE IF NOT EXISTS nav_cache (
     symbol               TEXT NOT NULL,
@@ -243,6 +280,43 @@ CREATE INDEX IF NOT EXISTS ix_ob_symbol_date ON intraday_orderbook(symbol, date)
                         "ALTER TABLE intraday_orderbook ADD COLUMN nav REAL DEFAULT 0"
                     )
                     logger.debug("Migrated intraday_orderbook: added column nav")
+
+            # ── ensure new intraday tables exist (added 2026-06) ─────────────
+            if "intraday_price_history" not in tables:
+                logger.warning("intraday_price_history missing — creating explicitly")
+                conn.executescript("""
+CREATE TABLE IF NOT EXISTS intraday_price_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol      TEXT    NOT NULL,
+    ins_code    TEXT    NOT NULL,
+    date        INTEGER NOT NULL,
+    time        INTEGER NOT NULL,
+    last_price  REAL    DEFAULT 0,
+    close_price REAL    DEFAULT 0,
+    trade_count INTEGER DEFAULT 0,
+    cum_volume  INTEGER DEFAULT 0,
+    cum_value   REAL    DEFAULT 0,
+    UNIQUE (symbol, date, time)
+);
+CREATE INDEX IF NOT EXISTS ix_iph_sym_date ON intraday_price_history(symbol, date);
+""")
+            if "client_type_daily" not in tables:
+                logger.warning("client_type_daily missing — creating explicitly")
+                conn.executescript("""
+CREATE TABLE IF NOT EXISTS client_type_daily (
+    symbol     TEXT    NOT NULL,
+    ins_code   TEXT    NOT NULL,
+    date       INTEGER NOT NULL,
+    buy_i_vol  INTEGER DEFAULT 0,  buy_n_vol  INTEGER DEFAULT 0,
+    buy_i_val  REAL    DEFAULT 0,  buy_n_val  REAL    DEFAULT 0,
+    buy_i_cnt  INTEGER DEFAULT 0,  buy_n_cnt  INTEGER DEFAULT 0,
+    sell_i_vol INTEGER DEFAULT 0,  sell_n_vol INTEGER DEFAULT 0,
+    sell_i_val REAL    DEFAULT 0,  sell_n_val REAL    DEFAULT 0,
+    sell_i_cnt INTEGER DEFAULT 0,  sell_n_cnt INTEGER DEFAULT 0,
+    PRIMARY KEY (symbol, date)
+);
+CREATE INDEX IF NOT EXISTS ix_ctd_date ON client_type_daily(date);
+""")
             # ── migrate existing DBs: add columns if absent ───────────────────
             existing_snap = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
             for col, defn in [
@@ -588,6 +662,96 @@ CREATE INDEX IF NOT EXISTS ix_ob_symbol_date ON intraday_orderbook(symbol, date)
                    WHERE symbol=? AND date=?
                    ORDER BY seq ASC""",
                 (symbol, date_int),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ #
+    #  Intraday price snapshots (per-second cumulative state)              #
+    # ------------------------------------------------------------------ #
+
+    def save_intraday_price_history(self, symbol: str, ins_code: str,
+                                    date_int: int, snapshots: list[dict]) -> int:
+        """Bulk-insert intraday price snapshots from GetClosingPriceHistory.
+
+        Each snapshot dict has: time, last_price, close_price, trade_count,
+        cum_volume, cum_value.  Skips duplicates on (symbol, date, time).
+        """
+        if not snapshots:
+            return 0
+        rows = [
+            (symbol, ins_code, date_int,
+             s["time"], s.get("last_price",  0), s.get("close_price", 0),
+             s.get("trade_count", 0), s.get("cum_volume", 0), s.get("cum_value", 0))
+            for s in snapshots
+        ]
+        with self._conn() as conn:
+            cur = conn.executemany(
+                """INSERT OR IGNORE INTO intraday_price_history
+                   (symbol, ins_code, date, time, last_price, close_price,
+                    trade_count, cum_volume, cum_value)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                rows,
+            )
+            return cur.rowcount
+
+    def get_intraday_price_history(self, symbol: str, date_int: int) -> list[dict]:
+        """Return all intraday price snapshots for *symbol* on *date_int*."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT time, last_price, close_price,
+                          trade_count, cum_volume, cum_value
+                   FROM intraday_price_history
+                   WHERE symbol=? AND date=? ORDER BY time ASC""",
+                (symbol, date_int),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ #
+    #  Client type daily aggregate (حقیقی vs حقوقی)                       #
+    # ------------------------------------------------------------------ #
+
+    def save_client_type(self, symbol: str, ins_code: str,
+                         date_int: int, ct: dict) -> bool:
+        """Upsert client-type daily aggregate for *symbol* on *date_int*."""
+        if not ct:
+            return False
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO client_type_daily
+                   (symbol, ins_code, date,
+                    buy_i_vol,  buy_n_vol,  buy_i_val,  buy_n_val,
+                    buy_i_cnt,  buy_n_cnt,
+                    sell_i_vol, sell_n_vol, sell_i_val, sell_n_val,
+                    sell_i_cnt, sell_n_cnt)
+                   VALUES (?,?,?, ?,?,?,?, ?,?, ?,?,?,?, ?,?)""",
+                (symbol, ins_code, date_int,
+                 ct.get("buy_i_vol",  0), ct.get("buy_n_vol",  0),
+                 ct.get("buy_i_val",  0), ct.get("buy_n_val",  0),
+                 ct.get("buy_i_cnt",  0), ct.get("buy_n_cnt",  0),
+                 ct.get("sell_i_vol", 0), ct.get("sell_n_vol", 0),
+                 ct.get("sell_i_val", 0), ct.get("sell_n_val", 0),
+                 ct.get("sell_i_cnt", 0), ct.get("sell_n_cnt", 0)),
+            )
+        return True
+
+    def get_client_type(self, symbol: str, date_int: int) -> Optional[dict]:
+        """Return client-type aggregate for *symbol* on *date_int*, or None."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM client_type_daily WHERE symbol=? AND date=?",
+                (symbol, date_int),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_client_type_range(self, symbol: str,
+                              start_date: int, end_date: int) -> list[dict]:
+        """Return all client-type rows for *symbol* between dates (inclusive)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM client_type_daily
+                   WHERE symbol=? AND date BETWEEN ? AND ?
+                   ORDER BY date ASC""",
+                (symbol, start_date, end_date),
             ).fetchall()
         return [dict(r) for r in rows]
 
