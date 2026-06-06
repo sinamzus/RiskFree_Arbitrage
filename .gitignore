@@ -13,3 +13,5 @@ data/
 tools/raw/
 tools/tsetmc_history_*.html
 logs/ob_debug_*.txt
+tsetmc_analysis_output.txt
+verify_live_output.txt

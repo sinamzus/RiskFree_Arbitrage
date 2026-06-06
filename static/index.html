@@ -1177,7 +1177,9 @@ function buildCharts() {
   if (PC) { PC.remove(); PC = null; }
   if (KC) { KC.remove(); KC = null; }
 
-  PC = createChart(pe, tvOpts(pe, false));
+  // Show time-of-day on the price axis too when viewing intraday data
+  const _intra = (src === 'intraday');
+  PC = createChart(pe, tvOpts(pe, _intra));
   KC = createChart(ke, tvOpts(ke, true));
 
   // Sync time ranges
@@ -1321,6 +1323,7 @@ const navCache = {};
 
 // Live-refresh timer (active only when ⚡ثانیه / itvMin===-1 is selected)
 let liveTimer = null;
+let liveMeta  = null;   // {count, spot, source, at} from last /api/live_intraday
 function startLiveRefresh() {
   stopLiveRefresh();
   liveTimer = setInterval(() => {
@@ -1359,6 +1362,8 @@ async function fetchRows(sym) {
         const j = await r.json();
         rows = j.bars || [];
         if (j.nav) navCache[sym] = j.nav;
+        liveMeta = { count: j.bar_count || rows.length, spot: j.spot || 0,
+                     source: j.source || '', at: new Date() };
       }
       // Fallback: market is closed → show last available day's snapshots from DB
       if (!rows.length) {
@@ -2131,8 +2136,13 @@ async function redraw() {
 
   // Update label
   const sym = [...selected][0] || '';
+  const _liveInfo = (src === 'intraday' && itvMin === -1 && liveMeta)
+    ? ` · ${(liveMeta.count||0).toLocaleString('fa-IR')} کندل`
+      + (liveMeta.spot ? ` · قیمت ${fmtN(liveMeta.spot)}` : '')
+      + ` · ${liveMeta.at.toLocaleTimeString('fa-IR')}`
+    : '';
   document.getElementById('price-lbl').textContent =
-    src === 'intraday' && itvMin === -1 ? `${sym} — 🔴 زنده (دقیقه‌ای — تازه‌شونده هر ۳۰ ث)` :
+    src === 'intraday' && itvMin === -1 ? `${sym} — 🔴 زنده${_liveInfo}` :
     src === 'intraday' && itvMin === 0  ? `${sym} — تیک به تیک` :
     src === 'intraday' ? `${sym} — ${itvMin}m شمعی` :
     multi ? 'مقایسه — ' + [...selected].join(' / ') :
