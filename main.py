@@ -305,6 +305,16 @@ def run_scan(aggregator: DataAggregator,
             # ── Fetch & store intraday tick data ─────────────────────────
             if nav > 0:
                 ticks = tsetmc.get_intraday_trades(ins_code, today_int)
+                if not ticks:
+                    # GetTradeHistory is empty for *today* until the market
+                    # closes. During the live session fall back to GetTrade,
+                    # which streams today's ticks as they happen — so the
+                    # intraday chart shows today's minute data in real time.
+                    live = tsetmc.get_today_trades(ins_code)
+                    if live:
+                        ticks = live
+                        logger.debug("intraday %s: %d LIVE ticks (GetTrade)",
+                                     sym, len(live))
                 if ticks:
                     db.save_intraday_trades(sym, ins_code, today_int, ticks)
                     all_ticks = ticks

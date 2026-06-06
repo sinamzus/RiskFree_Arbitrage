@@ -1325,7 +1325,7 @@ function startLiveRefresh() {
   stopLiveRefresh();
   liveTimer = setInterval(() => {
     if (src === 'intraday' && itvMin === -1) redraw();
-  }, 60_000);
+  }, 30_000);
 }
 function stopLiveRefresh() {
   if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
@@ -1987,9 +1987,10 @@ function setTF(mode, val) {
   }
   const isIntra = src === 'intraday';
 
-  // Highlight the active pill
+  // Highlight the active pill (live mode's button uses data-tf="intra-snap")
+  const tfKey = (mode === 'intra' && val === -1) ? 'intra-snap' : mode + '-' + val;
   document.querySelectorAll('#tf-grp .pill').forEach(b =>
-    b.classList.toggle('on', b.dataset.tf === mode + '-' + val)
+    b.classList.toggle('on', b.dataset.tf === tfKey)
   );
   // Show/hide intraday lookback group
   document.getElementById('intra-days-grp').style.display = isIntra ? '' : 'none';
@@ -1997,7 +1998,7 @@ function setTF(mode, val) {
   cache = {};
   if (isIntra) {
     redraw();
-    if (val === -1) startLiveRefresh();  // ⚡ live mode — auto-refresh every 60 s
+    if (val === -1) startLiveRefresh();  // ⚡ live mode — auto-refresh every 30 s
   } else {
     loadStats();
     redraw();
@@ -2131,7 +2132,7 @@ async function redraw() {
   // Update label
   const sym = [...selected][0] || '';
   document.getElementById('price-lbl').textContent =
-    src === 'intraday' && itvMin === -1 ? `${sym} — 🔴 زنده (دقیقه‌ای — تازه‌شونده هر ۶۰ ث)` :
+    src === 'intraday' && itvMin === -1 ? `${sym} — 🔴 زنده (دقیقه‌ای — تازه‌شونده هر ۳۰ ث)` :
     src === 'intraday' && itvMin === 0  ? `${sym} — تیک به تیک` :
     src === 'intraday' ? `${sym} — ${itvMin}m شمعی` :
     multi ? 'مقایسه — ' + [...selected].join(' / ') :

@@ -529,89 +529,137 @@ def create_app(db, scan_callback=None):
 
     @app.route("/api/live_intraday")
     def api_live_intraday():
-        """Fetch today's live minute bars directly from TSETMC — no DB required.
+        """Today's LIVE intraday bars, fetched fresh from TSETMC on every call.
 
-        Calls ``Trade/GetTradeIntraday/{insCode}`` (no date param — today only).
-        Auto-refreshable: each call hits TSETMC fresh so the browser can poll.
+        Strategy (in priority order so the chart is never empty during a session):
+          1. Aggregate today's raw ticks (Trade/GetTrade) into `interval`-minute
+             OHLCV bars — true minute resolution, right up to the latest trade.
+          2. Fall back to Trade/GetTradeIntraday (sparse ~2-min bars).
+          3. Always fetch the current spot price (ClosingPriceInfo) and append it
+             as the most-recent point so "price right now" is always visible.
 
         Query params:
-          symbol – fund symbol (required)
+          symbol   – fund symbol (required)
+          interval – minutes per bar (default 1)
 
-        Returns {symbol, date, nav, fetched_at, bar_count, bars}
+        Returns {symbol, date, nav, spot, fetched_at, source, bar_count, bars}
         Each bar: {time (UTC unix), hhmmss, open, high, low, close, volume, premium_pct}
         """
         from zoneinfo import ZoneInfo
         from datetime import datetime as _dt
         from data_fetcher import TSETMCFetcher
+        from config import FIXED_INCOME_ETFS
         import sqlite3 as _sq
 
-        symbol = request.args.get("symbol", "")
+        symbol   = request.args.get("symbol", "")
+        interval = int(request.args.get("interval", 1) or 1)
+        if interval not in (1, 2, 3, 5, 10, 15, 30, 60):
+            interval = 1
         if not symbol:
             return jsonify({"error": "symbol required"}), 400
 
-        # Get ins_code from latest snapshot or daily_history
+        # ── Resolve ins_code: config is authoritative (no DB dependency) ──────
+        ins_code = ""
+        for f in FIXED_INCOME_ETFS:
+            if f.get("symbol") == symbol:
+                ins_code = str(f.get("ins_code", "") or "")
+                break
         latest_map = {r["symbol"]: r for r in db.get_latest()}
         snap = latest_map.get(symbol, {})
-        ins_code = snap.get("ins_code", "")
+        if not ins_code:
+            ins_code = snap.get("ins_code", "") or ""
         if not ins_code:
             conn = _sq.connect(db.path)
             row = conn.execute(
                 "SELECT ins_code FROM daily_history "
-                "WHERE symbol=? AND ins_code!='' LIMIT 1",
-                (symbol,)
+                "WHERE symbol=? AND ins_code!='' LIMIT 1", (symbol,)
             ).fetchone()
             conn.close()
             ins_code = row[0] if row else ""
-
         if not ins_code:
             return jsonify({"error": f"ins_code not found for {symbol}",
                             "bars": [], "bar_count": 0}), 404
 
-        nav = snap.get("cancel_nav") or snap.get("nav") or 0
-
-        # Direct TSETMC fetch — no DB
-        tsetmc = TSETMCFetcher()
-        bars_raw = tsetmc.get_today_intraday_bars(ins_code)
-
         tz = ZoneInfo("Asia/Tehran")
         now = _dt.now(tz)
         today_int = int(now.strftime("%Y%m%d"))
-        y, m, d = now.year, now.month, now.day
 
+        tsetmc = TSETMCFetcher()
+
+        # ── NAV (for premium): snapshot → ClosingPriceInfo embedded → yesterday ──
+        nav = snap.get("cancel_nav") or snap.get("nav") or 0
+        cpi = tsetmc.get_closing_price_info(ins_code) or {}
+        if nav <= 0:
+            nav = cpi.get("embedded_nav") or cpi.get("yesterday_price") or 0
+
+        def _prem(p):
+            return round((p - nav) / nav * 100, 4) if (nav > 0 and p > 0) else None
+
+        # ── 1) Aggregate today's raw ticks into interval-minute bars ──────────
+        source = "trades"
         bars = []
-        for r in bars_raw:
-            heven = r.get("time", 0)
-            if not heven:
-                continue
-            hh = heven // 10000
-            mi = (heven % 10000) // 100
-            ss = heven % 100
-            if not (0 <= hh < 24 and 0 <= mi < 60 and 0 <= ss < 60):
-                continue
-            try:
-                unix_t = int(_dt(y, m, d, hh, mi, ss, tzinfo=tz).timestamp())
-            except Exception:
-                continue
-            close = r.get("close", 0) or 0
-            if close <= 0:
-                continue
-            prem = round((close - nav) / nav * 100, 4) if nav > 0 else None
-            bars.append({
-                "time":        unix_t,
-                "hhmmss":      heven,
-                "open":        r.get("open",   close),
-                "high":        r.get("high",   close),
-                "low":         r.get("low",    close),
-                "close":       close,
-                "volume":      r.get("volume", 0),
-                "premium_pct": prem,
-            })
+        ticks = tsetmc.get_today_trades(ins_code)
+        if ticks:
+            raw = _aggregate_ticks(ticks, interval, today_int)
+            for b in raw:
+                b["premium_pct"] = _prem(b["close"])
+                bars.append(b)
 
-        logger.info("[live_intraday] %s → %d bars (ins=%s)", symbol, len(bars), ins_code)
+        # ── 2) Fall back to GetTradeIntraday sparse bars ──────────────────────
+        if not bars:
+            source = "intraday_bars"
+            y, m, d = now.year, now.month, now.day
+            for r in tsetmc.get_today_intraday_bars(ins_code):
+                heven = r.get("time", 0)
+                if not heven:
+                    continue
+                hh, mi, ss = heven // 10000, (heven % 10000) // 100, heven % 100
+                if not (0 <= hh < 24 and 0 <= mi < 60 and 0 <= ss < 60):
+                    continue
+                close = r.get("close", 0) or 0
+                if close <= 0:
+                    continue
+                try:
+                    unix_t = int(_dt(y, m, d, hh, mi, ss, tzinfo=tz).timestamp())
+                except Exception:
+                    continue
+                bars.append({
+                    "time":   unix_t, "hhmmss": heven,
+                    "open":   r.get("open", close), "high": r.get("high", close),
+                    "low":    r.get("low", close),  "close": close,
+                    "volume": r.get("volume", 0),   "premium_pct": _prem(close),
+                })
+
+        bars.sort(key=lambda x: x["time"])
+
+        # ── 3) Current spot price — always show "right now" ───────────────────
+        spot = cpi.get("last_price") or cpi.get("close_price") or 0
+        if spot > 0:
+            spot_unix = int(now.replace(second=0, microsecond=0).timestamp())
+            spot_hhmmss = now.hour * 10000 + now.minute * 100
+            if bars and bars[-1]["time"] >= spot_unix:
+                # market gives us a fresher last bar; just refresh its close
+                last = bars[-1]
+                last["close"] = spot
+                last["high"]  = max(last["high"], spot)
+                last["low"]   = min(last["low"],  spot)
+                last["premium_pct"] = _prem(spot)
+            else:
+                bars.append({
+                    "time": spot_unix, "hhmmss": spot_hhmmss,
+                    "open": spot, "high": spot, "low": spot, "close": spot,
+                    "volume": 0, "premium_pct": _prem(spot),
+                })
+
+        logger.info("[live_intraday] %s ins=%s src=%s bars=%d spot=%s nav=%s",
+                    symbol, ins_code, source, len(bars), spot, nav)
         return jsonify({
             "symbol":     symbol,
             "date":       today_int,
             "nav":        nav,
+            "spot":       spot,
+            "interval":   interval,
+            "source":     source,
             "fetched_at": int(time.time()),
             "bar_count":  len(bars),
             "bars":       bars,
