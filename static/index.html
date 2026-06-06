@@ -416,6 +416,78 @@ html, body {
   overflow-y: auto;
 }
 #stats-title { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 9px; font-weight: 600; }
+
+/* ─── Stats panel tabs (آمار / حقیقی/حقوقی) ───────────────────── */
+#stats-tabs {
+  display: flex; gap: 6px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--brd);
+  padding-bottom: 4px;
+}
+.stats-tab {
+  background: transparent; border: none;
+  color: var(--muted); cursor: pointer;
+  font-size: var(--fs-xs); font-weight: 700;
+  padding: 4px 8px; border-radius: 4px;
+}
+.stats-tab:hover { color: var(--txt); background: var(--bg); }
+.stats-tab.on { color: var(--txt); background: var(--bg); border-bottom: 2px solid var(--blue); }
+
+/* ─── Client-type panel (حقیقی/حقوقی) ──────────────────────────── */
+#ct-content { font-size: var(--fs-xs); }
+.ct-today { padding: 5px 0 8px; border-bottom: 1px solid var(--brd); margin-bottom: 6px; }
+.ct-today-title {
+  font-size: var(--fs-xs); color: var(--muted);
+  font-weight: 600; margin-bottom: 4px;
+}
+.ct-flow-bar {
+  display: flex; height: 14px; border-radius: 3px; overflow: hidden;
+  background: var(--bg); margin: 3px 0;
+}
+.ct-flow-i {
+  background: linear-gradient(90deg, #5b9cf6, #4a8de0);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 9px; font-weight: 700;
+  min-width: 0; overflow: hidden;
+}
+.ct-flow-n {
+  background: linear-gradient(90deg, #ff8c42, #ec6a18);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 9px; font-weight: 700;
+  min-width: 0; overflow: hidden;
+}
+.ct-row {
+  display: grid; grid-template-columns: auto 1fr auto;
+  gap: 6px; align-items: center;
+  padding: 2px 0; font-size: var(--fs-xs);
+}
+.ct-row-lbl { color: var(--muted); white-space: nowrap; }
+.ct-row-val { font-variant-numeric: tabular-nums; font-weight: 700; text-align: left; }
+.ct-net.pos { color: var(--green); }
+.ct-net.neg { color: var(--red); }
+
+#ct-history-wrap {
+  margin-top: 8px; padding-top: 6px;
+  border-top: 1px solid var(--brd);
+}
+.ct-hist-title {
+  font-size: var(--fs-xs); color: var(--muted);
+  font-weight: 600; margin-bottom: 4px;
+}
+#ct-history {
+  display: flex; align-items: flex-end; gap: 1px;
+  height: 38px; padding: 2px 0;
+  overflow-x: auto;
+}
+.ct-bar {
+  display: flex; flex-direction: column;
+  flex: 0 0 auto; width: 7px;
+  min-height: 4px; position: relative;
+}
+.ct-bar:hover { outline: 1px solid var(--txt); z-index: 2; }
+.ct-bar-pos { background: var(--green); margin-top: auto; }
+.ct-bar-neg { background: var(--red); }
+.ct-bar-zero { background: var(--brd); height: 2px; align-self: center; }
+
 .sr {
   display: flex; justify-content: space-between;
   padding: 3.5px 0;
@@ -756,6 +828,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   <!-- Unified TF bar: intraday | daily — انتخاب TF به‌صورت خودکار حالت را تعیین می‌کند -->
   <div class="pill-group" id="tf-grp">
+    <button class="pill"    data-tf="intra-snap" onclick="setTF('intra',-1)" title="snapshot هر چند ثانیه از TSETMC">⚡ثانیه</button>
     <button class="pill"    data-tf="intra-0"   onclick="setTF('intra',0)">تیک</button>
     <button class="pill"    data-tf="intra-1"   onclick="setTF('intra',1)">۱m</button>
     <button class="pill"    data-tf="intra-5"   onclick="setTF('intra',5)">۵m</button>
@@ -921,8 +994,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <!-- Bottom -->
     <div id="bottom">
       <div id="stats-panel">
-        <div id="stats-title">آمار میانگین‌گردانی</div>
+        <!-- Tab toggle: آمار vs حقیقی/حقوقی -->
+        <div id="stats-tabs">
+          <button id="stats-tab-mr" class="stats-tab on" onclick="setStatsTab('mr')">آمار</button>
+          <button id="stats-tab-ct" class="stats-tab"    onclick="setStatsTab('ct')">حقیقی/حقوقی</button>
+        </div>
         <div id="stats-content">
+          <div style="color:var(--muted);font-size:var(--fs-xs);margin-top:6px">صندوقی انتخاب نشده</div>
+        </div>
+        <div id="ct-content" style="display:none">
           <div style="color:var(--muted);font-size:var(--fs-xs);margin-top:6px">صندوقی انتخاب نشده</div>
         </div>
       </div>
@@ -1255,8 +1335,25 @@ async function fetchRows(sym) {
     document.getElementById('boot-notice').style.display = 'none';
 
   } else {
-    // intraday — multi-day, tick or bar mode
-    if (itvMin === 0) {
+    // intraday — multi-day, snapshot/tick/bar mode
+    if (itvMin === -1) {
+      // sub-minute snapshots from intraday_price_history (TSETMC GetClosingPriceHistory)
+      const r = await fetch(
+        `/api/intraday_snapshots?symbol=${E(sym)}&days=${intraDays}`
+      ).catch(()=>null);
+      if (r?.ok) {
+        const j = await r.json();
+        // Adapt snapshots into the same shape consumers expect
+        rows = (j.snapshots || []).map(s => ({
+          time:        s.time,
+          price:       s.price,
+          volume:      s.volume,
+          premium_pct: s.premium_pct,
+          unix_time:   s.time,
+        }));
+        if (j.nav) navCache[sym] = j.nav;
+      }
+    } else if (itvMin === 0) {
       const r = await fetch(
         `/api/intraday_ticks?symbol=${E(sym)}&days=${intraDays}`
       ).catch(()=>null);
@@ -2004,12 +2101,17 @@ async function redraw() {
   // Update label
   const sym = [...selected][0] || '';
   document.getElementById('price-lbl').textContent =
-    src === 'intraday' && itvMin === 0 ? `${sym} — تیک به تیک` :
+    src === 'intraday' && itvMin === -1 ? `${sym} — ⚡ snapshot (هر چند ثانیه)` :
+    src === 'intraday' && itvMin === 0  ? `${sym} — تیک به تیک` :
     src === 'intraday' ? `${sym} — ${itvMin}m شمعی` :
     multi ? 'مقایسه — ' + [...selected].join(' / ') :
     sym + (src === 'daily' ? ' — قیمت + NAV' : ' — اسکن');
 
-  if (selected.size === 1) updateInfoDefault(sym, await fetchRows(sym));
+  if (selected.size === 1) {
+    updateInfoDefault(sym, await fetchRows(sym));
+    // Refresh client-type panel if active
+    if (statsTab === 'ct') loadClientType(sym);
+  }
 }
 
 // ── Candlestick (daily) ─────────────────────────────────────────────
@@ -2375,6 +2477,124 @@ function renderStats(sym) {
   }
 
   document.getElementById('stats-content').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Client-type (حقیقی / حقوقی) panel
+// ══════════════════════════════════════════════════════════════════
+let statsTab = 'mr';   // 'mr' = mean reversion stats | 'ct' = client type
+
+function setStatsTab(tab) {
+  statsTab = tab;
+  document.getElementById('stats-tab-mr').classList.toggle('on', tab === 'mr');
+  document.getElementById('stats-tab-ct').classList.toggle('on', tab === 'ct');
+  document.getElementById('stats-content').style.display = tab === 'mr' ? '' : 'none';
+  document.getElementById('ct-content').style.display    = tab === 'ct' ? '' : 'none';
+  if (tab === 'ct' && selected.size === 1) loadClientType([...selected][0]);
+}
+
+const ctCache = {};   // sym → {history}
+
+async function loadClientType(sym) {
+  if (!sym) return;
+  if (ctCache[sym]) { renderClientType(sym, ctCache[sym]); return; }
+  const r = await fetch(`/api/client_type?symbol=${E(sym)}&days=30`).catch(()=>null);
+  if (!r?.ok) return;
+  const j = await r.json();
+  ctCache[sym] = j;
+  renderClientType(sym, j);
+}
+
+function fmtIRR(v) {
+  // Format Rial value as compact billions/millions
+  if (!v) return '۰';
+  const abs = Math.abs(v);
+  if (abs >= 1e13) return (v/1e13).toFixed(1) + ' هزار میلیارد';
+  if (abs >= 1e10) return (v/1e10).toFixed(1) + ' میلیارد';
+  if (abs >= 1e7)  return (v/1e7).toFixed(1) + ' میلیون';
+  return v.toLocaleString('fa-IR', {maximumFractionDigits:0});
+}
+
+function renderClientType(sym, data) {
+  const el = document.getElementById('ct-content');
+  const hist = data?.history || [];
+  if (!hist.length) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:var(--fs-xs);margin-top:6px">
+      <b>${sym}</b> — داده‌ای ثبت نشده.<br>
+      اجرا کنید: <code>python tools/backfill_intraday.py</code></div>`;
+    return;
+  }
+
+  const last = hist[hist.length - 1];
+  const buyTot  = (last.buy_i_vol  || 0) + (last.buy_n_vol  || 0) || 1;
+  const sellTot = (last.sell_i_vol || 0) + (last.sell_n_vol || 0) || 1;
+  const buyIpct  = Math.round(last.buy_i_vol  / buyTot  * 100);
+  const buyNpct  = 100 - buyIpct;
+  const sellIpct = Math.round(last.sell_i_vol / sellTot * 100);
+  const sellNpct = 100 - sellIpct;
+
+  const netI = last.net_i_val || 0;   // I net buying (val: rial)
+  const netN = last.net_n_val || 0;
+  const netIcls = netI >= 0 ? 'pos' : 'neg';
+  const netNcls = netN >= 0 ? 'pos' : 'neg';
+
+  // Format date as YYYY/MM/DD
+  const ds = String(last.date);
+  const dlbl = `${ds.slice(0,4)}/${ds.slice(4,6)}/${ds.slice(6)}`;
+
+  // Build 30-day mini-history bars — each bar = net individual flow (val)
+  const maxAbs = Math.max(...hist.map(h => Math.abs(h.net_i_val || 0)), 1);
+  const bars = hist.map(h => {
+    const v = h.net_i_val || 0;
+    if (v === 0) return `<div class="ct-bar ct-bar-zero" title="${h.date}: صفر"></div>`;
+    const h_pct = Math.min(100, Math.abs(v) / maxAbs * 100);
+    const cls   = v >= 0 ? 'ct-bar-pos' : 'ct-bar-neg';
+    const sign  = v >= 0 ? '+' : '−';
+    return `<div class="ct-bar" title="${h.date}: ${sign}${fmtIRR(Math.abs(v))}">
+              <div class="${cls}" style="height:${h_pct}%"></div>
+            </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="ct-today">
+      <div class="ct-today-title">${dlbl} — ترکیب خرید (حجم)</div>
+      <div class="ct-flow-bar">
+        <div class="ct-flow-i" style="width:${buyIpct}%">${buyIpct > 8 ? `حقیقی ${buyIpct}%` : ''}</div>
+        <div class="ct-flow-n" style="width:${buyNpct}%">${buyNpct > 8 ? `حقوقی ${buyNpct}%` : ''}</div>
+      </div>
+      <div class="ct-today-title" style="margin-top:6px">ترکیب فروش (حجم)</div>
+      <div class="ct-flow-bar">
+        <div class="ct-flow-i" style="width:${sellIpct}%">${sellIpct > 8 ? `حقیقی ${sellIpct}%` : ''}</div>
+        <div class="ct-flow-n" style="width:${sellNpct}%">${sellNpct > 8 ? `حقوقی ${sellNpct}%` : ''}</div>
+      </div>
+    </div>
+
+    <div class="ct-row">
+      <span class="ct-row-lbl">خالص حقیقی</span>
+      <span></span>
+      <span class="ct-row-val ct-net ${netIcls}">${netI>=0?'+':'−'}${fmtIRR(Math.abs(netI))}</span>
+    </div>
+    <div class="ct-row">
+      <span class="ct-row-lbl">خالص حقوقی</span>
+      <span></span>
+      <span class="ct-row-val ct-net ${netNcls}">${netN>=0?'+':'−'}${fmtIRR(Math.abs(netN))}</span>
+    </div>
+    <div class="ct-row">
+      <span class="ct-row-lbl">سرانه خرید حقیقی</span>
+      <span></span>
+      <span class="ct-row-val">${fmtIRR(last.buy_i_cnt ? last.buy_i_val/last.buy_i_cnt : 0)}</span>
+    </div>
+    <div class="ct-row">
+      <span class="ct-row-lbl">سرانه فروش حقیقی</span>
+      <span></span>
+      <span class="ct-row-val">${fmtIRR(last.sell_i_cnt ? last.sell_i_val/last.sell_i_cnt : 0)}</span>
+    </div>
+
+    <div id="ct-history-wrap">
+      <div class="ct-hist-title">جریان خالص حقیقی — ${hist.length} روز اخیر</div>
+      <div id="ct-history">${bars}</div>
+    </div>
+  `;
 }
 
 // ══════════════════════════════════════════════════════════════════

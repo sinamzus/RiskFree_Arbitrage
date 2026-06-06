@@ -431,6 +431,155 @@ def create_app(db, scan_callback=None):
         dates = db.get_intraday_dates(symbol)
         return jsonify({"symbol": symbol, "dates": dates})
 
+    @app.route("/api/intraday_snapshots")
+    def api_intraday_snapshots():
+        """Return sub-minute price snapshots from intraday_price_history.
+
+        Query params:
+          symbol – fund symbol (required)
+          days   – number of recent trading days (default: 1)
+          date   – optional anchor date YYYYMMDD (returns days ≤ this)
+
+        Each snapshot: {time (unix), date (YYYYMMDD int), hhmmss,
+                        price, premium_pct, volume (per-snapshot diff),
+                        cum_volume, trade_count}
+        """
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        tz = ZoneInfo("Asia/Tehran")
+
+        symbol    = request.args.get("symbol", "")
+        days_back = max(1, min(int(request.args.get("days", 1)), 60))
+        date_str  = request.args.get("date", "")
+
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        # Determine which dates have snapshot data
+        import sqlite3 as _sq
+        conn = _sq.connect(db.path)
+        conn.row_factory = _sq.Row
+        if date_str:
+            avail = [r[0] for r in conn.execute(
+                "SELECT DISTINCT date FROM intraday_price_history "
+                "WHERE symbol=? AND date<=? ORDER BY date ASC",
+                (symbol, int(date_str))
+            ).fetchall()]
+        else:
+            avail = [r[0] for r in conn.execute(
+                "SELECT DISTINCT date FROM intraday_price_history "
+                "WHERE symbol=? ORDER BY date ASC",
+                (symbol,)
+            ).fetchall()]
+        conn.close()
+
+        if not avail:
+            return jsonify({"symbol": symbol, "days": days_back,
+                            "nav": 0, "snapshots": []})
+
+        dates_to_fetch = avail[-days_back:]
+
+        out, nav = [], 0.0
+        for date_int in dates_to_fetch:
+            snaps = db.get_intraday_price_history(symbol, date_int)
+            if not snaps:
+                continue
+            date_nav = _nav_for_date(symbol, date_int)
+            if date_nav > 0 and nav == 0:
+                nav = date_nav
+
+            ystr = str(date_int)
+            y, m, d = int(ystr[:4]), int(ystr[4:6]), int(ystr[6:])
+
+            prev_vol = 0
+            for s in snaps:
+                t = int(s["time"])
+                hh = t // 10000
+                mm = (t // 100) % 100
+                ss = t % 100
+                if not (0 <= hh < 24 and 0 <= mm < 60 and 0 <= ss < 60):
+                    continue
+                try:
+                    dt_local = _dt(y, m, d, hh, mm, ss, tzinfo=tz)
+                except Exception:
+                    continue
+                price = s["last_price"] or s["close_price"] or 0
+                cum   = int(s["cum_volume"] or 0)
+                # Per-snapshot volume = diff from previous (clip negatives)
+                diff = cum - prev_vol if cum >= prev_vol else cum
+                prev_vol = cum
+
+                out.append({
+                    "time":        int(dt_local.timestamp()),
+                    "date":        date_int,
+                    "hhmmss":      t,
+                    "price":       price,
+                    "cum_volume":  cum,
+                    "volume":      diff,
+                    "trade_count": int(s["trade_count"] or 0),
+                    "premium_pct": (round((price - date_nav) / date_nav * 100, 4)
+                                    if date_nav > 0 else None),
+                })
+
+        out.sort(key=lambda x: x["time"])
+        return jsonify({
+            "symbol": symbol, "days": days_back,
+            "nav": nav, "snapshots": out,
+        })
+
+    @app.route("/api/client_type")
+    def api_client_type():
+        """Return individual (حقیقی) vs legal (حقوقی) money flow history.
+
+        Query params:
+          symbol – fund symbol (required)
+          days   – number of recent trading days (default: 30)
+          date   – optional anchor date YYYYMMDD (default: latest)
+
+        For each day returns:
+          date, buy_i_vol, buy_n_vol, sell_i_vol, sell_n_vol,
+          buy_i_val, buy_n_val, sell_i_val, sell_n_val,
+          net_i_val (= buy_i_val - sell_i_val),
+          net_n_val (= buy_n_val - sell_n_val)
+        """
+        symbol    = request.args.get("symbol", "")
+        days_back = max(1, min(int(request.args.get("days", 30)), 365))
+        date_str  = request.args.get("date", "")
+
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        import sqlite3 as _sq
+        conn = _sq.connect(db.path)
+        conn.row_factory = _sq.Row
+        if date_str:
+            anchor = int(date_str)
+            rows = conn.execute(
+                "SELECT * FROM client_type_daily "
+                "WHERE symbol=? AND date<=? "
+                "ORDER BY date DESC LIMIT ?",
+                (symbol, anchor, days_back)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM client_type_daily "
+                "WHERE symbol=? ORDER BY date DESC LIMIT ?",
+                (symbol, days_back)
+            ).fetchall()
+        conn.close()
+
+        history = []
+        for r in reversed(rows):
+            d = dict(r)
+            d["net_i_val"] = d["buy_i_val"] - d["sell_i_val"]
+            d["net_n_val"] = d["buy_n_val"] - d["sell_n_val"]
+            d["net_i_vol"] = d["buy_i_vol"] - d["sell_i_vol"]
+            d["net_n_vol"] = d["buy_n_vol"] - d["sell_n_vol"]
+            history.append(d)
+
+        return jsonify({"symbol": symbol, "days": days_back,
+                        "history": history})
+
     @app.route("/api/orderbook")
     def api_orderbook():
         """Return the latest order-book snapshot + tradability for *symbol*.
