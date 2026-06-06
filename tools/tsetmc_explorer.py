@@ -236,11 +236,13 @@ def run(ins_code: str, symbol: str):
     sub("B2. GetClientTypeHistory (حقیقی vs حقوقی)")
     ok, d = probe("B2.GetClientTypeHistory.last_trade",
                   f"{CDN}/Trade/GetClientTypeHistory/{ins_code}/{last_trade_date}")
-    if ok and d:
+    if ok and isinstance(d, dict):
         ct = d.get("clientType") or d.get("clientTypeHistory") or d.get("clientTypes") or {}
         p(f"         full response keys: {list(d.keys())}")
         for k, v in d.items():
             p(f"           {k!r:30s} → {describe(v, 3)[:200]}")
+    elif ok and d:
+        p(f"         raw response: {str(d)[:300]}")
 
     probe("B2.GetClientTypeHistory.today",
           f"{CDN}/Trade/GetClientTypeHistory/{ins_code}/{today}")
@@ -312,9 +314,11 @@ def run(ins_code: str, symbol: str):
     sub("D2. GetInstrumentStatistic (آمار ابزار)")
     ok, d = probe("D2.GetInstrumentStatistic",
                   f"{CDN}/Instrument/GetInstrumentStatistic/{ins_code}")
-    if ok and d:
+    if ok and isinstance(d, dict):
         for k, v in d.items():
             p(f"           {k!r:30s} → {describe(v, 3)[:200]}")
+    elif ok and d:
+        p(f"         raw response: {str(d)[:300]}")
 
     sub("D3. GetInstrumentSearch")
     probe("D3.GetInstrumentSearch.symbol",
@@ -343,9 +347,11 @@ def run(ins_code: str, symbol: str):
     sub("E1. GetMFNav (NAV صندوق)")
     ok, d = probe("E1.GetMFNav",
                   f"{CDN}/MutualFund/GetMFNav/{ins_code}")
-    if ok and d:
+    if ok and isinstance(d, dict):
         for k, v in d.items():
             p(f"           {k!r:30s} → {describe(v, 3)[:300]}")
+    elif ok and d:
+        p(f"         raw response: {str(d)[:300]}")
 
     sub("E2. GetMFNavHistory (تاریخچه NAV)")
     from_date = int((datetime.now() - timedelta(days=30)).strftime("%Y%m%d"))
@@ -366,11 +372,31 @@ def run(ins_code: str, symbol: str):
     probe("E3.GetMFNavByType",
           f"{CDN}/MutualFund/GetMFNavByType/6")  # type 6 = fixed income ETF
 
-    sub("E4. GetMFData (اطلاعات جامع صندوق)")
+    sub("E4. GetMFData / GetETFHistory (اطلاعات جامع صندوق)")
     probe("E4.GetMFData",
           f"{CDN}/MutualFund/GetMFData/{ins_code}")
     probe("E4.GetFundInfo",
           f"{CDN}/MutualFund/GetFundInfo/{ins_code}")
+    probe("E4.GetETFHistory",
+          f"{CDN}/MutualFund/GetETFHistory/{ins_code}")
+    probe("E4.GetETFByInsCode",
+          f"{CDN}/MutualFund/GetETFByInsCode/{ins_code}")
+    probe("E4.GetETFInfo",
+          f"{CDN}/MutualFund/GetETFInfo/{ins_code}")
+
+    sub("E5. ClientType/GetClientTypeHistory (حقیقی/حقوقی تاریخچه)")
+    ok, d = probe("E5.GetClientTypeHistory",
+                  f"{CDN}/ClientType/GetClientTypeHistory/{ins_code}/{last_trade_date}")
+    if ok and isinstance(d, dict):
+        p(f"         keys: {list(d.keys())}")
+        for k, v in d.items():
+            p(f"           {k!r:30s} → {describe(v, 3)[:300]}")
+    elif ok and d:
+        p(f"         raw response: {str(d)[:300]}")
+    probe("E5.GetClientTypeHistory.today",
+          f"{CDN}/ClientType/GetClientTypeHistory/{ins_code}/{today}")
+    probe("E5.GetClientTypeHistory.all",
+          f"{CDN}/ClientType/GetClientTypeHistory/{ins_code}/0")
 
     # ─────────────────────────────────────────────────────────────────────────
     section("F. MarketData — اطلاعات کل بازار")
@@ -379,9 +405,11 @@ def run(ins_code: str, symbol: str):
     sub("F1. GetTseClientTypeAll (حقیقی/حقوقی کل بازار)")
     ok, d = probe("F1.GetTseClientTypeAll",
                   f"{CDN}/MarketData/GetTseClientTypeAll")
-    if ok and d:
+    if ok and isinstance(d, dict):
         for k, v in d.items():
             p(f"           {k!r:30s} → {describe(v, 3)[:300]}")
+    elif ok and d:
+        p(f"         raw response: {str(d)[:300]}")
 
     sub("F2. GetMarketOverview (نمای کلی بازار)")
     probe("F2.GetMarketOverview",
@@ -648,9 +676,11 @@ def run(ins_code: str, symbol: str):
         if ok_flag and isinstance(data, dict):
             hint = f"  keys={list(data.keys())[:6]}"
         p(f"  {mark}  [{status:3d}] {ms:5.0f}ms  {label}{hint}")
-        if ok_flag:
+        if ok_flag and isinstance(data, dict):
             for k, v in data.items():
                 p(f"         {k!r:32s} → {describe(v, 3)[:200]}")
+        elif ok_flag and data:
+            p(f"         raw: {str(data)[:200]}")
         _data[label] = {"url": url, "status": status, "ms": round(ms),
                         "data": data if ok_flag else None}
         time.sleep(0.2)
@@ -726,26 +756,30 @@ def main():
         print(f"ERROR: could not resolve ins_code for '{symbol}'")
         sys.exit(1)
 
-    run(ins_code, symbol)
-
-    # Write outputs
     txt_path  = ROOT / "tsetmc_full_analysis.txt"
     json_path = ROOT / "tsetmc_full_analysis.json"
 
-    txt_path.write_text("\n".join(_lines), encoding="utf-8")
-    json_path.write_text(
-        json.dumps(_data, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8"
-    )
-
-    print(f"\n{'='*60}")
-    print(f"✓  Text report: {txt_path}")
-    print(f"✓  JSON dump:   {json_path}")
-    print()
-    print("  Push هر دو فایل را:")
-    print("  git add tsetmc_full_analysis.txt tsetmc_full_analysis.json")
-    print("  git commit -m \"debug: TSETMC full API analysis\"")
-    print("  git push origin claude/charming-volta-BsNnm")
+    try:
+        run(ins_code, symbol)
+    except Exception as e:
+        p(f"\n[CRASH] {type(e).__name__}: {e}")
+        import traceback
+        p(traceback.format_exc())
+    finally:
+        # Always write outputs — even if run() crashed partway through
+        txt_path.write_text("\n".join(_lines), encoding="utf-8")
+        json_path.write_text(
+            json.dumps(_data, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8"
+        )
+        print(f"\n{'='*60}")
+        print(f"✓  Text report: {txt_path}")
+        print(f"✓  JSON dump:   {json_path}")
+        print()
+        print("  Push هر دو فایل را:")
+        print("  git add tsetmc_full_analysis.txt tsetmc_full_analysis.json")
+        print("  git commit -m \"debug: TSETMC full API analysis\"")
+        print("  git push origin claude/charming-volta-BsNnm")
 
 
 if __name__ == "__main__":
