@@ -1319,11 +1319,26 @@ async function loadStats() {
 // intraday NAV cache: sym+date → nav value
 const navCache = {};
 
+// Live-refresh timer (active only when ⚡ثانیه / itvMin===-1 is selected)
+let liveTimer = null;
+function startLiveRefresh() {
+  stopLiveRefresh();
+  liveTimer = setInterval(() => {
+    if (src === 'intraday' && itvMin === -1) redraw();
+  }, 60_000);
+}
+function stopLiveRefresh() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+}
+
 async function fetchRows(sym) {
   const key = `${sym}_${src}_${days}_${itvMin}_${intraDays}`;
-  if (cache[key]) return cache[key];
+  // Live mode: never serve from cache — always hit TSETMC fresh
+  if (itvMin !== -1 && cache[key]) return cache[key];
 
   let rows = [];
+  let noCache = false;
+
   if (src === 'daily') {
     const r = await fetch(`/api/daily_history?symbol=${E(sym)}&days=${days}`).catch(()=>null);
     if (r?.ok) { const j = await r.json(); rows = j.history || []; }
@@ -1337,21 +1352,34 @@ async function fetchRows(sym) {
   } else {
     // intraday — multi-day, snapshot/tick/bar mode
     if (itvMin === -1) {
-      // sub-minute snapshots from intraday_price_history (TSETMC GetClosingPriceHistory)
-      const r = await fetch(
-        `/api/intraday_snapshots?symbol=${E(sym)}&days=${intraDays}`
-      ).catch(()=>null);
+      // ── Live mode: fetch today's minute bars directly from TSETMC ──────
+      noCache = true;
+      const r = await fetch(`/api/live_intraday?symbol=${E(sym)}`).catch(()=>null);
       if (r?.ok) {
         const j = await r.json();
-        // Adapt snapshots into the same shape consumers expect
-        rows = (j.snapshots || []).map(s => ({
-          time:        s.time,
-          price:       s.price,
-          volume:      s.volume,
-          premium_pct: s.premium_pct,
-          unix_time:   s.time,
-        }));
+        rows = j.bars || [];
         if (j.nav) navCache[sym] = j.nav;
+      }
+      // Fallback: market is closed → show last available day's snapshots from DB
+      if (!rows.length) {
+        noCache = false;
+        const r2 = await fetch(
+          `/api/intraday_snapshots?symbol=${E(sym)}&days=1`
+        ).catch(()=>null);
+        if (r2?.ok) {
+          const j = await r2.json();
+          // Convert snapshots to OHLCV so drawIntraday can render them
+          rows = (j.snapshots || []).map(s => ({
+            time:        s.time,
+            open:        s.price,
+            high:        s.price,
+            low:         s.price,
+            close:       s.price,
+            volume:      s.volume,
+            premium_pct: s.premium_pct,
+          }));
+          if (j.nav) navCache[sym] = j.nav;
+        }
       }
     } else if (itvMin === 0) {
       const r = await fetch(
@@ -1375,7 +1403,7 @@ async function fetchRows(sym) {
     if (!rows.length) document.getElementById('boot-notice').style.display = '';
     else              document.getElementById('boot-notice').style.display = 'none';
   }
-  cache[key] = rows;
+  if (!noCache) cache[key] = rows;
   return rows;
 }
 
@@ -1949,6 +1977,7 @@ function afterSelect() {
 // mode='intra' → درون‌روزی (val = minutes, 0 = tick)
 // mode='daily' → روزانه    (val = days)
 function setTF(mode, val) {
+  stopLiveRefresh();   // always cancel any previous live-refresh first
   if (mode === 'intra') {
     itvMin = val;
     src    = 'intraday';
@@ -1968,6 +1997,7 @@ function setTF(mode, val) {
   cache = {};
   if (isIntra) {
     redraw();
+    if (val === -1) startLiveRefresh();  // ⚡ live mode — auto-refresh every 60 s
   } else {
     loadStats();
     redraw();
@@ -2101,7 +2131,7 @@ async function redraw() {
   // Update label
   const sym = [...selected][0] || '';
   document.getElementById('price-lbl').textContent =
-    src === 'intraday' && itvMin === -1 ? `${sym} — ⚡ snapshot (هر چند ثانیه)` :
+    src === 'intraday' && itvMin === -1 ? `${sym} — 🔴 زنده (دقیقه‌ای — تازه‌شونده هر ۶۰ ث)` :
     src === 'intraday' && itvMin === 0  ? `${sym} — تیک به تیک` :
     src === 'intraday' ? `${sym} — ${itvMin}m شمعی` :
     multi ? 'مقایسه — ' + [...selected].join(' / ') :

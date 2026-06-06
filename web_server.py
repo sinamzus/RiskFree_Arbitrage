@@ -527,6 +527,96 @@ def create_app(db, scan_callback=None):
             "nav": nav, "snapshots": out,
         })
 
+    @app.route("/api/live_intraday")
+    def api_live_intraday():
+        """Fetch today's live minute bars directly from TSETMC — no DB required.
+
+        Calls ``Trade/GetTradeIntraday/{insCode}`` (no date param — today only).
+        Auto-refreshable: each call hits TSETMC fresh so the browser can poll.
+
+        Query params:
+          symbol – fund symbol (required)
+
+        Returns {symbol, date, nav, fetched_at, bar_count, bars}
+        Each bar: {time (UTC unix), hhmmss, open, high, low, close, volume, premium_pct}
+        """
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        from data_fetcher import TSETMCFetcher
+        import sqlite3 as _sq
+
+        symbol = request.args.get("symbol", "")
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        # Get ins_code from latest snapshot or daily_history
+        latest_map = {r["symbol"]: r for r in db.get_latest()}
+        snap = latest_map.get(symbol, {})
+        ins_code = snap.get("ins_code", "")
+        if not ins_code:
+            conn = _sq.connect(db.path)
+            row = conn.execute(
+                "SELECT ins_code FROM daily_history "
+                "WHERE symbol=? AND ins_code!='' LIMIT 1",
+                (symbol,)
+            ).fetchone()
+            conn.close()
+            ins_code = row[0] if row else ""
+
+        if not ins_code:
+            return jsonify({"error": f"ins_code not found for {symbol}",
+                            "bars": [], "bar_count": 0}), 404
+
+        nav = snap.get("cancel_nav") or snap.get("nav") or 0
+
+        # Direct TSETMC fetch — no DB
+        tsetmc = TSETMCFetcher()
+        bars_raw = tsetmc.get_today_intraday_bars(ins_code)
+
+        tz = ZoneInfo("Asia/Tehran")
+        now = _dt.now(tz)
+        today_int = int(now.strftime("%Y%m%d"))
+        y, m, d = now.year, now.month, now.day
+
+        bars = []
+        for r in bars_raw:
+            heven = r.get("time", 0)
+            if not heven:
+                continue
+            hh = heven // 10000
+            mi = (heven % 10000) // 100
+            ss = heven % 100
+            if not (0 <= hh < 24 and 0 <= mi < 60 and 0 <= ss < 60):
+                continue
+            try:
+                unix_t = int(_dt(y, m, d, hh, mi, ss, tzinfo=tz).timestamp())
+            except Exception:
+                continue
+            close = r.get("close", 0) or 0
+            if close <= 0:
+                continue
+            prem = round((close - nav) / nav * 100, 4) if nav > 0 else None
+            bars.append({
+                "time":        unix_t,
+                "hhmmss":      heven,
+                "open":        r.get("open",   close),
+                "high":        r.get("high",   close),
+                "low":         r.get("low",    close),
+                "close":       close,
+                "volume":      r.get("volume", 0),
+                "premium_pct": prem,
+            })
+
+        logger.info("[live_intraday] %s → %d bars (ins=%s)", symbol, len(bars), ins_code)
+        return jsonify({
+            "symbol":     symbol,
+            "date":       today_int,
+            "nav":        nav,
+            "fetched_at": int(time.time()),
+            "bar_count":  len(bars),
+            "bars":       bars,
+        })
+
     @app.route("/api/client_type")
     def api_client_type():
         """Return individual (حقیقی) vs legal (حقوقی) money flow history.
