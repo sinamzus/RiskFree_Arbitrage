@@ -22,8 +22,12 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "tsetmc_analysis_output.txt"
 ANALYZER = ROOT / "tools" / "analyze_rizgheymat.py"
+VERIFIER = ROOT / "tools" / "verify_live.py"
+OUTPUTS = [
+    ROOT / "tsetmc_analysis_output.txt",
+    ROOT / "verify_live_output.txt",
+]
 
 
 def run(cmd, **kw):
@@ -32,35 +36,38 @@ def run(cmd, **kw):
 
 
 def main():
-    args = sys.argv[1:]  # عبور دادن insCode / تاریخ به آنالیزگر
+    args = sys.argv[1:]  # عبور دادن insCode / تاریخ به اسکریپت‌ها
 
-    # ۱) اجرای آنالیزگر
+    # ۱) اجرای آنالیزگر endpointها
     print("═" * 60)
-    print("مرحله ۱: اجرای آنالیز TSETMC ...")
+    print("مرحله ۱: آنالیز endpointهای TSETMC ...")
     print("═" * 60)
-    r = run([sys.executable, str(ANALYZER), *args])
-    if r.returncode != 0:
-        print("✗ اجرای آنالیزگر با خطا مواجه شد.")
+    run([sys.executable, str(ANALYZER), *args])
+
+    # ۲) اجرای تأیید مسیر کامل backend
+    print("\n" + "═" * 60)
+    print("مرحله ۲: تأیید مسیر دیتای زنده (کد واقعی backend) ...")
+    print("═" * 60)
+    run([sys.executable, str(VERIFIER), *args[:1]])  # فقط insCode
+
+    present = [p for p in OUTPUTS if p.exists()]
+    if not present:
+        print("✗ هیچ فایل خروجی‌ای ساخته نشد.")
         sys.exit(1)
+    for p in present:
+        print(f"✅ خروجی: {p.name}  ({p.stat().st_size:,} بایت)")
 
-    if not OUTPUT.exists():
-        print("✗ فایل خروجی ساخته نشد:", OUTPUT)
-        sys.exit(1)
-
-    size = OUTPUT.stat().st_size
-    print(f"\n✅ خروجی ساخته شد: {OUTPUT}  ({size:,} بایت)")
-
-    # ۲) برنچ فعلی
+    # برنچ فعلی
     br = run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
              capture_output=True, text=True)
     branch = br.stdout.strip() or "HEAD"
     print("برنچ فعلی:", branch)
 
-    # ۳) add + commit
+    # add + commit
     print("\n" + "═" * 60)
-    print("مرحله ۲: commit و push خروجی ...")
+    print("مرحله ۳: commit و push خروجی‌ها ...")
     print("═" * 60)
-    run(["git", "add", "-f", str(OUTPUT)])
+    run(["git", "add", "-f", *[str(p) for p in present]])
 
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     msg = f"analysis: TSETMC ریز قیمت output {stamp}"

@@ -116,6 +116,7 @@ class TSETMCFetcher:
         self.session = requests.Session()
         self.session.headers.update(REQUEST_HEADERS)
         self.session.headers["Referer"] = "https://www.tsetmc.com/"
+        self.session.headers["Origin"]  = "https://www.tsetmc.com"
         self._ins_code_cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------ #
