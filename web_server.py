@@ -807,6 +807,55 @@ def create_app(db, scan_callback=None):
         dates = db.get_ob_dates(symbol)
         return jsonify({"symbol": symbol, "dates": dates})
 
+    @app.route("/api/backtest")
+    def api_backtest():
+        """Backtest the long-only intraday round-trip strategy for *symbol*.
+
+        Query params:
+          symbol   – fund symbol (required)
+          start    – YYYYMMDD inclusive (optional)
+          end      – YYYYMMDD inclusive (optional)
+          capital  – max Rials per position (optional)
+          entry    – entry discount %  (optional, default 0.30)
+          exit     – exit premium %    (optional, default 0.30)
+          force_eod– "1"/"0" liquidate open positions at day end (default 1)
+        """
+        from backtest import run_backtest, BacktestParams
+
+        symbol = request.args.get("symbol", "")
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        def _int(name):
+            v = request.args.get(name, "")
+            return int(v) if v else None
+
+        def _float(name, default):
+            v = request.args.get(name, "")
+            try:
+                return float(v) if v != "" else default
+            except ValueError:
+                return default
+
+        params = BacktestParams(
+            capital=_float("capital", 1_000_000_000),
+            entry_discount_pct=_float("entry", 0.30),
+            exit_premium_pct=_float("exit", 0.30),
+            force_eod=request.args.get("force_eod", "1") != "0",
+        )
+
+        try:
+            result = run_backtest(db, symbol, _int("start"), _int("end"), params)
+        except Exception as e:
+            logger.exception("backtest failed for %s", symbol)
+            return jsonify({"error": str(e)}), 500
+
+        logger.info("[Backtest] %s: %d days, %d trades, net=%s",
+                    symbol, result["days_tested"],
+                    result["summary"]["trade_count"],
+                    result["summary"]["total_net_pnl"])
+        return jsonify(result)
+
     @app.route("/api/stream")
     def api_stream():
         """Server-Sent Events endpoint for real-time scan updates."""

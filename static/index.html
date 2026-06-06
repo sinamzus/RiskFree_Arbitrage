@@ -849,6 +849,102 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
 #loading.hidden { display: none; }
 #loading span { font-size: var(--fs-lg); color: var(--sub); font-weight: 500; }
+
+/* ─── Backtest modal ─────────────────────────────────────────── */
+#bt-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 100000;
+  align-items: center; justify-content: center;
+  padding: 20px;
+}
+#bt-overlay.visible { display: flex; }
+#bt-modal {
+  background: var(--surf);
+  border: 1px solid var(--brd2);
+  border-radius: 12px;
+  width: min(960px, 96vw);
+  max-height: 92vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 12px 48px rgba(0,0,0,.5);
+  overflow: hidden;
+}
+#bt-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--brd);
+  background: var(--surf2);
+}
+#bt-head .bt-title { font-size: var(--fs-lg); font-weight: 700; color: var(--txt); }
+#bt-head .bt-sub   { font-size: var(--fs-xs); color: var(--muted); }
+#bt-close {
+  margin-inline-start: auto;
+  background: none; border: none; color: var(--sub);
+  font-size: 22px; cursor: pointer; line-height: 1;
+}
+#bt-close:hover { color: var(--red); }
+#bt-body { padding: 16px 18px; overflow-y: auto; }
+
+/* controls grid */
+#bt-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px 14px;
+  margin-bottom: 14px;
+}
+.bt-field { display: flex; flex-direction: column; gap: 4px; }
+.bt-field label { font-size: var(--fs-xs); color: var(--sub); font-weight: 500; }
+.bt-field input, .bt-field select {
+  background: var(--bg); color: var(--txt);
+  border: 1px solid var(--brd2); border-radius: 6px;
+  padding: 6px 8px; font-size: var(--fs-sm);
+  font-family: var(--font);
+}
+.bt-field.chk { flex-direction: row; align-items: center; gap: 6px; padding-top: 18px; }
+#bt-run {
+  align-self: end;
+  background: var(--blue); color: #fff;
+  border: none; border-radius: 6px;
+  padding: 7px 16px; font-size: var(--fs-sm); font-weight: 600;
+  cursor: pointer; font-family: var(--font);
+}
+#bt-run:hover { filter: brightness(1.1); }
+#bt-run:disabled { opacity: .5; cursor: default; }
+
+/* summary cards */
+#bt-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 9px; margin-bottom: 14px;
+}
+.bt-card {
+  background: var(--surf2); border: 1px solid var(--brd);
+  border-radius: 8px; padding: 9px 11px;
+}
+.bt-card .bt-k { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+.bt-card .bt-v { font-size: var(--fs-lg); font-weight: 700; color: var(--txt);
+                 font-variant-numeric: tabular-nums; }
+.bt-card .bt-v.pos { color: var(--green); }
+.bt-card .bt-v.neg { color: var(--red); }
+
+/* trades table */
+#bt-trades { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+#bt-trades th, #bt-trades td {
+  padding: 5px 8px; text-align: center; white-space: nowrap;
+  border-bottom: 1px solid var(--brd);
+  font-variant-numeric: tabular-nums;
+}
+#bt-trades th { color: var(--muted); font-weight: 600; position: sticky; top: 0;
+                background: var(--surf); }
+#bt-trades td.pos { color: var(--green); }
+#bt-trades td.neg { color: var(--red); }
+.bt-tag { font-size: 9px; padding: 1px 6px; border-radius: 3px; }
+.bt-tag.signal { color: var(--green); background: rgba(38,166,154,.12); }
+.bt-tag.eod    { color: var(--yellow); background: rgba(240,192,64,.12); }
+#bt-empty { text-align: center; color: var(--muted); padding: 24px;
+            font-size: var(--fs-sm); }
+.bt-hint { font-size: var(--fs-xs); color: var(--muted); margin: 4px 0 12px; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -862,6 +958,58 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
 <div id="err-toast"><span id="err-msg"></span></div>
 <div id="loading"><div class="spin"></div><span>در حال بارگذاری ...</span></div>
+
+<!-- ═══════════════════════════════════ Backtest modal ══════════ -->
+<div id="bt-overlay" onclick="if(event.target===this)closeBacktest()">
+  <div id="bt-modal">
+    <div id="bt-head">
+      <span class="bt-title">🧪 بک‌تست استراتژی</span>
+      <span class="bt-sub">لانگ-اونلی · خرید در تخفیف، فروش در صرف · اجرای واقعی روی اردربوک تاریخی</span>
+      <button id="bt-close" onclick="closeBacktest()" title="بستن">×</button>
+    </div>
+    <div id="bt-body">
+      <div id="bt-controls">
+        <div class="bt-field">
+          <label>صندوق</label>
+          <select id="bt-symbol"></select>
+        </div>
+        <div class="bt-field">
+          <label>از تاریخ (YYYYMMDD)</label>
+          <input id="bt-start" type="text" placeholder="خالی = همه" inputmode="numeric">
+        </div>
+        <div class="bt-field">
+          <label>تا تاریخ (YYYYMMDD)</label>
+          <input id="bt-end" type="text" placeholder="خالی = همه" inputmode="numeric">
+        </div>
+        <div class="bt-field">
+          <label>سرمایه (ریال)</label>
+          <input id="bt-capital" type="number" value="1000000000">
+        </div>
+        <div class="bt-field">
+          <label>آستانه تخفیف ورود ٪</label>
+          <input id="bt-entry" type="number" step="0.05" value="0.30">
+        </div>
+        <div class="bt-field">
+          <label>آستانه صرف خروج ٪</label>
+          <input id="bt-exit" type="number" step="0.05" value="0.30">
+        </div>
+        <div class="bt-field chk">
+          <input id="bt-eod" type="checkbox" checked>
+          <label for="bt-eod">بستن در پایان روز</label>
+        </div>
+        <button id="bt-run" onclick="runBacktest()">اجرا ▸</button>
+      </div>
+      <div class="bt-hint">
+        موتور هر کندل اردربوک روز را مرور می‌کند: وقتی بهترین فروشنده زیر
+        NAV×(۱−تخفیف) باشد به‌اندازه‌ی حجم واقعی صف فروش (و سقف سرمایه) می‌خرد،
+        و وقتی بهترین خریدار بالای NAV×(۱+صرف) برود به‌اندازه‌ی حجم واقعی صف خرید
+        می‌فروشد. کارمزد خرید و فروش لحاظ می‌شود.
+      </div>
+      <div id="bt-summary"></div>
+      <div id="bt-result"></div>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════════════════════════════════ Header ═══════ -->
 <div id="header">
@@ -911,7 +1059,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <span id="sel-badge"></span>
   <span id="last-scan">—</span>
   <button id="theme-btn" onclick="toggleTheme()" title="حالت روز / شب">☀️</button>
-  <button class="scan-btn" onclick="triggerScan()">🔄 اسکن</button>
+  <button class="scan-btn" id="bt-open-btn" onclick="openBacktest()" title="بک‌تست استراتژی روی اردربوک تاریخی">🧪 بک‌تست</button>
+  <button class="scan-btn" id="scan-btn-main" onclick="triggerScan()">🔄 اسکن</button>
 </div>
 
 <!-- ═══════════════════════════════════════════ App ══════════ -->
@@ -2898,10 +3047,137 @@ function pct(v)  { return (v>=0?'+':'') + (v||0).toFixed(3) + '%'; }
 function E(s)    { return encodeURIComponent(s); }
 
 async function triggerScan() {
-  const btn = document.querySelector('.scan-btn');
+  const btn = document.getElementById('scan-btn-main');
   btn.disabled = true; btn.textContent = '⏳ ...';
   try { await fetch('/api/scan', { method:'POST' }); } catch(e) {}
   setTimeout(() => { btn.disabled=false; btn.textContent='🔄 اسکن'; }, 4000);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Backtest
+// ══════════════════════════════════════════════════════════════════
+function openBacktest() {
+  // Populate the fund dropdown from the loaded fund list (fallback: config order)
+  const sel = document.getElementById('bt-symbol');
+  const syms = (latestFunds.length ? latestFunds.map(f => f.symbol)
+                                   : [...selected]);
+  if (sel.options.length === 0 || sel.dataset.count != syms.length) {
+    sel.innerHTML = syms.map(s => `<option value="${s}">${s}</option>`).join('');
+    sel.dataset.count = syms.length;
+  }
+  // Default to the currently-selected symbol if any
+  const cur = [...selected][0];
+  if (cur && syms.includes(cur)) sel.value = cur;
+  document.getElementById('bt-overlay').classList.add('visible');
+}
+
+function closeBacktest() {
+  document.getElementById('bt-overlay').classList.remove('visible');
+}
+
+async function runBacktest() {
+  const sym = document.getElementById('bt-symbol').value;
+  if (!sym) { showError('صندوقی انتخاب نشده'); return; }
+
+  const q = new URLSearchParams({ symbol: sym });
+  const start   = document.getElementById('bt-start').value.trim();
+  const end     = document.getElementById('bt-end').value.trim();
+  const capital = document.getElementById('bt-capital').value.trim();
+  const entry   = document.getElementById('bt-entry').value.trim();
+  const exit    = document.getElementById('bt-exit').value.trim();
+  if (start)   q.set('start', start);
+  if (end)     q.set('end', end);
+  if (capital) q.set('capital', capital);
+  if (entry)   q.set('entry', entry);
+  if (exit)    q.set('exit', exit);
+  q.set('force_eod', document.getElementById('bt-eod').checked ? '1' : '0');
+
+  const btn = document.getElementById('bt-run');
+  btn.disabled = true; btn.textContent = '⏳ ...';
+  document.getElementById('bt-summary').innerHTML = '';
+  document.getElementById('bt-result').innerHTML =
+    '<div id="bt-empty">در حال اجرا روی اردربوک تاریخی ...</div>';
+
+  try {
+    const r = await fetch('/api/backtest?' + q.toString()).catch(() => null);
+    if (!r?.ok) {
+      const j = r ? await r.json().catch(()=>({})) : {};
+      throw new Error(j.error || 'خطا در اجرای بک‌تست');
+    }
+    renderBacktest(await r.json());
+  } catch (e) {
+    showError(e.message || 'خطا در اجرای بک‌تست');
+    document.getElementById('bt-result').innerHTML =
+      `<div id="bt-empty">${e.message || 'خطا'}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'اجرا ▸';
+  }
+}
+
+function _btTime(t) {
+  const s = String(t).padStart(6, '0');
+  return `${s.slice(0,2)}:${s.slice(2,4)}:${s.slice(4,6)}`;
+}
+function _btDate(d) {
+  const s = String(d);
+  const [jy, jm, jd] = gregorianToJalali(+s.slice(0,4), +s.slice(4,6), +s.slice(6,8));
+  const p2 = n => String(n).padStart(2,'0');
+  return `${jy}/${p2(jm)}/${p2(jd)}`;
+}
+
+function renderBacktest(res) {
+  const s = res.summary || {};
+  const sgn = v => (v > 0 ? 'pos' : v < 0 ? 'neg' : '');
+
+  // ── Summary cards ─────────────────────────────────────────────────
+  const cards = [
+    ['تعداد معامله', (s.trade_count||0).toLocaleString('fa-IR'), ''],
+    ['نرخ برد', (s.win_rate||0) + '٪', sgn((s.win_rate||0)-50)],
+    ['سود/زیان خالص', fmtN(s.total_net_pnl) + ' ریال', sgn(s.total_net_pnl)],
+    ['بازده کل', pct(s.total_return_pct), sgn(s.total_return_pct)],
+    ['میانگین هر معامله', pct(s.avg_net_pct), sgn(s.avg_net_pct)],
+    ['بهترین / بدترین', pct(s.best_pct) + ' / ' + pct(s.worst_pct), ''],
+    ['میانگین نگه‌داری', (s.avg_hold_min||0) + ' دق', ''],
+    ['کارمزد کل', fmtN(s.total_fees) + ' ریال', 'neg'],
+    ['بسته‌شده در پایان روز', (s.eod_count||0).toLocaleString('fa-IR'), ''],
+    ['روزهای آزمون', (res.days_tested||0).toLocaleString('fa-IR'), ''],
+  ];
+  document.getElementById('bt-summary').innerHTML = cards.map(([k,v,c]) =>
+    `<div class="bt-card"><div class="bt-k">${k}</div><div class="bt-v ${c}">${v}</div></div>`
+  ).join('');
+
+  // ── Trades table ──────────────────────────────────────────────────
+  const trades = res.trades || [];
+  if (!trades.length) {
+    document.getElementById('bt-result').innerHTML =
+      `<div id="bt-empty">هیچ معامله‌ی قابل‌اجرایی با این پارامترها پیدا نشد.
+       ${res.days_tested ? '' : 'برای این صندوق اردربوک تاریخی موجود نیست — ابتدا bootstrap را اجرا کنید.'}</div>`;
+    return;
+  }
+
+  const rows = trades.map(t => `
+    <tr>
+      <td>${_btDate(t.date)}</td>
+      <td>${_btTime(t.entry_time)}</td>
+      <td>${fmtN(t.entry_price)}</td>
+      <td>${_btTime(t.exit_time)}</td>
+      <td>${fmtN(t.exit_price)}</td>
+      <td>${(t.volume||0).toLocaleString('fa-IR')}</td>
+      <td>${fmtN(t.nav)}</td>
+      <td class="${sgn(t.net_pnl)}">${fmtN(t.net_pnl)}</td>
+      <td class="${sgn(t.net_pct)}">${pct(t.net_pct)}</td>
+      <td><span class="bt-tag ${t.exit_reason}">${t.exit_reason === 'eod' ? 'پایان روز' : 'سیگنال'}</span></td>
+    </tr>`).join('');
+
+  document.getElementById('bt-result').innerHTML = `
+    <table id="bt-trades">
+      <thead><tr>
+        <th>تاریخ</th><th>ساعت خرید</th><th>قیمت خرید</th>
+        <th>ساعت فروش</th><th>قیمت فروش</th><th>حجم</th><th>NAV</th>
+        <th>سود/زیان (ریال)</th><th>بازده٪</th><th>نوع خروج</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 </script>
 </body>
