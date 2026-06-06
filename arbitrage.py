@@ -15,6 +15,7 @@ from config import (
     MIN_DAILY_VOLUME,
 )
 from intraday_context import IntraydayContext, qualify_signal
+from orderbook import compute_tradability
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,6 @@ def analyze_fund(fund_data: dict) -> Optional["ArbitrageOpportunity"]:
     td = fund_data.get("tradability")
     if td is None and order_book:
         # Compute on-the-fly if main.py didn't pre-compute it
-        from orderbook import compute_tradability
         nav_for_arb = cancel_nav if signal in ("BUY", "BUY_WEAK") else issue_nav
         if nav_for_arb > 0:
             dir_ = "BUY" if signal in ("BUY", "BUY_WEAK") else "SELL"

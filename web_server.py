@@ -456,22 +456,8 @@ def create_app(db, scan_callback=None):
             return jsonify({"error": "symbol required"}), 400
 
         # Determine which dates have snapshot data
-        import sqlite3 as _sq
-        conn = _sq.connect(db.path)
-        conn.row_factory = _sq.Row
-        if date_str:
-            avail = [r[0] for r in conn.execute(
-                "SELECT DISTINCT date FROM intraday_price_history "
-                "WHERE symbol=? AND date<=? ORDER BY date ASC",
-                (symbol, int(date_str))
-            ).fetchall()]
-        else:
-            avail = [r[0] for r in conn.execute(
-                "SELECT DISTINCT date FROM intraday_price_history "
-                "WHERE symbol=? ORDER BY date ASC",
-                (symbol,)
-            ).fetchall()]
-        conn.close()
+        up_to = int(date_str) if date_str else None
+        avail = db.get_intraday_snapshot_dates(symbol, up_to)
 
         if not avail:
             return jsonify({"symbol": symbol, "days": days_back,
@@ -549,7 +535,6 @@ def create_app(db, scan_callback=None):
         from datetime import datetime as _dt
         from data_fetcher import TSETMCFetcher
         from config import FIXED_INCOME_ETFS
-        import sqlite3 as _sq
 
         symbol   = request.args.get("symbol", "")
         interval = int(request.args.get("interval", 1) or 1)
@@ -569,13 +554,7 @@ def create_app(db, scan_callback=None):
         if not ins_code:
             ins_code = snap.get("ins_code", "") or ""
         if not ins_code:
-            conn = _sq.connect(db.path)
-            row = conn.execute(
-                "SELECT ins_code FROM daily_history "
-                "WHERE symbol=? AND ins_code!='' LIMIT 1", (symbol,)
-            ).fetchone()
-            conn.close()
-            ins_code = row[0] if row else ""
+            ins_code = db.get_ins_code(symbol) or ""
         if not ins_code:
             return jsonify({"error": f"ins_code not found for {symbol}",
                             "bars": [], "bar_count": 0}), 404
@@ -687,28 +666,11 @@ def create_app(db, scan_callback=None):
         if not symbol:
             return jsonify({"error": "symbol required"}), 400
 
-        import sqlite3 as _sq
-        conn = _sq.connect(db.path)
-        conn.row_factory = _sq.Row
-        if date_str:
-            anchor = int(date_str)
-            rows = conn.execute(
-                "SELECT * FROM client_type_daily "
-                "WHERE symbol=? AND date<=? "
-                "ORDER BY date DESC LIMIT ?",
-                (symbol, anchor, days_back)
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM client_type_daily "
-                "WHERE symbol=? ORDER BY date DESC LIMIT ?",
-                (symbol, days_back)
-            ).fetchall()
-        conn.close()
+        anchor = int(date_str) if date_str else None
+        rows = db.get_client_type_history(symbol, days_back, anchor)
 
         history = []
-        for r in reversed(rows):
-            d = dict(r)
+        for d in rows:
             d["net_i_val"] = d["buy_i_val"] - d["sell_i_val"]
             d["net_n_val"] = d["buy_n_val"] - d["sell_n_val"]
             d["net_i_vol"] = d["buy_i_vol"] - d["sell_i_vol"]

@@ -920,6 +920,60 @@ CREATE INDEX IF NOT EXISTS ix_ctd_date ON client_type_daily(date);
             ).fetchone()
         return dict(row) if row else None
 
+    def get_ins_code(self, symbol: str) -> Optional[str]:
+        """Return the most recent ins_code for *symbol* from daily_history, or None."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT ins_code FROM daily_history "
+                "WHERE symbol=? AND ins_code!='' LIMIT 1",
+                (symbol,),
+            ).fetchone()
+        return row["ins_code"] if row else None
+
+    def get_intraday_snapshot_dates(self, symbol: str,
+                                    up_to: Optional[int] = None) -> list[int]:
+        """Return sorted list of dates with intraday_price_history data for *symbol*.
+
+        If *up_to* is given (YYYYMMDD int) only dates <= up_to are returned.
+        """
+        with self._conn() as conn:
+            if up_to is not None:
+                rows = conn.execute(
+                    "SELECT DISTINCT date FROM intraday_price_history "
+                    "WHERE symbol=? AND date<=? ORDER BY date ASC",
+                    (symbol, up_to),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT DISTINCT date FROM intraday_price_history "
+                    "WHERE symbol=? ORDER BY date ASC",
+                    (symbol,),
+                ).fetchall()
+        return [r["date"] for r in rows]
+
+    def get_client_type_history(self, symbol: str, days: int = 30,
+                                anchor_date: Optional[int] = None) -> list[dict]:
+        """Return up to *days* rows from client_type_daily for *symbol*.
+
+        Rows are returned in ascending date order.
+        If *anchor_date* is given, only rows with date <= anchor_date are returned.
+        """
+        with self._conn() as conn:
+            if anchor_date is not None:
+                rows = conn.execute(
+                    "SELECT * FROM client_type_daily "
+                    "WHERE symbol=? AND date<=? "
+                    "ORDER BY date DESC LIMIT ?",
+                    (symbol, anchor_date, days),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM client_type_daily "
+                    "WHERE symbol=? ORDER BY date DESC LIMIT ?",
+                    (symbol, days),
+                ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
     def get_orderbook_history(self, symbol: str,
                               date_int: int,
                               limit: int = 500) -> list[dict]:

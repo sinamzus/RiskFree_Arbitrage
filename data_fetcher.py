@@ -124,27 +124,38 @@ class TSETMCFetcher:
     # ------------------------------------------------------------------ #
 
     def _get(self, url: str, silent: bool = False,
-             html: bool = False) -> Optional[dict | str]:
-        """Fetch *url*.
+             html: bool = False, retries: int = 3) -> Optional[dict | str]:
+        """Fetch *url* with exponential-backoff retries.
 
         Returns parsed JSON dict by default.
         When *html=True* returns the raw response text (string).
-        Returns None on any error.
+        Returns None on any error after all retries are exhausted.
         """
-        try:
-            resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            if html:
-                return resp.text
-            return resp.json()
-        except requests.exceptions.RequestException as e:
-            if not silent:
-                logger.warning("TSETMC request failed for %s: %s", url, e)
-            return None
-        except ValueError:
-            if not silent:
-                logger.warning("Invalid JSON from %s", url)
-            return None
+        delay = 1.0
+        for attempt in range(retries + 1):
+            try:
+                resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
+                resp.raise_for_status()
+                if html:
+                    return resp.text
+                return resp.json()
+            except requests.exceptions.RequestException as e:
+                if attempt < retries:
+                    logger.debug(
+                        "TSETMC request failed (attempt %d/%d) %s: %s — retrying in %.0fs",
+                        attempt + 1, retries + 1, url, e, delay,
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    if not silent:
+                        logger.warning("TSETMC request failed for %s: %s", url, e)
+                    return None
+            except ValueError:
+                if not silent:
+                    logger.warning("Invalid JSON from %s", url)
+                return None
+        return None
 
     # ------------------------------------------------------------------ #
     #  Instrument discovery                                                #

@@ -381,6 +381,22 @@ html, body {
   pointer-events: none; z-index: 3;
   font-weight: 500;
 }
+#chart-loading {
+  display: none;
+  position: absolute;
+  inset: 0; z-index: 10;
+  align-items: center; justify-content: center;
+  background: rgba(19,23,34,.55);
+  pointer-events: none;
+}
+#chart-loading.active { display: flex; }
+#chart-loading .cl-spin {
+  width: 22px; height: 22px;
+  border: 2px solid var(--brd);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
 
 /* ─── Bootstrap notice ───────────────────────────────────────── */
 #boot-notice {
@@ -789,6 +805,32 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .fi-exec.yes { color: var(--green); }
 .fi-exec.no  { color: var(--red); }
 
+/* ─── Error toast ────────────────────────────────────────────── */
+#err-toast {
+  display: none;
+  position: fixed;
+  bottom: 16px; right: 16px;
+  background: rgba(239,83,80,.12);
+  border: 1px solid rgba(239,83,80,.35);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: var(--fs-sm);
+  color: var(--red);
+  z-index: 99999;
+  max-width: 320px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+  animation: err-fade 4s ease forwards;
+}
+#err-toast.visible { display: flex; }
+@keyframes err-fade {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* ─── Loading overlay ────────────────────────────────────────── */
 #loading {
   position: fixed; inset: 0;
@@ -818,6 +860,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <span id="bootstrap-msg">در حال بارگذاری تاریخچه ...</span>
 </div>
 
+<div id="err-toast"><span id="err-msg"></span></div>
 <div id="loading"><div class="spin"></div><span>در حال بارگذاری ...</span></div>
 
 <!-- ═══════════════════════════════════════════ Header ═══════ -->
@@ -967,6 +1010,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <!-- Charts -->
       <div id="charts">
         <div id="price-el">
+          <div id="chart-loading"><div class="cl-spin"></div></div>
           <div class="chart-lbl" id="price-lbl">قیمت + NAV</div>
           <div class="chart-lbl" id="click-hint" style="left:12px;right:auto;color:rgba(255,255,255,.18);font-size:9px;pointer-events:none">
             کلیک روی کندل ← OB تاریخی
@@ -1059,6 +1103,7 @@ let selected    = new Set();
 let days        = 30;
 let src         = 'daily';         // 'daily' | 'scan' | 'intraday'
 let ctype       = 'candle';        // 'candle' | 'line'
+const LIVE_ITV  = -1;              // sentinel: live 1-min streaming mode
 let itvMin      = 5;               // intraday interval minutes
 let intraDays   = 5;               // intraday lookback in trading days
 let syncing     = false;
@@ -1078,6 +1123,20 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(() => { if (selected.size===1) loadOrderBook([...selected][0]); }, 30_000);
   window.addEventListener('resize', onResize);
 });
+
+// ══════════════════════════════════════════════════════════════════
+//  Error toast
+// ══════════════════════════════════════════════════════════════════
+let _errTimer = null;
+function showError(msg) {
+  const t = document.getElementById('err-toast');
+  document.getElementById('err-msg').textContent = msg;
+  t.classList.remove('visible');
+  void t.offsetWidth;  // reflow to restart animation
+  t.classList.add('visible');
+  clearTimeout(_errTimer);
+  _errTimer = setTimeout(() => t.classList.remove('visible'), 4200);
+}
 
 // ══════════════════════════════════════════════════════════════════
 //  Theme (light / dark)
@@ -1327,7 +1386,7 @@ let liveMeta  = null;   // {count, spot, source, at} from last /api/live_intrada
 function startLiveRefresh() {
   stopLiveRefresh();
   liveTimer = setInterval(() => {
-    if (src === 'intraday' && itvMin === -1) redraw();
+    if (src === 'intraday' && itvMin === LIVE_ITV) redraw();
   }, 30_000);
 }
 function stopLiveRefresh() {
@@ -1337,7 +1396,7 @@ function stopLiveRefresh() {
 async function fetchRows(sym) {
   const key = `${sym}_${src}_${days}_${itvMin}_${intraDays}`;
   // Live mode: never serve from cache — always hit TSETMC fresh
-  if (itvMin !== -1 && cache[key]) return cache[key];
+  if (itvMin !== LIVE_ITV && cache[key]) return cache[key];
 
   let rows = [];
   let noCache = false;
@@ -1345,16 +1404,18 @@ async function fetchRows(sym) {
   if (src === 'daily') {
     const r = await fetch(`/api/daily_history?symbol=${E(sym)}&days=${days}`).catch(()=>null);
     if (r?.ok) { const j = await r.json(); rows = j.history || []; }
+    else if (!r) showError('خطا در دریافت تاریخچه روزانه');
     document.getElementById('boot-notice').style.display = rows.length ? 'none' : '';
 
   } else if (src === 'scan') {
     const r = await fetch(`/api/history?symbol=${E(sym)}&days=${days}`).catch(()=>null);
     if (r?.ok) { const j = await r.json(); rows = j.history || []; }
+    else if (!r) showError('خطا در دریافت تاریخچه اسکن');
     document.getElementById('boot-notice').style.display = 'none';
 
   } else {
     // intraday — multi-day, snapshot/tick/bar mode
-    if (itvMin === -1) {
+    if (itvMin === LIVE_ITV) {
       // ── Live mode: fetch today's minute bars directly from TSETMC ──────
       noCache = true;
       const r = await fetch(`/api/live_intraday?symbol=${E(sym)}`).catch(()=>null);
@@ -1364,6 +1425,8 @@ async function fetchRows(sym) {
         if (j.nav) navCache[sym] = j.nav;
         liveMeta = { count: j.bar_count || rows.length, spot: j.spot || 0,
                      source: j.source || '', at: new Date() };
+      } else if (!r) {
+        showError('خطا در اتصال به سرور — دیتای زنده در دسترس نیست');
       }
       // Fallback: market is closed → show last available day's snapshots from DB
       if (!rows.length) {
@@ -1394,7 +1457,7 @@ async function fetchRows(sym) {
         const j = await r.json();
         rows = j.ticks || [];
         if (j.nav) navCache[sym] = j.nav;
-      }
+      } else if (!r) showError('خطا در دریافت تیک‌های درون‌روز');
     } else {
       const r = await fetch(
         `/api/intraday_bars?symbol=${E(sym)}&days=${intraDays}&interval=${itvMin}`
@@ -1403,7 +1466,7 @@ async function fetchRows(sym) {
         const j = await r.json();
         rows = j.bars || [];
         if (j.nav) navCache[sym] = j.nav;
-      }
+      } else if (!r) showError('خطا در دریافت کندل‌های درون‌روز');
     }
     if (!rows.length) document.getElementById('boot-notice').style.display = '';
     else              document.getElementById('boot-notice').style.display = 'none';
@@ -1993,7 +2056,7 @@ function setTF(mode, val) {
   const isIntra = src === 'intraday';
 
   // Highlight the active pill (live mode's button uses data-tf="intra-snap")
-  const tfKey = (mode === 'intra' && val === -1) ? 'intra-snap' : mode + '-' + val;
+  const tfKey = (mode === 'intra' && val === LIVE_ITV) ? 'intra-snap' : mode + '-' + val;
   document.querySelectorAll('#tf-grp .pill').forEach(b =>
     b.classList.toggle('on', b.dataset.tf === tfKey)
   );
@@ -2003,7 +2066,7 @@ function setTF(mode, val) {
   cache = {};
   if (isIntra) {
     redraw();
-    if (val === -1) startLiveRefresh();  // ⚡ live mode — auto-refresh every 30 s
+    if (val === LIVE_ITV) startLiveRefresh();  // ⚡ live mode — auto-refresh every 30 s
   } else {
     loadStats();
     redraw();
@@ -2096,6 +2159,9 @@ async function redraw() {
   const doNorm   = document.getElementById('opt-norm').checked;
   const multi    = selected.size > 1;
 
+  const _cl = document.getElementById('chart-loading');
+  _cl.classList.add('active');
+
   let anyData = false, ci = 0;
 
   for (const sym of selected) {
@@ -2136,17 +2202,19 @@ async function redraw() {
 
   // Update label
   const sym = [...selected][0] || '';
-  const _liveInfo = (src === 'intraday' && itvMin === -1 && liveMeta)
+  const _liveInfo = (src === 'intraday' && itvMin === LIVE_ITV && liveMeta)
     ? ` · ${(liveMeta.count||0).toLocaleString('fa-IR')} کندل`
       + (liveMeta.spot ? ` · قیمت ${fmtN(liveMeta.spot)}` : '')
       + ` · ${liveMeta.at.toLocaleTimeString('fa-IR')}`
     : '';
   document.getElementById('price-lbl').textContent =
-    src === 'intraday' && itvMin === -1 ? `${sym} — 🔴 زنده${_liveInfo}` :
+    src === 'intraday' && itvMin === LIVE_ITV ? `${sym} — 🔴 زنده${_liveInfo}` :
     src === 'intraday' && itvMin === 0  ? `${sym} — تیک به تیک` :
     src === 'intraday' ? `${sym} — ${itvMin}m شمعی` :
     multi ? 'مقایسه — ' + [...selected].join(' / ') :
     sym + (src === 'daily' ? ' — قیمت + NAV' : ' — اسکن');
+
+  _cl.classList.remove('active');
 
   if (selected.size === 1) {
     updateInfoDefault(sym, await fetchRows(sym));

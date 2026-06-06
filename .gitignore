@@ -1,17 +1,50 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
-*.csv
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
 .env
 venv/
+.venv/
+env/
+
+# IDEs
 .idea/
 .vscode/
+*.swp
+*.swo
 
-logs/
-data/arbitrage.db
+# Data / DB
 data/
-tools/raw/
-tools/tsetmc_history_*.html
-logs/ob_debug_*.txt
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+logs/
+*.log
+scan.log
+ob_debug.txt
+
+# Large analysis artifacts
+intraday_full.json
+intraday_full.txt
+tsetmc_*.json
+tsetmc_*.txt
 tsetmc_analysis_output.txt
 verify_live_output.txt
+*_report.txt
+*_output.txt
+
+# Temporary / debug
+tools/raw/
+tools/archive/
+tools/tsetmc_history_*.html
+*.tmp
+*.bak
