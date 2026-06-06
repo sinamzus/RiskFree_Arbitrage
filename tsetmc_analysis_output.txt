@@ -2,7 +2,7 @@
   آنالیز TSETMC — جستجوی منبع جدول «ریز قیمت» درون‌روز
   insCode = 3846143218462419
   تاریخ امروز (YYYYMMDD) = 20260606
-  زمان اجرا = 2026-06-06 10:48:09
+  زمان اجرا = 2026-06-06 10:48:27
 ╚════════════════════════════════════════════════════════════════════╝
 
 ══════════════════════════════════════════════════════════════════════
@@ -10,8 +10,8 @@
   URL: https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceInfo/3846143218462419
   وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 626
     نوع: dict | کلیدها: ['closingPriceInfo']
-    dict 'closingPriceInfo': {"instrumentState": {"idn": 0, "dEven": 0, "hEven": 0, "insCode": null, "lVal18AFC": null, "lVal30": null, "cEtaval": "A ", "realHeven": 0, "underSupervision": 0, "cEtavalTitle": "مجاز"}, "instrument": null, "lastHEven": 104756, "finalLastDate": 20260606, "nvt": 0.0, "mop": 0, "pRedTran": 0.0, "thir
-    ⏱ تعداد رکورد زمان‌دار: 2 | اولین: 00:00:00 | آخرین: 10:47:56
+    dict 'closingPriceInfo': {"instrumentState": {"idn": 0, "dEven": 0, "hEven": 0, "insCode": null, "lVal18AFC": null, "lVal30": null, "cEtaval": "A ", "realHeven": 0, "underSupervision": 0, "cEtavalTitle": "مجاز"}, "instrument": null, "lastHEven": 104818, "finalLastDate": 20260606, "nvt": 0.0, "mop": 0, "pRedTran": 0.0, "thir
+    ⏱ تعداد رکورد زمان‌دار: 2 | اولین: 00:00:00 | آخرین: 10:48:18
 
 ══════════════════════════════════════════════════════════════════════
 ► ClosingPriceHistory/{today}
@@ -31,8 +31,8 @@
   URL: https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDaily/3846143218462419/20260606
   وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 351
     نوع: dict | کلیدها: ['closingPriceDaily']
-    dict 'closingPriceDaily': {"priceChange": 68.0, "priceMin": 48928.0, "priceMax": 48930.0, "priceYesterday": 48861.0, "priceFirst": 48928.0, "last": false, "id": 0, "insCode": "3846143218462419", "dEven": 20260606, "hEven": 104756, "pClosing": 48928.0, "iClose": false, "yClose": true, "pDrCotVal": 48929.0, "zTotTran": 4512.0,
-    ⏱ تعداد رکورد زمان‌دار: 1 | اولین: 10:47:56 | آخرین: 10:47:56
+    dict 'closingPriceDaily': {"priceChange": 67.0, "priceMin": 48928.0, "priceMax": 48930.0, "priceYesterday": 48861.0, "priceFirst": 48928.0, "last": false, "id": 0, "insCode": "3846143218462419", "dEven": 20260606, "hEven": 104821, "pClosing": 48928.0, "iClose": false, "yClose": true, "pDrCotVal": 48928.0, "zTotTran": 4520.0,
+    ⏱ تعداد رکورد زمان‌دار: 1 | اولین: 10:48:21 | آخرین: 10:48:21
 
 ══════════════════════════════════════════════════════════════════════
 ► Trade/GetTrade (تیک‌های امروز)
@@ -74,7 +74,7 @@
   وضعیت: 200 | نوع محتوا: application/json; charset=utf-8 | طول: 742
     نوع: dict | کلیدها: ['bestLimits']
     لیست 'bestLimits': 5 ردیف
-      ردیف اول: {"number": 1, "qTitMeDem": 298587415, "zOrdMeDem": 34, "pMeDem": 48928.0, "pMeOf": 48929.0, "zOrdMeOf": 15, "qTitMeOf": 16183616, "title": null, "insCode": null}
+      ردیف اول: {"number": 1, "qTitMeDem": 298376712, "zOrdMeDem": 32, "pMeDem": 48928.0, "pMeOf": 48929.0, "zOrdMeOf": 16, "qTitMeOf": 16185616, "title": null, "insCode": null}
       ردیف آخر: {"number": 5, "qTitMeDem": 1000000, "zOrdMeDem": 1, "pMeDem": 48924.0, "pMeOf": 48933.0, "zOrdMeOf": 5, "qTitMeOf": 1017953, "title": null, "insCode": null}
 
 ══════════════════════════════════════════════════════════════════════
