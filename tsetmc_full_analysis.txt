@@ -1,0 +1,615 @@
+TSETMC Comprehensive API Explorer
+Symbol: کیان   insCode: 53251602435454519
+Today: 20260606   Yesterday: 20260605   Last trade date in DB: 20260526
+Time: 2026-06-06 09:21:11
+
+════════════════════════════════════════════════════════════════════════════
+  A. ClosingPrice — قیمت و تاریخچه روزانه
+════════════════════════════════════════════════════════════════════════════
+
+  ── A1. GetClosingPriceInfo (live OHLCV + embedded fields) ──
+  ✓  [200]   225ms  A1.GetClosingPriceInfo  keys=['closingPriceInfo']  [closingPriceInfo]=dict(25)
+         'closingPriceInfo'               → dict(25 keys)
+        'instrumentState'              → dict(10 keys)
+            'idn'                          → number  = 0
+            'dEven'                        → number  = 0
+            'hEve
+         ALL fields in closingPriceInfo:
+           'instrumentState'              = {'idn': 0, 'dEven': 0, 'hEven': 0, 'insCode': None, 'lVal18AFC': None, 'lVal30':
+           'instrument'                   = None
+           'lastHEven'                    = 92059
+           'finalLastDate'                = 20260606
+           'nvt'                          = 0.0
+           'mop'                          = 0
+           'pRedTran'                     = 0.0
+           'thirtyDayClosingHistory'      = None
+           'priceChange'                  = 0.0
+           'priceMin'                     = 101437.0
+           'priceMax'                     = 101438.0
+           'priceYesterday'               = 101314.0
+           'priceFirst'                   = 101438.0
+           'last'                         = False
+           'id'                           = 0
+           'insCode'                      = '0'
+           'dEven'                        = 20260606
+           'hEven'                        = 92059
+           'pClosing'                     = 101437.0
+           'iClose'                       = False
+           'yClose'                       = False
+           'pDrCotVal'                    = 101438.0
+           'zTotTran'                     = 1274.0
+           'qTotTran5J'                   = 13301044.0
+           'qTotCap'                      = 1349220739134.0
+         >> nested 'instrument':
+         >> nested 'instrumentState':
+              'idn'                        = 0
+              'dEven'                      = 0
+              'hEven'                      = 0
+              'insCode'                    = None
+              'lVal18AFC'                  = None
+              'lVal30'                     = None
+              'cEtaval'                    = 'A '
+              'realHeven'                  = 0
+              'underSupervision'           = 0
+              'cEtavalTitle'               = 'مجاز'
+         >> nested 'thirtyDayClosingHistory':
+
+  ── A2. GetClosingPriceDailyList (N-day OHLCV bars) ──
+  ✓  [200]    12ms  A2.GetClosingPriceDailyList.30  keys=['closingPriceDaily']  [closingPriceDaily]=30 rows
+         'closingPriceDaily'              → list[30]  item_keys=['priceChange', 'priceMin', 'priceMax', 'priceYesterday', 'priceFirst', 'last', 'id', 'insCode', 'dEven', 'hEven', 'pClosing', 'iClose', 'yClose', 'pDrCotVal', 'zTotTran', 'qTotTra
+  ✓  [200]    33ms  A2.GetClosingPriceDailyList.365  keys=['closingPriceDaily']  [closingPriceDaily]=365 rows
+         'closingPriceDaily'              → list[365]  item_keys=['priceChange', 'priceMin', 'priceMax', 'priceYesterday', 'priceFirst', 'last', 'id', 'insCode', 'dEven', 'hEven', 'pClosing', 'iClose', 'yClose', 'pDrCotVal', 'zTotTran', 'qTotTr
+
+  ── A3. GetLastPriceHistory (date-range price history) ──
+  ✗  [404]     9ms  A3.GetLastPriceHistory.today
+  ✗  [404]    10ms  A3.GetLastPriceHistory.range
+
+  ── A4. GetClosingPriceHistory (by count) ──
+  ✓  [200]   100ms  A4.GetClosingPriceHistory.30  keys=['closingPriceHistory']  [closingPriceHistory]=0 rows
+         'closingPriceHistory'            → list[]  (empty)
+
+  ── A5. GetShareholderInfo (سهامداران عمده) ──
+  ✗  [404]     8ms  A5.GetShareholderInfo
+  ✗  [404]     9ms  A5.GetShareholderInfo.with_date
+
+  ── A6. GetIndexB1History / GetIndexB2History ──
+  ✗  [404]    10ms  A6.GetIndexB1History.30
+  ✓  [200]    10ms  A6.GetIndexB2History.30  keys=['indexB2']  [indexB2]=0 rows
+         'indexB2'                        → list[]  (empty)
+  ✓  [200]    10ms  A6.GetIndexHistory  keys=['indexB2']  [indexB2]=0 rows
+         'indexB2'                        → list[]  (empty)
+
+  ── A7. GetDailyInfoHistory (اطلاعات روزانه جامع) ──
+  ✗  [404]     8ms  A7.GetDailyInfoHistory
+  ✗  [404]     9ms  A7.GetDailyInfoHistory.0
+
+════════════════════════════════════════════════════════════════════════════
+  B. Trade — معاملات و ریز معاملات
+════════════════════════════════════════════════════════════════════════════
+
+  ── B1. GetTradeHistory (ریز معاملات روزانه) ──
+  ✓  [200]   178ms  B1.GetTradeHistory.last_trade_false  keys=['tradeHistory']  [tradeHistory]=6220 rows
+         'tradeHistory'                   → list[6220]  item_keys=['insCode', 'dEven', 'nTran', 'hEven', 'qTitTran', 'pTran', 'qTitNgJ', 'iSensVarP', 'pPhSeaCotJ', 'pPbSeaCotJ', 'iAnuTran', 'xqVarPJDrPRf', 'canceled']
+        sample[0]: {"insCo
+         trades: 6220
+         ALL trade fields: ['insCode', 'dEven', 'nTran', 'hEven', 'qTitTran', 'pTran', 'qTitNgJ', 'iSensVarP', 'pPhSeaCotJ', 'pPbSeaCotJ', 'iAnuTran', 'xqVarPJDrPRf', 'canceled']
+         [0] {"insCode": null, "dEven": 0, "nTran": 6217, "hEven": 145959, "qTitTran": 14870, "pTran": 100677.0, "qTitNgJ": 0, "iSensVarP": "\u0000", "pPhSeaCotJ": 0.0, "pPbSeaCotJ": 0.0, "iAnuTran": 0, "xqVarPJDrPRf": 0.0, "canceled": 0}
+         [1] {"insCode": null, "dEven": 0, "nTran": 6218, "hEven": 145959, "qTitTran": 1000, "pTran": 100677.0, "qTitNgJ": 0, "iSensVarP": "\u0000", "pPhSeaCotJ": 0.0, "pPbSeaCotJ": 0.0, "iAnuTran": 0, "xqVarPJDrPRf": 0.0, "canceled": 0}
+         [2] {"insCode": null, "dEven": 0, "nTran": 6216, "hEven": 145958, "qTitTran": 695, "pTran": 100677.0, "qTitNgJ": 0, "iSensVarP": "\u0000", "pPhSeaCotJ": 0.0, "pPbSeaCotJ": 0.0, "iAnuTran": 0, "xqVarPJDrPRf": 0.0, "canceled": 0}
+         ... last trade: {"insCode": null, "dEven": 0, "nTran": 26, "hEven": 83000, "qTitTran": 6, "pTran": 100676.0, "qTitNgJ": 0, "iSensVarP": "\u0000", "pPhSeaCotJ": 0.0, "pPbSeaCotJ": 0.0, "iAnuTran": 0, "xqVarPJDrPRf": 0.0, "canceled": 0}
+  ✓  [200]   136ms  B1.GetTradeHistory.last_trade_true  keys=['tradeHistory']  [tradeHistory]=3384 rows
+         'tradeHistory'                   → list[3384]  item_keys=['insCode', 'dEven', 'nTran', 'hEven', 'qTitTran', 'pTran', 'qTitNgJ', 'iSensVarP', 'pPhSeaCotJ', 'pPbSeaCotJ', 'iAnuTran', 'xqVarPJDrPRf', 'canceled']
+        sample[0]: {"insCo
+  ✓  [200]    58ms  B1.GetTradeHistory.today_false  keys=['tradeHistory']  [tradeHistory]=0 rows
+         'tradeHistory'                   → list[]  (empty)
+
+  ── B2. GetClientTypeHistory (حقیقی vs حقوقی) ──
+  ✗  [404]     9ms  B2.GetClientTypeHistory.last_trade
+  ✗  [404]    10ms  B2.GetClientTypeHistory.today
+  ✗  [404]     7ms  B2.GetClientTypeHistory.0
+
+  ── B3. GetBriefTradeHistory (خلاصه معاملات) ──
+  ✗  [404]     8ms  B3.GetBriefTradeHistory
+  ✗  [404]     9ms  B3.GetBriefTradeHistory.today
+
+  ── B4. GetFutureStateStats ──
+  ✗  [404]    11ms  B4.GetFutureStateStats
+
+  ── B5. Misc trade endpoints ──
+  ✓  [200]    24ms  B5.GetTradeIntraday  keys=['tradeIntraDay']  [tradeIntraDay]=11 rows
+         'tradeIntraDay'                  → list[11]  item_keys=['hEven', 'minPrice', 'maxPrice', 'openPrice', 'closePrice', 'volume']
+        sample[0]: {"hEven": 83000, "minPrice": 101437.0, "maxPrice": 101438.0, "openPrice": 101438.0, "close
+  ✓  [200]    33ms  B5.GetTrade  keys=['trade']  [trade]=1274 rows
+         'trade'                          → list[1274]  item_keys=['insCode', 'dEven', 'nTran', 'hEven', 'qTitTran', 'pTran', 'qTitNgJ', 'iSensVarP', 'pPhSeaCotJ', 'pPbSeaCotJ', 'iAnuTran', 'xqVarPJDrPRf', 'canceled']
+        sample[0]: {"insCo
+  ✗  [404]    13ms  B5.GetStateHistory
+
+════════════════════════════════════════════════════════════════════════════
+  C. BestLimits — دفتر سفارش
+════════════════════════════════════════════════════════════════════════════
+
+  ── C1. Live order book ──
+  ✓  [200]    10ms  C1.BestLimits.live  keys=['bestLimits']  [bestLimits]=5 rows
+         'bestLimits'                     → list[5]  item_keys=['number', 'qTitMeDem', 'zOrdMeDem', 'pMeDem', 'pMeOf', 'zOrdMeOf', 'qTitMeOf', 'title', 'insCode']
+        sample[0]: {"number": 1, "qTitMeDem": 148226331, "zOrdMeDem": 23, "pMeDem
+         ALL bestLimits fields: ['number', 'qTitMeDem', 'zOrdMeDem', 'pMeDem', 'pMeOf', 'zOrdMeOf', 'qTitMeOf', 'title', 'insCode']
+         level 1: {"number": 1, "qTitMeDem": 148226331, "zOrdMeDem": 23, "pMeDem": 101437.0, "pMeOf": 101438.0, "zOrdMeOf": 95, "qTitMeOf": 39818927, "title": null, "insCode": null}
+         level 2: {"number": 2, "qTitMeDem": 1005909, "zOrdMeDem": 2, "pMeDem": 101436.0, "pMeOf": 101439.0, "zOrdMeOf": 2, "qTitMeOf": 500100, "title": null, "insCode": null}
+
+  ── C2. Historical OB delta stream ──
+  ✓  [200]   111ms  C2.BestLimits.history.last_trade  keys=['bestLimitsHistory']  [bestLimitsHistory]=6763 rows
+         'bestLimitsHistory'              → list[6763]  item_keys=['idn', 'dEven', 'hEven', 'refID', 'number', 'qTitMeDem', 'zOrdMeDem', 'pMeDem', 'pMeOf', 'zOrdMeOf', 'qTitMeOf', 'title', 'insCode']
+        sample[0]: {"idn": 0, "dEven": 0, "h
+         delta rows: 6763
+         ALL fields: ['idn', 'dEven', 'hEven', 'refID', 'number', 'qTitMeDem', 'zOrdMeDem', 'pMeDem', 'pMeOf', 'zOrdMeOf', 'qTitMeOf', 'title', 'insCode']
+           {"idn": 0, "dEven": 0, "hEven": 60128, "refID": 15105884914, "number": 1, "qTitMeDem": 20500, "zOrdMeDem": 1, "pMeDem": 97504.0, "pMeOf": 100525.0, "zOrdMeOf": 1, "qTitMeOf": 454, "title": null, "insCode": null}
+           {"idn": 0, "dEven": 0, "hEven": 60128, "refID": 15105884914, "number": 3, "qTitMeDem": 100, "zOrdMeDem": 1, "pMeDem": 80536.0, "pMeOf": 103299.0, "zOrdMeOf": 1, "qTitMeOf": 499, "title": null, "insCode": null}
+           {"idn": 0, "dEven": 0, "hEven": 60128, "refID": 15105884914, "number": 5, "qTitMeDem": 2209, "zOrdMeDem": 1, "pMeDem": 75100.0, "pMeOf": 0.0, "zOrdMeOf": 0, "qTitMeOf": 0, "title": null, "insCode": null}
+         last: {"idn": 0, "dEven": 0, "hEven": 150000, "refID": 15112489592, "number": 1, "qTitMeDem": 130189844, "zOrdMeDem": 13, "pMeDem": 100676.0, "pMeOf": 100677.0, "zOrdMeOf": 2, "qTitMeOf": 2825019, "title": null, "insCode": null}
+  ✓  [200]    43ms  C2.BestLimits.history.today  keys=['bestLimitsHistory']  [bestLimitsHistory]=0 rows
+         'bestLimitsHistory'              → list[]  (empty)
+  ✓  [200]    47ms  C2.BestLimits.history.yesterday  keys=['bestLimitsHistory']  [bestLimitsHistory]=0 rows
+         'bestLimitsHistory'              → list[]  (empty)
+
+════════════════════════════════════════════════════════════════════════════
+  D. Instrument — اطلاعات ابزار
+════════════════════════════════════════════════════════════════════════════
+
+  ── D1. GetInstrumentInfo (اطلاعات پایه ابزار) ──
+  ✓  [200]    38ms  D1.GetInstrumentInfo  keys=['instrumentInfo']  [instrumentInfo]=dict(37)
+         'instrumentInfo'                 → dict(37 keys)
+        'eps'                          → dict(4 keys)
+            'epsValue'                     → null
+            'estimatedEPS'                 → null
+            'sectorPE'          
+         ALL fields in instrumentInfo:
+           'eps'                          = {'epsValue': None, 'estimatedEPS': None, 'sectorPE': 0.0, 'psr': 0.0}
+           'sector'                       = {'dEven': 0, 'cSecVal': '68 ', 'lSecVal': 'صندوق سرمايه گذاري قابل معامله'}
+           'staticThreshold'              = {'insCode': None, 'dEven': 0, 'hEven': 0, 'psGelStaMax': 104353.0, 'psGelStaMin'
+           'minWeek'                      = 101048.0
+           'maxWeek'                      = 101315.0
+           'minYear'                      = 72550.0
+           'maxYear'                      = 101315.0
+           'qTotTran5JAvg'                = 153640714.0
+           'kAjCapValCpsIdx'              = ''
+           'dEven'                        = 20260606
+           'topInst'                      = 0
+           'faraDesc'                     = 'نوع صندوق: در اوراق بهادار با درآمد ثابت'
+           'contractSize'                 = 0
+           'nav'                          = 0.0
+           'underSupervision'             = 0
+           'etfIssuedUnit'                = 3612375485.0
+           'etfUnitDeven'                 = 20260603
+           'cValMne'                      = None
+           'lVal18'                       = 'Kian ETF'
+           'cSocCSAC'                     = None
+           'lSoc30'                       = None
+           'yMarNSC'                      = None
+           'yVal'                         = '305'
+           'insCode'                      = '53251602435454519'
+           'lVal30'                       = 'صندوق س. با درآمد ثابت كيان'
+           'lVal18AFC'                    = 'كيان'
+           'flow'                         = 1
+           'cIsin'                        = 'IRT1FKNF0008'
+           'zTitad'                       = 4000000000.0
+           'baseVol'                      = 1
+           'instrumentID'                 = 'IRT1FKNF0001'
+           'cgrValCot'                    = 'H1'
+           'cComVal'                      = '4'
+           'lastDate'                     = 0
+           'sourceID'                     = 1
+           'flowTitle'                    = 'بازار بورس'
+           'cgrValCotTitle'               = 'بازار صندوق های قابل معامله'
+
+  ── D2. GetInstrumentStatistic (آمار ابزار) ──
+  ✗  [404]     7ms  D2.GetInstrumentStatistic
+
+  ── D3. GetInstrumentSearch ──
+  ✓  [200]   145ms  D3.GetInstrumentSearch.symbol  keys=['instrumentSearch']  [instrumentSearch]=41 rows
+         'instrumentSearch'               → list[41]  item_keys=['insCode2', 'insCode3', 'insCode4', 'insCode', 'lVal30', 'lVal18AFC', 'flow', 'cIsin', 'zTitad', 'baseVol', 'instrumentID', 'cgrValCot', 'cComVal', 'lastDate', 'sourceID', 'flowTi
+
+  ── D4. GetInstrumentOptionInfo ──
+  ✗  [404]     9ms  D4.GetInstrumentOptionInfo
+
+  ── D5. GetInstrumentHistory (تاریخچه تغییرات) ──
+  ✗  [500]    12ms  D5.GetInstrumentHistory.30
+
+  ── D6. GetRelatedInstruments ──
+  ✗  [404]     9ms  D6.GetRelatedInstruments
+
+  ── D7. GetCodal / GetAnnouncement ──
+  ✗  [404]    10ms  D7.GetCodal
+
+════════════════════════════════════════════════════════════════════════════
+  E. MutualFund — صندوق‌های سرمایه‌گذاری
+════════════════════════════════════════════════════════════════════════════
+
+  ── E1. GetMFNav (NAV صندوق) ──
+  ✓  [200]    10ms  E1.GetMFNav
+         raw response: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" content="#000000"/><meta http-equiv="cache-control" content="no-cache"><meta http-equiv="expires" cont
+
+  ── E2. GetMFNavHistory (تاریخچه NAV) ──
+  ✓  [200]    10ms  E2.GetMFNavHistory
+  ✓  [200]     9ms  E2.GetMFNavHistory.broad
+
+  ── E3. GetMFNavList / GetETFList (لیست صندوق‌ها) ──
+  ✓  [200]     8ms  E3.GetMFNavList
+  ✓  [200]     8ms  E3.GetMFNavAll
+  ✓  [200]     8ms  E3.GetETFList
+  ✓  [200]     8ms  E3.GetMutualFundList
+  ✓  [200]     8ms  E3.GetMFNavByType
+
+  ── E4. GetMFData / GetETFHistory (اطلاعات جامع صندوق) ──
+  ✓  [200]     9ms  E4.GetMFData
+  ✓  [200]    12ms  E4.GetFundInfo
+  ✓  [200]     8ms  E4.GetETFHistory
+  ✓  [200]    13ms  E4.GetETFByInsCode
+  ✓  [200]    11ms  E4.GetETFInfo
+
+  ── E5. ClientType/GetClientTypeHistory (حقیقی/حقوقی تاریخچه) ──
+  ✓  [200]    32ms  E5.GetClientTypeHistory  keys=['clientType']  [clientType]=dict(14)
+         'clientType'                     → dict(14 keys)
+        'recDate'                      → number  = 20260526
+        'insCode'                      → string  = '53251602435454519'
+        'buy_I_Volume'                 → number  = 7139
+         keys: ['clientType']
+           'clientType'                   → dict(14 keys)
+        'recDate'                      → number  = 20260526
+        'insCode'                      → string  = '53251602435454519'
+        'buy_I_Volume'                 → number  = 71395836.0
+        'buy_N_Volume'                 → number  = 147951769.0
+        'buy_I_Value'         
+  ✗  [500]    42ms  E5.GetClientTypeHistory.today
+  ✗  [500]    43ms  E5.GetClientTypeHistory.all
+
+════════════════════════════════════════════════════════════════════════════
+  F. MarketData — اطلاعات کل بازار
+════════════════════════════════════════════════════════════════════════════
+
+  ── F1. GetTseClientTypeAll (حقیقی/حقوقی کل بازار) ──
+  ✗  [404]     9ms  F1.GetTseClientTypeAll
+
+  ── F2. GetMarketOverview (نمای کلی بازار) ──
+  ✗  [404]     9ms  F2.GetMarketOverview
+  ✗  [404]    13ms  F2.GetMarketSummary
+  ✗  [404]     9ms  F2.GetMarketState
+
+  ── F3. GetMarketWatch (تابلو کل بازار) ──
+  ✓  [200]    10ms  F3.GetMarketWatch.ETF
+  ✓  [200]     7ms  F3.GetMarketWatch.allFund
+  ✓  [200]     8ms  F3.GetMarketWatch.full
+
+  ── F4. GetMarketActors (بازیگران بازار) ──
+  ✗  [404]    11ms  F4.GetMarketActors
+
+  ── F5. GetSectorList (فهرست صنایع) ──
+  ✗  [404]     7ms  F5.GetSectorList
+  ✗  [404]     7ms  F5.GetSectorInfo
+
+════════════════════════════════════════════════════════════════════════════
+  G. Index — شاخص‌ها
+════════════════════════════════════════════════════════════════════════════
+
+  ── G1. GetIndexB2History ──
+  ✓  [200]     9ms  G1.GetIndexB2History.30  keys=['indexB2']  [indexB2]=0 rows
+         'indexB2'                        → list[]  (empty)
+  ✓  [200]    12ms  G1.GetIndexB2History.365  keys=['indexB2']  [indexB2]=0 rows
+         'indexB2'                        → list[]  (empty)
+
+  ── G2. GetIndexHistory by index ID ──
+  ✗  [404]    13ms  G2.GetIndexHistory.شاخص کل
+  ✗  [404]     8ms  G2.GetIndexHistory.شاخص هم‌وزن
+  ✗  [404]     8ms  G2.GetIndexHistory.شاخص صنعت
+
+  ── G3. GetIndexByInstrument (شاخص ابزار) ──
+  ✗  [404]     8ms  G3.GetIndexByInstrument.30
+
+  ── G4. Index list ──
+  ✗  [404]     8ms  G4.GetIndexList
+  ✗  [404]     9ms  G4.GetIndexGroupList
+
+════════════════════════════════════════════════════════════════════════════
+  H. Portfolio — ترکیب دارایی‌ها
+════════════════════════════════════════════════════════════════════════════
+
+  ── H1. GetPortfolioByGroup (ترکیب دارایی صندوق) ──
+  ✓  [200]     9ms  H1.GetPortfolioByGroup
+  ✓  [200]     9ms  H1.GetPortfolioByGroup.today
+  ✓  [200]    10ms  H1.GetPortfolioByGroup.0
+
+  ── H2. GetPortfolioHistory (تاریخچه ترکیب) ──
+  ✓  [200]    10ms  H2.GetPortfolioHistory
+  ✓  [200]     9ms  H2.GetPortfolioByGroupHistory
+
+════════════════════════════════════════════════════════════════════════════
+  I. Capital / Dividend — سود و افزایش سرمایه
+════════════════════════════════════════════════════════════════════════════
+  ✓  [200]     8ms  I1.GetCapitalIncreaseHistory
+  ✓  [200]     8ms  I2.GetDividendHistory
+  ✗  [404]     9ms  I2.GetDividend
+  ✓  [200]     9ms  I3.GetMeetingHistory
+
+════════════════════════════════════════════════════════════════════════════
+  J. News / Announcement — اخبار و اطلاعیه‌ها
+════════════════════════════════════════════════════════════════════════════
+  ✓  [200]     8ms  J1.GetNews
+  ✓  [200]     8ms  J1.GetLatestNews
+  ✓  [200]    12ms  J2.GetAnnouncement
+  ✗  [404]     7ms  J2.GetCodalAnnouncement
+  ✗  [404]     8ms  J3.GetEPS
+
+════════════════════════════════════════════════════════════════════════════
+  K. Statistics — آمار تجمیعی
+════════════════════════════════════════════════════════════════════════════
+  ✓  [200]     8ms  K1.GetInstrumentStats30
+  ✗  [404]     7ms  K1.GetInstrumentStatistic
+  ✓  [200]     9ms  K2.GetGroupStats
+  ✓  [200]     7ms  K3.GetMarketStats
+
+════════════════════════════════════════════════════════════════════════════
+  L. Supervision — نظارت و محدودیت‌ها
+════════════════════════════════════════════════════════════════════════════
+  ✗  [404]     7ms  L1.GetThreshold
+  ✗  [404]     7ms  L1.GetStaticThreshold
+  ✗  [404]     7ms  L2.GetSupervision
+  ✗  [404]     8ms  L3.GetInstrumentLock
+
+════════════════════════════════════════════════════════════════════════════
+  M. MAIN SITE — www.tsetmc.com (non-CDN endpoints)
+════════════════════════════════════════════════════════════════════════════
+
+  ── M1. Symbol page (HTML — for scraping check) ──
+  ✓  [200]   218ms  M1.SymbolPage.HTML  len=500
+
+  ── M2. tsev2 legacy data API ──
+  ✓  [200]     6ms  M2.tsev2.GetAjax
+  ✓  [200]     8ms  M2.tsev2.ClientType
+  ✓  [200]     7ms  M2.tsev2.BestLimit
+  ✓  [200]     9ms  M2.tsev2.InstrumentInfo
+
+  ── M3. MAIN API (api.tsetmc.com or www.tsetmc.com/api) ──
+  ✗  [404]   216ms  M3.MainAPI.ClosingInfo
+  ✓  [200]    23ms  M3.CDN.ClosingInfo  keys=['closingPriceInfo']  [closingPriceInfo]=dict(25)
+         'closingPriceInfo'               → dict(25 keys)
+        'instrumentState'              → dict(10 keys)
+            'idn'                          → number  = 0
+            'dEven'                        → number  = 0
+            'hEve
+
+════════════════════════════════════════════════════════════════════════════
+  N. ClosingPriceInfo — FULL FIELD DEEP DIVE
+════════════════════════════════════════════════════════════════════════════
+  This section captures EVERY field from GetClosingPriceInfo for reference
+
+  closingPriceInfo — 25 top-level fields:
+    'instrumentState'              → DICT keys: ['idn', 'dEven', 'hEven', 'insCode', 'lVal18AFC', 'lVal30', 'cEtaval', 'realHeven', 'underSupervision', 'cEtavalTitle']
+        'idn'                        = 0
+        'dEven'                      = 0
+        'hEven'                      = 0
+        'insCode'                    = None
+        'lVal18AFC'                  = None
+        'lVal30'                     = None
+        'cEtaval'                    = 'A '
+        'realHeven'                  = 0
+        'underSupervision'           = 0
+        'cEtavalTitle'               = 'مجاز'
+    'instrument'                   = None
+    'lastHEven'                    = 92128
+    'finalLastDate'                = 20260606
+    'nvt'                          = 0.0
+    'mop'                          = 0
+    'pRedTran'                     = 0.0
+    'thirtyDayClosingHistory'      = None
+    'priceChange'                  = 0.0
+    'priceMin'                     = 101437.0
+    'priceMax'                     = 101438.0
+    'priceYesterday'               = 101314.0
+    'priceFirst'                   = 101438.0
+    'last'                         = False
+    'id'                           = 0
+    'insCode'                      = '0'
+    'dEven'                        = 20260606
+    'hEven'                        = 92128
+    'pClosing'                     = 101437.0
+    'iClose'                       = False
+    'yClose'                       = False
+    'pDrCotVal'                    = 101438.0
+    'zTotTran'                     = 1291.0
+    'qTotTran5J'                   = 13480197.0
+    'qTotCap'                      = 1367393630769.0
+
+════════════════════════════════════════════════════════════════════════════
+  O. GetMarketWatch — FULL FIELD DEEP DIVE
+════════════════════════════════════════════════════════════════════════════
+  Fetching full ETF market watch data (paperTypes=[6]) ...
+  [200] 7ms — no data
+
+════════════════════════════════════════════════════════════════════════════
+  P. Discovery — unknown endpoint brute-force
+════════════════════════════════════════════════════════════════════════════
+  Testing less-known action names across controllers ...
+  -  [404]     7ms  P.ClosingPrice/GetClosingPriceDaily/{ins}
+  -  [404]     9ms  P.ClosingPrice/GetMonthDayTseHistory/{ins}
+  -  [404]     9ms  P.ClosingPrice/GetWeeklyStats/{ins}
+  -  [404]     8ms  P.ClosingPrice/GetAdjustedHistory/{ins}/30
+  -  [404]     9ms  P.Trade/GetTopBuyers/{ins}/{date}
+  -  [404]     9ms  P.Trade/GetTopSellers/{ins}/{date}
+  -  [404]     8ms  P.Trade/GetInstTradeHistory/{ins}/{date}
+  -  [404]     8ms  P.Trade/GetTradeVolume/{ins}/{date}/{today}
+  -  [404]     8ms  P.Instrument/GetInstrumentList
+  -  [404]    10ms  P.Instrument/GetAllInstruments
+  -  [404]     9ms  P.Instrument/GetETFByType/6
+  -  [404]     8ms  P.Instrument/GetFixedIncomeFunds
+  -  [404]    10ms  P.Instrument/GetInstrumentByFlow/2
+  ✓  [200]     7ms  P.MutualFund/GetIssuedUnit/{ins}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]    10ms  P.MutualFund/GetIssuedUnitHistory/{ins}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     8ms  P.MutualFund/GetNAVHistory/{ins}/{date}/{today}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]    10ms  P.MutualFund/GetFundPortfolio/{ins}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]    11ms  P.MutualFund/GetFundType
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  -  [404]     9ms  P.MarketData/GetMarketHours
+  -  [404]     8ms  P.MarketData/GetHolidays
+  -  [404]     9ms  P.MarketData/GetTradingCalendar
+  -  [404]     8ms  P.MarketData/GetTradingHours
+  ✓  [200]     9ms  P.Calendar/GetHolidays
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     9ms  P.Calendar/GetTradingDays
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     8ms  P.MarketWatch/GetMWByPaperType/6
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     9ms  P.MarketWatch/GetMarketWatchPlus
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     7ms  P.Owner/GetOwnershipHistory/{ins}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     8ms  P.Owner/GetLegalOwnership/{ins}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]    11ms  P.Ownership/GetOwnershipChange/{ins}/{date}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     8ms  P.Financial/GetFinancialData/{ins}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+  ✓  [200]     9ms  P.Statement/GetStatement/{ins}
+         raw: <!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/favicon.ico?v=2" type="image/x-icon"/><link rel="shortcut icon" href="/favicon.ico?v=2"/><meta name="theme-color" co
+
+════════════════════════════════════════════════════════════════════════════
+  SUMMARY
+════════════════════════════════════════════════════════════════════════════
+
+  Endpoints with DATA:    69
+    ✓ A1.GetClosingPriceInfo                              200  225ms
+    ✓ A2.GetClosingPriceDailyList.30                      200  12ms  [closingPriceDaily] 30 rows
+    ✓ A2.GetClosingPriceDailyList.365                     200  33ms  [closingPriceDaily] 365 rows
+    ✓ A4.GetClosingPriceHistory.30                        200  100ms  [closingPriceHistory] 0 rows
+    ✓ A6.GetIndexB2History.30                             200  10ms  [indexB2] 0 rows
+    ✓ A6.GetIndexHistory                                  200  10ms  [indexB2] 0 rows
+    ✓ B1.GetTradeHistory.last_trade_false                 200  178ms  [tradeHistory] 6220 rows
+    ✓ B1.GetTradeHistory.last_trade_true                  200  136ms  [tradeHistory] 3384 rows
+    ✓ B1.GetTradeHistory.today_false                      200  58ms  [tradeHistory] 0 rows
+    ✓ B5.GetTradeIntraday                                 200  24ms  [tradeIntraDay] 11 rows
+    ✓ B5.GetTrade                                         200  33ms  [trade] 1274 rows
+    ✓ C1.BestLimits.live                                  200  10ms  [bestLimits] 5 rows
+    ✓ C2.BestLimits.history.last_trade                    200  111ms  [bestLimitsHistory] 6763 rows
+    ✓ C2.BestLimits.history.today                         200  43ms  [bestLimitsHistory] 0 rows
+    ✓ C2.BestLimits.history.yesterday                     200  47ms  [bestLimitsHistory] 0 rows
+    ✓ D1.GetInstrumentInfo                                200  38ms
+    ✓ D3.GetInstrumentSearch.symbol                       200  145ms  [instrumentSearch] 41 rows
+    ✓ E1.GetMFNav                                         200  10ms
+    ✓ E2.GetMFNavHistory                                  200  10ms
+    ✓ E2.GetMFNavHistory.broad                            200  9ms
+    ✓ E3.GetMFNavList                                     200  8ms
+    ✓ E3.GetMFNavAll                                      200  8ms
+    ✓ E3.GetETFList                                       200  8ms
+    ✓ E3.GetMutualFundList                                200  8ms
+    ✓ E3.GetMFNavByType                                   200  8ms
+    ✓ E4.GetMFData                                        200  9ms
+    ✓ E4.GetFundInfo                                      200  12ms
+    ✓ E4.GetETFHistory                                    200  8ms
+    ✓ E4.GetETFByInsCode                                  200  13ms
+    ✓ E4.GetETFInfo                                       200  11ms
+    ✓ E5.GetClientTypeHistory                             200  32ms
+    ✓ F3.GetMarketWatch.ETF                               200  10ms
+    ✓ F3.GetMarketWatch.allFund                           200  7ms
+    ✓ F3.GetMarketWatch.full                              200  8ms
+    ✓ G1.GetIndexB2History.30                             200  9ms  [indexB2] 0 rows
+    ✓ G1.GetIndexB2History.365                            200  12ms  [indexB2] 0 rows
+    ✓ H1.GetPortfolioByGroup                              200  9ms
+    ✓ H1.GetPortfolioByGroup.today                        200  9ms
+    ✓ H1.GetPortfolioByGroup.0                            200  10ms
+    ✓ H2.GetPortfolioHistory                              200  10ms
+    ✓ H2.GetPortfolioByGroupHistory                       200  9ms
+    ✓ I1.GetCapitalIncreaseHistory                        200  8ms
+    ✓ I2.GetDividendHistory                               200  8ms
+    ✓ I3.GetMeetingHistory                                200  9ms
+    ✓ J1.GetNews                                          200  8ms
+    ✓ J1.GetLatestNews                                    200  8ms
+    ✓ J2.GetAnnouncement                                  200  12ms
+    ✓ K1.GetInstrumentStats30                             200  8ms
+    ✓ K2.GetGroupStats                                    200  9ms
+    ✓ K3.GetMarketStats                                   200  7ms
+    ✓ M2.tsev2.GetAjax                                    200  6ms
+    ✓ M2.tsev2.ClientType                                 200  8ms
+    ✓ M2.tsev2.BestLimit                                  200  7ms
+    ✓ M2.tsev2.InstrumentInfo                             200  9ms
+    ✓ M3.CDN.ClosingInfo                                  200  23ms
+    ✓ P.MutualFund/GetIssuedUnit/{ins}                    200  7ms
+    ✓ P.MutualFund/GetIssuedUnitHistory/{ins}             200  10ms
+    ✓ P.MutualFund/GetNAVHistory/{ins}/{date}/{today}     200  8ms
+    ✓ P.MutualFund/GetFundPortfolio/{ins}                 200  10ms
+    ✓ P.MutualFund/GetFundType                            200  11ms
+    ✓ P.Calendar/GetHolidays                              200  9ms
+    ✓ P.Calendar/GetTradingDays                           200  9ms
+    ✓ P.MarketWatch/GetMWByPaperType/6                    200  8ms
+    ✓ P.MarketWatch/GetMarketWatchPlus                    200  9ms
+    ✓ P.Owner/GetOwnershipHistory/{ins}                   200  7ms
+    ✓ P.Owner/GetLegalOwnership/{ins}                     200  8ms
+    ✓ P.Ownership/GetOwnershipChange/{ins}/{date}         200  11ms
+    ✓ P.Financial/GetFinancialData/{ins}                  200  8ms
+    ✓ P.Statement/GetStatement/{ins}                      200  9ms
+
+  Endpoints EMPTY (200 but no data):  1
+    · M1.SymbolPage.HTML
+
+  Endpoints FAILED:  60
+    ✗ A3.GetLastPriceHistory.today  [404]
+    ✗ A3.GetLastPriceHistory.range  [404]
+    ✗ A5.GetShareholderInfo  [404]
+    ✗ A5.GetShareholderInfo.with_date  [404]
+    ✗ A6.GetIndexB1History.30  [404]
+    ✗ A7.GetDailyInfoHistory  [404]
+    ✗ A7.GetDailyInfoHistory.0  [404]
+    ✗ B2.GetClientTypeHistory.last_trade  [404]
+    ✗ B2.GetClientTypeHistory.today  [404]
+    ✗ B2.GetClientTypeHistory.0  [404]
+    ✗ B3.GetBriefTradeHistory  [404]
+    ✗ B3.GetBriefTradeHistory.today  [404]
+    ✗ B4.GetFutureStateStats  [404]
+    ✗ B5.GetStateHistory  [404]
+    ✗ D2.GetInstrumentStatistic  [404]
+    ✗ D4.GetInstrumentOptionInfo  [404]
+    ✗ D5.GetInstrumentHistory.30  [500]
+    ✗ D6.GetRelatedInstruments  [404]
+    ✗ D7.GetCodal  [404]
+    ✗ E5.GetClientTypeHistory.today  [500]
+    ✗ E5.GetClientTypeHistory.all  [500]
+    ✗ F1.GetTseClientTypeAll  [404]
+    ✗ F2.GetMarketOverview  [404]
+    ✗ F2.GetMarketSummary  [404]
+    ✗ F2.GetMarketState  [404]
+    ✗ F4.GetMarketActors  [404]
+    ✗ F5.GetSectorList  [404]
+    ✗ F5.GetSectorInfo  [404]
+    ✗ G2.GetIndexHistory.شاخص کل  [404]
+    ✗ G2.GetIndexHistory.شاخص هم‌وزن  [404]
+    ✗ G2.GetIndexHistory.شاخص صنعت  [404]
+    ✗ G3.GetIndexByInstrument.30  [404]
+    ✗ G4.GetIndexList  [404]
+    ✗ G4.GetIndexGroupList  [404]
+    ✗ I2.GetDividend  [404]
+    ✗ J2.GetCodalAnnouncement  [404]
+    ✗ J3.GetEPS  [404]
+    ✗ K1.GetInstrumentStatistic  [404]
+    ✗ L1.GetThreshold  [404]
+    ✗ L1.GetStaticThreshold  [404]
+    ✗ L2.GetSupervision  [404]
+    ✗ L3.GetInstrumentLock  [404]
+    ✗ M3.MainAPI.ClosingInfo  [404]
+    ✗ P.ClosingPrice/GetClosingPriceDaily/{ins}  [404]
+    ✗ P.ClosingPrice/GetMonthDayTseHistory/{ins}  [404]
+    ✗ P.ClosingPrice/GetWeeklyStats/{ins}  [404]
+    ✗ P.ClosingPrice/GetAdjustedHistory/{ins}/30  [404]
+    ✗ P.Trade/GetTopBuyers/{ins}/{date}  [404]
+    ✗ P.Trade/GetTopSellers/{ins}/{date}  [404]
+    ✗ P.Trade/GetInstTradeHistory/{ins}/{date}  [404]
+    ✗ P.Trade/GetTradeVolume/{ins}/{date}/{today}  [404]
+    ✗ P.Instrument/GetInstrumentList  [404]
+    ✗ P.Instrument/GetAllInstruments  [404]
+    ✗ P.Instrument/GetETFByType/6  [404]
+    ✗ P.Instrument/GetFixedIncomeFunds  [404]
+    ✗ P.Instrument/GetInstrumentByFlow/2  [404]
+    ✗ P.MarketData/GetMarketHours  [404]
+    ✗ P.MarketData/GetHolidays  [404]
+    ✗ P.MarketData/GetTradingCalendar  [404]
+    ✗ P.MarketData/GetTradingHours  [404]
