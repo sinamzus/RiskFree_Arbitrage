@@ -866,6 +866,138 @@ def create_app(db, scan_callback=None):
                     result["summary"]["total_net_pnl"])
         return jsonify(result)
 
+    # ──────────────────────────────────────────────────────────────────────
+    #  Bond (اوراق بدهی) endpoints
+    # ──────────────────────────────────────────────────────────────────────
+
+    @app.route("/api/bonds/series")
+    def api_bonds_series():
+        """Return all registered bond series (registry)."""
+        series = db.get_bond_series(active_only=False)
+        return jsonify({"series": series})
+
+    @app.route("/api/bonds/series", methods=["POST"])
+    def api_bonds_series_save():
+        """Upsert bond series from JSON body. Used by the Bond Registry UI."""
+        from flask import request as req
+        data = req.get_json(silent=True)
+        if not data or "series" not in data:
+            return jsonify({"error": "body must be {series:[...]}"}), 400
+        try:
+            n = db.upsert_bond_series(data["series"])
+            return jsonify({"saved": n})
+        except Exception as e:
+            logger.exception("bond series save failed")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/bonds/scan")
+    def api_bonds_scan():
+        """Live scan: fetch prices for all active bonds, compute yield curve & signals.
+
+        Returns the full BondSnapshot list + yield curve coefficients.
+        """
+        from datetime import date as _date
+        from bonds import run_bond_scan, AKHZA_SERIES, analyze_bonds
+        from data_fetcher import TSETMCFetcher
+
+        today = int(_date.today().strftime("%Y%m%d"))
+        series = db.get_bond_series(active_only=True)
+
+        # Seed DB with built-in series if registry is empty
+        if not series:
+            db.upsert_bond_series(AKHZA_SERIES)
+            series = db.get_bond_series(active_only=True)
+
+        fetcher = TSETMCFetcher()
+        try:
+            snapshots = run_bond_scan(db, fetcher)
+        except Exception as e:
+            logger.exception("bond scan failed")
+            return jsonify({"error": str(e)}), 500
+
+        # Persist today's results
+        if snapshots:
+            from dataclasses import asdict
+            db.save_bond_prices([
+                {**asdict(s), "date": today} for s in snapshots
+            ])
+
+        from bonds import fit_yield_curve
+        valid_pts = [(s.days_to_mat, s.ytm) for s in snapshots if s.ytm > 0 and s.days_to_mat > 0]
+        coeffs = fit_yield_curve(valid_pts)
+
+        from dataclasses import asdict
+        return jsonify({
+            "date": today,
+            "snapshots": [asdict(s) for s in snapshots],
+            "curve_coeffs": coeffs,
+        })
+
+    @app.route("/api/bonds/latest")
+    def api_bonds_latest():
+        """Return most recent stored bond scan (from DB, no network call)."""
+        from datetime import date as _date
+        from bonds import AKHZA_SERIES, fit_yield_curve
+
+        series = db.get_bond_series(active_only=True)
+        if not series:
+            db.upsert_bond_series(AKHZA_SERIES)
+            series = db.get_bond_series(active_only=True)
+
+        # Find latest date with bond_prices
+        with db._conn() as conn:
+            row = conn.execute("SELECT MAX(date) AS d FROM bond_prices").fetchone()
+        latest = row["d"] if row and row["d"] else None
+
+        if not latest:
+            return jsonify({"date": None, "snapshots": [], "curve_coeffs": [],
+                            "series": series})
+
+        prices = db.get_bond_prices(latest)
+        valid_pts = [(p["days_to_mat"], p["ytm"]) for p in prices if p.get("ytm",0) > 0]
+        coeffs = fit_yield_curve(valid_pts)
+
+        return jsonify({
+            "date": latest,
+            "snapshots": prices,
+            "curve_coeffs": coeffs,
+            "series": series,
+        })
+
+    @app.route("/api/bonds/history")
+    def api_bonds_history():
+        """Return price+yield history for a single bond series."""
+        symbol = request.args.get("symbol", "")
+        days   = int(request.args.get("days", 90))
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+        return jsonify({"history": db.get_bond_price_history(symbol, days)})
+
+    @app.route("/api/bonds/discover")
+    def api_bonds_discover():
+        """Search TSETMC for اخزا instrument codes and update the registry."""
+        from data_fetcher import TSETMCFetcher
+        from bonds import AKHZA_SERIES
+
+        series = db.get_bond_series(active_only=False)
+        if not series:
+            db.upsert_bond_series(AKHZA_SERIES)
+            series = db.get_bond_series(active_only=False)
+
+        fetcher = TSETMCFetcher()
+        updated = []
+        for s in series:
+            if s.get("ins_code") and s.get("verified"):
+                continue
+            sym = s["symbol"]
+            code = fetcher.discover_ins_code(sym)
+            if code:
+                db.update_bond_ins_code(sym, code)
+                updated.append({"symbol": sym, "ins_code": code})
+                logger.info("Bond discovery: %s → %s", sym, code)
+
+        return jsonify({"updated": updated, "total": len(series)})
+
     @app.route("/api/stream")
     def api_stream():
         """Server-Sent Events endpoint for real-time scan updates."""

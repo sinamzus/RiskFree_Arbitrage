@@ -209,6 +209,42 @@ CREATE TABLE IF NOT EXISTS nav_cache (
     nav_source           TEXT DEFAULT '',
     PRIMARY KEY (symbol, date)
 );
+
+-- ── Bond (اوراق بدهی) registry ────────────────────────────────────────────
+-- One row per bond series.  Manually seeded + auto-discovered via TSETMC.
+-- Zero-coupon bonds (اخزا): face_value=1000000, coupon_rate=0
+CREATE TABLE IF NOT EXISTS bond_series (
+    symbol        TEXT PRIMARY KEY,
+    ins_code      TEXT DEFAULT '',
+    name          TEXT DEFAULT '',
+    face_value    REAL DEFAULT 1000000,
+    maturity_date INTEGER NOT NULL,   -- YYYYMMDD Gregorian
+    issue_date    INTEGER DEFAULT 0,  -- YYYYMMDD Gregorian
+    coupon_rate   REAL DEFAULT 0.0,   -- 0 = zero-coupon
+    active        INTEGER DEFAULT 1,  -- 1 = still trading
+    verified      INTEGER DEFAULT 0   -- 1 = ins_code confirmed on TSETMC
+);
+CREATE INDEX IF NOT EXISTS ix_bond_maturity ON bond_series(maturity_date);
+
+-- ── Bond daily price snapshots ────────────────────────────────────────────
+-- One row per (symbol, date). Updated on each scan like daily_history.
+CREATE TABLE IF NOT EXISTS bond_prices (
+    symbol        TEXT    NOT NULL,
+    date          INTEGER NOT NULL,   -- YYYYMMDD
+    last_price    REAL    DEFAULT 0,
+    close_price   REAL    DEFAULT 0,
+    ytm           REAL    DEFAULT 0,  -- yield to maturity (decimal, e.g. 0.28)
+    days_to_mat   INTEGER DEFAULT 0,
+    volume        INTEGER DEFAULT 0,
+    value         REAL    DEFAULT 0,
+    trade_count   INTEGER DEFAULT 0,
+    curve_ytm     REAL    DEFAULT 0,  -- fitted curve YTM at this maturity
+    z_spread_bps  REAL    DEFAULT 0,  -- (ytm - curve_ytm) × 10000
+    signal        TEXT    DEFAULT 'HOLD',
+    PRIMARY KEY (symbol, date)
+);
+CREATE INDEX IF NOT EXISTS ix_bp_date ON bond_prices(date);
+CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
 """
 
 
@@ -316,6 +352,31 @@ CREATE TABLE IF NOT EXISTS client_type_daily (
     PRIMARY KEY (symbol, date)
 );
 CREATE INDEX IF NOT EXISTS ix_ctd_date ON client_type_daily(date);
+""")
+            # ── ensure bond tables exist (added 2026-06) ─────────────────────
+            if "bond_series" not in tables:
+                conn.executescript("""
+CREATE TABLE IF NOT EXISTS bond_series (
+    symbol TEXT PRIMARY KEY, ins_code TEXT DEFAULT '', name TEXT DEFAULT '',
+    face_value REAL DEFAULT 1000000, maturity_date INTEGER NOT NULL,
+    issue_date INTEGER DEFAULT 0, coupon_rate REAL DEFAULT 0.0,
+    active INTEGER DEFAULT 1, verified INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_bond_maturity ON bond_series(maturity_date);
+""")
+            if "bond_prices" not in tables:
+                conn.executescript("""
+CREATE TABLE IF NOT EXISTS bond_prices (
+    symbol TEXT NOT NULL, date INTEGER NOT NULL,
+    last_price REAL DEFAULT 0, close_price REAL DEFAULT 0,
+    ytm REAL DEFAULT 0, days_to_mat INTEGER DEFAULT 0,
+    volume INTEGER DEFAULT 0, value REAL DEFAULT 0, trade_count INTEGER DEFAULT 0,
+    curve_ytm REAL DEFAULT 0, z_spread_bps REAL DEFAULT 0,
+    signal TEXT DEFAULT 'HOLD',
+    PRIMARY KEY (symbol, date)
+);
+CREATE INDEX IF NOT EXISTS ix_bp_date ON bond_prices(date);
+CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
 """)
             # ── migrate existing DBs: add columns if absent ───────────────────
             existing_snap = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
@@ -1002,3 +1063,96 @@ CREATE INDEX IF NOT EXISTS ix_ctd_date ON client_type_daily(date);
                 (symbol, date_int, limit),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ #
+    #  Bond registry & prices                                             #
+    # ------------------------------------------------------------------ #
+
+    def get_bond_series(self, active_only: bool = True) -> list[dict]:
+        """Return all bond series, optionally only active ones."""
+        with self._conn() as conn:
+            if active_only:
+                rows = conn.execute(
+                    "SELECT * FROM bond_series WHERE active=1 ORDER BY maturity_date ASC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM bond_series ORDER BY maturity_date ASC"
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_bond_series(self, series: list[dict]) -> int:
+        """Insert or replace bond series rows. Returns count upserted."""
+        if not series:
+            return 0
+        rows = [
+            (s["symbol"], s.get("ins_code",""), s.get("name",""),
+             s.get("face_value", 1_000_000), int(s["maturity_date"]),
+             s.get("issue_date", 0), s.get("coupon_rate", 0.0),
+             1 if s.get("active", True) else 0,
+             1 if s.get("verified", False) else 0)
+            for s in series
+        ]
+        with self._conn() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO bond_series
+                   (symbol, ins_code, name, face_value, maturity_date,
+                    issue_date, coupon_rate, active, verified)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                rows,
+            )
+        return len(rows)
+
+    def update_bond_ins_code(self, symbol: str, ins_code: str) -> None:
+        """Update ins_code (and mark verified) for a bond series."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE bond_series SET ins_code=?, verified=1 WHERE symbol=?",
+                (ins_code, symbol),
+            )
+
+    def save_bond_prices(self, prices: list[dict]) -> int:
+        """Upsert today's bond price + yield snapshot. Returns count."""
+        if not prices:
+            return 0
+        rows = [
+            (p["symbol"], p["date"], p.get("last_price", 0), p.get("close_price", 0),
+             p.get("ytm", 0), p.get("days_to_mat", 0),
+             p.get("volume", 0), p.get("value", 0), p.get("trade_count", 0),
+             p.get("curve_ytm", 0), p.get("z_spread_bps", 0),
+             p.get("signal", "HOLD"))
+            for p in prices
+        ]
+        with self._conn() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO bond_prices
+                   (symbol, date, last_price, close_price, ytm, days_to_mat,
+                    volume, value, trade_count, curve_ytm, z_spread_bps, signal)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                rows,
+            )
+        return len(rows)
+
+    def get_bond_prices(self, date_int: int) -> list[dict]:
+        """Return all bond price rows for a given date."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT bp.*, bs.name, bs.face_value, bs.maturity_date,
+                          bs.ins_code, bs.coupon_rate
+                   FROM bond_prices bp
+                   JOIN bond_series bs USING (symbol)
+                   WHERE bp.date=?
+                   ORDER BY bs.maturity_date ASC""",
+                (date_int,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_bond_price_history(self, symbol: str, days: int = 90) -> list[dict]:
+        """Return daily price+yield history for a single bond series."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM bond_prices WHERE symbol=?
+                   ORDER BY date DESC LIMIT ?""",
+                (symbol, days),
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]

@@ -949,6 +949,118 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 #bt-empty { text-align: center; color: var(--muted); padding: 24px;
             font-size: var(--fs-sm); }
 .bt-hint { font-size: var(--fs-xs); color: var(--muted); margin: 4px 0 12px; line-height: 1.6; }
+
+/* ─── Mode tabs ─────────────────────────────────────────────── */
+#mode-tabs { display:flex; gap:2px; align-items:center; }
+.mode-tab {
+  background: transparent; border: none; color: var(--sub);
+  padding: 3px 11px; border-radius: 5px; cursor: pointer;
+  font-size: var(--fs-xs); font-weight: 600; transition: background .15s;
+}
+.mode-tab:hover { background: var(--surf2); color: var(--txt); }
+.mode-tab.on    { background: var(--surf2); color: var(--blue);
+                  border-bottom: 2px solid var(--blue); }
+
+/* ─── Bond App layout ───────────────────────────────────────── */
+#bond-app {
+  display: flex; flex-direction: row; height: calc(100vh - 42px);
+  overflow: hidden; background: var(--bg);
+}
+#bond-list {
+  width: 156px; min-width: 156px; border-left: 1px solid var(--brd);
+  overflow-y: auto; display: flex; flex-direction: column;
+  background: var(--surf);
+}
+#bl-header {
+  padding: 9px 10px 6px; font-size: var(--fs-xs); font-weight: 700;
+  color: var(--sub); border-bottom: 1px solid var(--brd);
+  position: sticky; top: 0; background: var(--surf);
+}
+.bl-item {
+  padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--brd);
+  transition: background .12s;
+}
+.bl-item:hover { background: var(--surf2); }
+.bl-item.sel   { background: rgba(41,182,246,.08); border-right: 3px solid var(--blue); }
+.bl-sym  { font-size: var(--fs-sm); font-weight: 700; color: var(--txt); }
+.bl-ytm  { font-size: 10px; color: var(--muted); margin-top:2px; }
+.bl-sig  { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
+.bl-sig.BUY  { color: var(--green); background: rgba(38,166,154,.12); }
+.bl-sig.SELL { color: var(--red);   background: rgba(239,83,80,.12); }
+.bl-sig.HOLD { color: var(--muted); background: var(--surf2); }
+
+#bond-main {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  padding: 12px 14px; gap: 10px;
+}
+/* Yield-curve chart */
+#yc-panel {
+  background: var(--surf); border: 1px solid var(--brd);
+  border-radius: 8px; padding: 10px 12px 8px; flex-shrink: 0;
+}
+#yc-title   { font-size: var(--fs-sm); font-weight: 700; color: var(--txt); }
+#yc-subtitle{ font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+#yc-wrap    { height: 200px; position: relative; }
+#yc-svg     { overflow: visible; }
+#yc-legend  {
+  font-size: 10px; color: var(--sub); display: flex; gap: 12px;
+  align-items: center; margin-top: 4px;
+}
+.ycl-dot {
+  display: inline-block; width: 9px; height: 9px;
+  border-radius: 50%; vertical-align: middle;
+}
+.ycl-dot.buy  { background: var(--green); }
+.ycl-dot.sell { background: var(--red); }
+.ycl-dot.hold { background: var(--muted); }
+.ycl-line {
+  display: inline-block; width: 22px; height: 2px;
+  background: var(--blue); vertical-align: middle; border-radius: 1px;
+}
+/* Z-spread summary cards */
+#yc-cards {
+  display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0;
+}
+.yc-card {
+  background: var(--surf); border: 1px solid var(--brd);
+  border-radius: 7px; padding: 8px 12px; min-width: 110px;
+}
+.yc-card .yck { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+.yc-card .ycv { font-size: var(--fs-md); font-weight: 700;
+                 font-variant-numeric: tabular-nums; }
+.yc-card .ycv.pos { color: var(--green); }
+.yc-card .ycv.neg { color: var(--red); }
+
+/* Bond table */
+#bond-table-wrap { flex: 1; overflow: auto; }
+#bond-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+#bond-table th, #bond-table td {
+  padding: 5px 8px; text-align: center; white-space: nowrap;
+  border-bottom: 1px solid var(--brd); font-variant-numeric: tabular-nums;
+}
+#bond-table th { color: var(--muted); font-weight: 600;
+                 position: sticky; top: 0; background: var(--surf); }
+#bond-table td.buy  { color: var(--green); font-weight: 700; }
+#bond-table td.sell { color: var(--red);   font-weight: 700; }
+.bond-sig { font-size: 9px; padding: 2px 7px; border-radius: 3px; font-weight: 700; }
+.bond-sig.BUY  { color: var(--green); background: rgba(38,166,154,.14); }
+.bond-sig.SELL { color: var(--red);   background: rgba(239,83,80,.14); }
+.bond-sig.HOLD { color: var(--muted); background: var(--surf2); }
+
+/* Registry */
+#bond-registry { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+#br-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+             font-size: var(--fs-xs); font-weight: 700; color: var(--txt); }
+#br-hint   { font-size: 10px; color: var(--muted); }
+#br-json   { flex: 1; background: var(--surf); color: var(--txt);
+             border: 1px solid var(--brd); border-radius: 6px;
+             padding: 8px; font-size: 11px; font-family: monospace;
+             resize: none; outline: none; }
+/* History */
+#bond-history { display:flex; flex-direction:column; gap:6px; }
+#bh-header    { font-size: var(--fs-xs); font-weight: 700; color: var(--txt); }
+#bh-svg       { background: var(--surf); border: 1px solid var(--brd);
+                border-radius: 8px; overflow: visible; }
 </style>
 </head>
 <body>
@@ -1031,8 +1143,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 <!-- ═══════════════════════════════════════════ Header ═══════ -->
 <div id="header">
   <div id="status-dot"></div>
-  <span id="header-title">📈 آربیتراژ بین‌روزی — صندوق‌های درآمد ثابت</span>
+  <!-- ── Mode tabs: Funds / Bonds ─────────────────────────────────────── -->
+  <div id="mode-tabs">
+    <button class="mode-tab on" id="mode-funds" onclick="setMode('funds')">📊 صندوق‌ها</button>
+    <button class="mode-tab"    id="mode-bonds" onclick="setMode('bonds')">📈 اوراق</button>
+  </div>
   <div class="h-div"></div>
+
+  <!-- Fund controls (hidden in bonds mode) -->
+  <div id="fund-controls">
 
   <!-- Unified TF bar: intraday | daily — انتخاب TF به‌صورت خودکار حالت را تعیین می‌کند -->
   <div class="pill-group" id="tf-grp">
@@ -1075,9 +1194,27 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   <span id="sel-badge"></span>
   <span id="last-scan">—</span>
-  <button id="theme-btn" onclick="toggleTheme()" title="حالت روز / شب">☀️</button>
   <button class="scan-btn" id="bt-open-btn" onclick="openBacktest()" title="بک‌تست استراتژی روی اردربوک تاریخی">🧪 بک‌تست</button>
   <button class="scan-btn" id="scan-btn-main" onclick="triggerScan()">🔄 اسکن</button>
+
+  </div><!-- /#fund-controls -->
+
+  <!-- Bond controls (hidden in funds mode) -->
+  <div id="bond-controls" style="display:none">
+    <div class="pill-group">
+      <button class="pill on" id="bc-live" onclick="setBondView('live')">زنده</button>
+      <button class="pill"    id="bc-history" onclick="setBondView('history')">سابقه</button>
+      <button class="pill"    id="bc-registry" onclick="setBondView('registry')">ثبت‌نام</button>
+    </div>
+    <div class="h-div"></div>
+    <label style="font-size:11px;color:var(--sub)">آستانه BUY:</label>
+    <input id="bc-entry" type="number" step="5" value="50" title="بیشتر از این bps بخر" style="width:52px">
+    <label style="font-size:11px;color:var(--sub)">bps</label>
+    <div class="h-div"></div>
+    <button class="scan-btn" onclick="bondScan()">📡 اسکن اوراق</button>
+  </div>
+
+  <button id="theme-btn" onclick="toggleTheme()" title="حالت روز / شب">☀️</button>
 </div>
 
 <!-- ═══════════════════════════════════════════ App ══════════ -->
@@ -1233,6 +1370,74 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   </div><!-- #main -->
 </div><!-- #app -->
+
+<!-- ═══════════════════════════════════════════ Bond App ═════ -->
+<div id="bond-app" style="display:none">
+
+  <!-- ── Bond sidebar: list of series ─────────────────────── -->
+  <aside id="bond-list">
+    <div id="bl-header">اوراق فعال</div>
+    <div id="bl-items"></div>
+  </aside>
+
+  <!-- ── Bond main panel ───────────────────────────────────── -->
+  <div id="bond-main">
+
+    <!-- Yield-curve chart (SVG) -->
+    <div id="yc-panel">
+      <div id="yc-title">منحنی بازده — اسناد خزانه اسلامی (اخزا)</div>
+      <div id="yc-subtitle"></div>
+      <div id="yc-wrap">
+        <svg id="yc-svg" width="100%" height="100%" viewBox="0 0 760 260"
+             preserveAspectRatio="none"></svg>
+      </div>
+      <div id="yc-legend">
+        <span class="ycl-dot buy"></span>ارزان (BUY)&nbsp;
+        <span class="ycl-dot sell"></span>گران (SELL)&nbsp;
+        <span class="ycl-dot hold"></span>منصفانه&nbsp;
+        <span class="ycl-line"></span>منحنی برازش‌شده
+      </div>
+    </div>
+
+    <!-- Z-spread summary cards -->
+    <div id="yc-cards"></div>
+
+    <!-- Bond table -->
+    <div id="bond-table-wrap">
+      <table id="bond-table">
+        <thead>
+          <tr>
+            <th>نماد</th><th>روزمانده</th><th>قیمت</th><th>ارزش ذاتی</th>
+            <th>بازده %</th><th>بازده منحنی %</th><th>Z-Spread (bps)</th>
+            <th>حجم</th><th>سیگنال</th>
+          </tr>
+        </thead>
+        <tbody id="bond-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- Registry view (hidden by default) -->
+    <div id="bond-registry" style="display:none">
+      <div id="br-header">
+        <span>ثبت‌نام سری‌های اوراق</span>
+        <button onclick="bondDiscover()" class="scan-btn" style="font-size:11px">🔍 کشف خودکار از TSE</button>
+        <button onclick="bondRegistrySave()" class="scan-btn" style="font-size:11px">💾 ذخیره</button>
+      </div>
+      <div id="br-hint">ins_code را با اجرای «کشف خودکار» یا از صفحه TSETMC تکمیل کنید.</div>
+      <textarea id="br-json" rows="20" spellcheck="false"></textarea>
+    </div>
+
+    <!-- Bond history view -->
+    <div id="bond-history" style="display:none">
+      <div id="bh-header">
+        <span>سابقه بازده — </span><span id="bh-sym">—</span>
+      </div>
+      <svg id="bh-svg" width="100%" height="180" viewBox="0 0 760 180"
+           preserveAspectRatio="none"></svg>
+    </div>
+
+  </div><!-- /#bond-main -->
+</div><!-- /#bond-app -->
 
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -3212,6 +3417,275 @@ function renderBacktest(res) {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Mode switcher  (صندوق‌ها / اوراق)
+// ══════════════════════════════════════════════════════════════════
+let appMode = 'funds';
+
+function setMode(mode) {
+  appMode = mode;
+  document.getElementById('app').style.display       = (mode === 'funds') ? '' : 'none';
+  document.getElementById('bond-app').style.display  = (mode === 'bonds') ? 'flex' : 'none';
+  document.getElementById('fund-controls').style.display  = (mode === 'funds') ? '' : 'none';
+  document.getElementById('bond-controls').style.display  = (mode === 'bonds') ? '' : 'none';
+  document.getElementById('mode-funds').classList.toggle('on', mode === 'funds');
+  document.getElementById('mode-bonds').classList.toggle('on', mode === 'bonds');
+  if (mode === 'bonds') loadBonds();
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Bonds
+// ══════════════════════════════════════════════════════════════════
+let bondData   = { snapshots: [], curve_coeffs: [], series: [], date: null };
+let bondView   = 'live';   // live | history | registry
+let selBond    = null;
+
+function setBondView(v) {
+  bondView = v;
+  ['live','history','registry'].forEach(w => {
+    document.getElementById('bc-' + w).classList.toggle('on', w === v);
+  });
+  document.getElementById('bond-table-wrap').style.display  = (v === 'live') ? '' : 'none';
+  document.getElementById('yc-panel').style.display         = (v === 'live') ? '' : 'none';
+  document.getElementById('yc-cards').style.display         = (v === 'live') ? '' : 'none';
+  document.getElementById('bond-history').style.display     = (v === 'history') ? '' : 'none';
+  document.getElementById('bond-registry').style.display    = (v === 'registry') ? '' : 'none';
+  if (v === 'registry') loadBondRegistry();
+}
+
+async function loadBonds() {
+  const r = await fetch('/api/bonds/latest').catch(() => null);
+  if (!r?.ok) return;
+  bondData = await r.json();
+  renderBonds();
+}
+
+async function bondScan() {
+  const btn = document.querySelector('#bond-controls .scan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  const r = await fetch('/api/bonds/scan').catch(() => null);
+  if (btn) { btn.disabled = false; btn.textContent = '📡 اسکن اوراق'; }
+  if (!r?.ok) { showError('خطا در اسکن اوراق'); return; }
+  bondData = await r.json();
+  renderBonds();
+}
+
+function renderBonds() {
+  const snaps = bondData.snapshots || [];
+  const coeffs = bondData.curve_coeffs || [];
+
+  // Sidebar
+  const bl = document.getElementById('bl-items');
+  bl.innerHTML = snaps.map(s => `
+    <div class="bl-item ${selBond===s.symbol?'sel':''}" onclick="selBondItem('${s.symbol}')">
+      <div class="bl-sym">${s.symbol}</div>
+      <div class="bl-ytm">${s.ytm ? (s.ytm*100).toFixed(2)+'%' : '—'}</div>
+      <span class="bl-sig ${s.signal}">${s.signal}</span>
+    </div>`).join('');
+
+  // Summary cards
+  const buys  = snaps.filter(s => s.signal === 'BUY');
+  const sells = snaps.filter(s => s.signal === 'SELL');
+  const maxZ  = snaps.length ? Math.max(...snaps.map(s => s.z_spread_bps||0)) : 0;
+  const minZ  = snaps.length ? Math.min(...snaps.map(s => s.z_spread_bps||0)) : 0;
+  document.getElementById('yc-cards').innerHTML = [
+    ['سریه‌های فعال', snaps.length, ''],
+    ['سیگنال BUY', buys.length, buys.length ? 'pos' : ''],
+    ['سیگنال SELL', sells.length, sells.length ? 'neg' : ''],
+    ['بیشترین Z-Spread', maxZ.toFixed(0)+' bps', maxZ>=50 ? 'pos' : ''],
+    ['کمترین Z-Spread',  minZ.toFixed(0)+' bps', minZ<=-50 ? 'neg' : ''],
+  ].map(([k,v,c]) => `<div class="yc-card"><div class="yck">${k}</div>
+    <div class="ycv ${c}">${v}</div></div>`).join('');
+
+  // Yield curve SVG
+  drawYieldCurve(snaps, coeffs);
+
+  // Table
+  const tbody = document.getElementById('bond-tbody');
+  tbody.innerHTML = snaps.map(s => {
+    const fv  = s.face_value || 1000000;
+    const fair = s.curve_ytm > 0
+      ? Math.round(fv / Math.pow(1 + s.curve_ytm, s.days_to_mat / 365))
+      : 0;
+    const zc = s.z_spread_bps > 30 ? 'buy' : s.z_spread_bps < -30 ? 'sell' : '';
+    return `<tr onclick="selBondItem('${s.symbol}')" style="cursor:pointer">
+      <td><b>${s.symbol}</b></td>
+      <td>${s.days_to_mat||'—'}</td>
+      <td>${fmtN(s.last_price||s.close_price)}</td>
+      <td>${fair > 0 ? fmtN(fair) : '—'}</td>
+      <td class="${zc}">${s.ytm ? (s.ytm*100).toFixed(3)+'%' : '—'}</td>
+      <td>${s.curve_ytm ? (s.curve_ytm*100).toFixed(3)+'%' : '—'}</td>
+      <td class="${zc}">${s.z_spread_bps != null ? s.z_spread_bps.toFixed(0) : '—'}</td>
+      <td>${fmtV(s.volume||0)}</td>
+      <td><span class="bond-sig ${s.signal}">${s.signal}</span></td>
+    </tr>`;
+  }).join('');
+
+  // Subtitle
+  if (bondData.date) {
+    const d = String(bondData.date);
+    const [jy,jm,jd] = gregorianToJalali(+d.slice(0,4),+d.slice(4,6),+d.slice(6,8));
+    document.getElementById('yc-subtitle').textContent =
+      `آخرین بروزرسانی: ${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')} — ${snaps.length} سری`;
+  }
+}
+
+function selBondItem(sym) {
+  selBond = sym;
+  document.querySelectorAll('.bl-item').forEach(el => el.classList.remove('sel'));
+  const items = document.querySelectorAll('.bl-item');
+  items.forEach(el => { if (el.querySelector('.bl-sym')?.textContent === sym) el.classList.add('sel'); });
+  if (bondView === 'live') loadBondHistory(sym);
+}
+
+async function loadBondHistory(sym) {
+  const r = await fetch(`/api/bonds/history?symbol=${encodeURIComponent(sym)}&days=120`).catch(()=>null);
+  if (!r?.ok) return;
+  const j = await r.json();
+  document.getElementById('bh-sym').textContent = sym;
+  drawBondHistorySVG(j.history || []);
+}
+
+// ── Yield Curve SVG renderer ──────────────────────────────────────────────
+
+function drawYieldCurve(snaps, coeffs) {
+  const svg = document.getElementById('yc-svg');
+  const W = 760, H = 260;
+  const pad = { l: 48, r: 16, t: 14, b: 34 };
+  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+
+  const valid = snaps.filter(s => s.ytm > 0 && s.days_to_mat > 0);
+  if (!valid.length) { svg.innerHTML = ''; return; }
+
+  const xMin = 0;
+  const xMax = Math.max(...valid.map(s => s.days_to_mat)) * 1.05;
+  const yMin = Math.max(0, Math.min(...valid.map(s => s.ytm)) * 0.95);
+  const yMax = Math.max(...valid.map(s => s.ytm)) * 1.05;
+
+  const px = x => pad.l + ((x - xMin) / (xMax - xMin)) * iW;
+  const py = y => pad.t + iH - ((y - yMin) / (yMax - yMin || 1)) * iH;
+
+  // Build SVG pieces
+  let out = '';
+
+  // Grid lines
+  const yTicks = 4;
+  for (let i = 0; i <= yTicks; i++) {
+    const yv = yMin + (yMax - yMin) * i / yTicks;
+    const yp = py(yv);
+    out += `<line x1="${pad.l}" y1="${yp.toFixed(1)}" x2="${W-pad.r}" y2="${yp.toFixed(1)}"
+              stroke="var(--brd)" stroke-width="0.6"/>`;
+    out += `<text x="${pad.l-5}" y="${(yp+4).toFixed(1)}" text-anchor="end"
+              font-size="9" fill="var(--muted)">${(yv*100).toFixed(1)}</text>`;
+  }
+  // X-axis ticks
+  const xStep = xMax > 400 ? 90 : 60;
+  for (let xv = xStep; xv < xMax; xv += xStep) {
+    const xp = px(xv);
+    out += `<line x1="${xp.toFixed(1)}" y1="${pad.t}" x2="${xp.toFixed(1)}" y2="${H-pad.b}"
+              stroke="var(--brd)" stroke-width="0.6"/>`;
+    out += `<text x="${xp.toFixed(1)}" y="${H-pad.b+12}" text-anchor="middle"
+              font-size="9" fill="var(--muted)">${xv}d</text>`;
+  }
+  // Axis labels
+  out += `<text x="${pad.l-14}" y="${H/2}" transform="rotate(-90 ${pad.l-14} ${H/2})"
+            text-anchor="middle" font-size="9" fill="var(--sub)">YTM %</text>`;
+
+  // Fitted curve path
+  if (coeffs.length >= 2) {
+    const pts = [];
+    const steps = 80;
+    for (let i = 0; i <= steps; i++) {
+      const xv = xMin + (xMax - xMin) * i / steps;
+      const yv = coeffs.reduce((acc, c, k) => acc + c * Math.pow(xv, k), 0);
+      if (yv > 0) pts.push(`${px(xv).toFixed(1)},${py(yv).toFixed(1)}`);
+    }
+    if (pts.length > 1)
+      out += `<polyline points="${pts.join(' ')}" fill="none"
+                stroke="var(--blue)" stroke-width="2" stroke-dasharray="4,2" opacity="0.8"/>`;
+  }
+
+  // Bond dots + Z-spread lines
+  for (const s of valid) {
+    const xp = px(s.days_to_mat);
+    const yp = py(s.ytm);
+    const col = s.signal === 'BUY' ? 'var(--green)' : s.signal === 'SELL' ? 'var(--red)' : 'var(--muted)';
+    // Vertical line from curve to dot
+    if (s.curve_ytm > 0) {
+      const yc = py(s.curve_ytm);
+      out += `<line x1="${xp.toFixed(1)}" y1="${Math.min(yp,yc).toFixed(1)}"
+                x2="${xp.toFixed(1)}" y2="${Math.max(yp,yc).toFixed(1)}"
+                stroke="${col}" stroke-width="1" opacity="0.5"/>`;
+    }
+    out += `<circle cx="${xp.toFixed(1)}" cy="${yp.toFixed(1)}" r="6"
+              fill="${col}" opacity="0.85">
+              <title>${s.symbol}: YTM=${(s.ytm*100).toFixed(2)}%  Z=${(s.z_spread_bps||0).toFixed(0)}bps  ${s.signal}</title>
+            </circle>`;
+    out += `<text x="${(xp+8).toFixed(1)}" y="${(yp+4).toFixed(1)}"
+              font-size="9" fill="${col}">${s.symbol}</text>`;
+  }
+
+  svg.innerHTML = out;
+}
+
+// ── Bond yield history SVG ────────────────────────────────────────────────
+
+function drawBondHistorySVG(rows) {
+  const svg = document.getElementById('bh-svg');
+  if (!rows.length) { svg.innerHTML = ''; return; }
+  const W = 760, H = 180, pad = {l:44,r:12,t:10,b:28};
+  const iW = W-pad.l-pad.r, iH = H-pad.t-pad.b;
+  const ytms = rows.map(r => r.ytm).filter(v => v > 0);
+  if (!ytms.length) { svg.innerHTML = ''; return; }
+  const yMin = Math.min(...ytms)*0.97, yMax = Math.max(...ytms)*1.03;
+  const px = i => pad.l + (i / (rows.length - 1)) * iW;
+  const py = y => pad.t + iH - ((y-yMin)/(yMax-yMin||1))*iH;
+  let path = rows.map((r,i) => (r.ytm>0 ? `${i===0?'M':'L'}${px(i).toFixed(1)},${py(r.ytm).toFixed(1)}` : '')).join(' ');
+  let out = `<polyline points="${rows.filter(r=>r.ytm>0).map((r,_i,arr)=>{
+    const i = rows.indexOf(r);
+    return `${px(i).toFixed(1)},${py(r.ytm).toFixed(1)}`;
+  }).join(' ')}" fill="none" stroke="var(--blue)" stroke-width="1.5"/>`;
+  // Y ticks
+  for (let k = 0; k <= 3; k++) {
+    const yv = yMin + (yMax-yMin)*k/3;
+    const yp = py(yv);
+    out += `<line x1="${pad.l}" y1="${yp.toFixed(1)}" x2="${W-pad.r}" y2="${yp.toFixed(1)}" stroke="var(--brd)" stroke-width="0.5"/>`;
+    out += `<text x="${pad.l-4}" y="${(yp+4).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--muted)">${(yv*100).toFixed(1)}%</text>`;
+  }
+  svg.innerHTML = out;
+  setBondView('history');
+}
+
+// ── Bond Registry ─────────────────────────────────────────────────────────
+
+async function loadBondRegistry() {
+  const r = await fetch('/api/bonds/series').catch(()=>null);
+  if (!r?.ok) return;
+  const j = await r.json();
+  document.getElementById('br-json').value = JSON.stringify(j.series||[], null, 2);
+}
+
+async function bondRegistrySave() {
+  try {
+    const series = JSON.parse(document.getElementById('br-json').value);
+    const r = await fetch('/api/bonds/series', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({series})
+    });
+    const j = await r.json();
+    showError('ذخیره شد: ' + j.saved + ' سری');
+    await loadBonds();
+  } catch(e) { showError('خطا: ' + e.message); }
+}
+
+async function bondDiscover() {
+  const r = await fetch('/api/bonds/discover').catch(()=>null);
+  if (!r?.ok) { showError('کشف ناموفق'); return; }
+  const j = await r.json();
+  showError(`کشف شد: ${j.updated.length} نماد از ${j.total} سری`);
+  await loadBondRegistry();
 }
 </script>
 </body>
