@@ -72,7 +72,10 @@ def _in_session(hhmmss: int) -> bool:
 
 @dataclass
 class BondBacktestParams:
-    capital: float = 1_000_000_000   # max Rials per open position
+    capital: float = 1_000_000_000   # LEGACY per-position cap (Rials). Only used
+                                     # when total_capital == 0 (capital management
+                                     # off); otherwise the per-position size is
+                                     # total_capital × max_position_pct.
     entry_bps: float = 50.0          # BUY when z-spread ≥ this (bond is cheap)
     exit_bps: float = 10.0           # SELL when z-spread ≤ this (reverted)
     degree: int = 2                  # yield-curve polynomial degree (1 or 2 only)
@@ -101,13 +104,13 @@ class BondBacktestParams:
                                      # bps; otherwise HOLD for a better price.
                                      # 0 = break-even (never sell a signal at a loss).
                                      # Forced exits (eod/final) are never guarded.
-    total_capital: float = 0.0       # portfolio cash management. 0 = OFF (legacy:
-                                     # every position independently capped by
-                                     # `capital`, unlimited concurrent, bit-exact).
-                                     # >0 = one shared cash pool of this size: buys
-                                     # consume cash, sells return it, and the engine
-                                     # can't deploy more than it holds.
-    max_position_pct: float = 1.0    # money-management: max fraction of total_capital
+    total_capital: float = 10_000_000_000.0  # portfolio cash pool (Rials) — the
+                                     # default capital-management model. A single
+                                     # shared pool: buys consume cash, sells return
+                                     # it, and the engine can't deploy more than it
+                                     # holds.  0 = OFF (legacy: each position capped
+                                     # independently by `capital`, unlimited concurrent).
+    max_position_pct: float = 0.5    # money-management: max fraction of total_capital
                                      # a single position may deploy (0..1). Only used
                                      # when total_capital > 0.
 
@@ -354,15 +357,14 @@ def _buy_budget(p: "BondBacktestParams", portfolio: dict | None,
     is already deployed in this symbol — exactly the old behaviour, so results
     stay bit-identical when capital management is off.
 
-    Portfolio mode: the per-position cap is the tighter of ``capital`` and
-    ``total_capital × max_position_pct``; on top of that, the buy is bounded by
-    the cash actually on hand (reserving the buy fee so cash never goes
-    negative).
+    Portfolio mode: the per-position cap is ``total_capital × max_position_pct``;
+    on top of that, the buy is bounded by the cash actually on hand (reserving
+    the buy fee so cash never goes negative).
     """
     cur = pos[sym]["buy_notional"] if sym in pos else 0.0
     if portfolio is None:
         return p.capital - cur
-    cap = min(p.capital, p.total_capital * p.max_position_pct) - cur
+    cap = p.total_capital * p.max_position_pct - cur
     cash_cap = portfolio["cash"] / (1.0 + p.buy_fee)   # leave room for the fee
     return min(cap, cash_cap)
 
