@@ -1123,6 +1123,16 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
                 (ins_code, symbol),
             )
 
+    def clear_bond_series(self) -> int:
+        """Delete all rows from bond_series. Returns rows deleted.
+
+        Used by /api/bonds/discover to rebuild the registry cleanly from live
+        TSETMC data (removing stale placeholders, options and matured bonds).
+        """
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM bond_series")
+            return cur.rowcount
+
     def save_bond_prices(self, prices: list[dict]) -> int:
         """Upsert today's bond price + yield snapshot. Returns count."""
         if not prices:

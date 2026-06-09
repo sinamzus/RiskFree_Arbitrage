@@ -41,6 +41,7 @@ Implementation Notes
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Optional
@@ -51,58 +52,74 @@ logger = logging.getLogger(__name__)
 #  Bond series registry                                                        #
 # =========================================================================== #
 
-# NOTE: All entries below are placeholder/approximate values.
-# maturity_date and issue_date are YYYYMMDD Gregorian ints.
-# ins_code = "" means the TSETMC instrument code has not yet been discovered;
-# call TSETMCFetcher.discover_ins_code(symbol) to populate.
-# THESE DATES NEED VERIFICATION against official TSE / Ministry of Finance
-# announcements before use in production.
+# The اخزا universe is DISCOVERED live from TSETMC — not hard-coded — because
+# series are issued and mature continuously and their symbols don't follow a
+# simple sequence (e.g. اخزا401 = treasury, budget-year 1404, series 1).
+#
+# Each instrument's maturity date is encoded in its TSETMC name as the trailing
+# Jalali date, e.g. "اسنادخزانه-م3بودجه04-070718" → 1407/07/18.  The discovery
+# endpoint (/api/bonds/discover) parses that, filters out matured bonds and
+# options, and populates bond_series.  AKHZA_SERIES is therefore empty: there
+# are no honest hard-coded defaults to ship.
+AKHZA_SERIES: list[dict] = []
 
-# Series with maturity_date in the past are kept with active=False so they
-# can still be used for historical back-testing but won't appear in live scans.
-# ALL dates are APPROXIMATE and need verification via /api/bonds/discover
-# or by consulting the official TSE bond register (bourse.ir / tsetmc.com).
-AKHZA_SERIES: list[dict] = [
-    # ── Expired series (kept for history) ───────────────────────────────
-    {"symbol": "اخزا۱", "ins_code": "", "name": "اسناد خزانه اسلامی سری اول",
-     "face_value": 1_000_000, "maturity_date": 20240101, "issue_date": 20210601,
-     "coupon_rate": 0.0, "active": False, "verified": False},
-    {"symbol": "اخزا۲", "ins_code": "", "name": "اسناد خزانه اسلامی سری دوم",
-     "face_value": 1_000_000, "maturity_date": 20240601, "issue_date": 20211201,
-     "coupon_rate": 0.0, "active": False, "verified": False},
-    {"symbol": "اخزا۳", "ins_code": "", "name": "اسناد خزانه اسلامی سری سوم",
-     "face_value": 1_000_000, "maturity_date": 20250101, "issue_date": 20220601,
-     "coupon_rate": 0.0, "active": False, "verified": False},
-    {"symbol": "اخزا۴", "ins_code": "", "name": "اسناد خزانه اسلامی سری چهارم",
-     "face_value": 1_000_000, "maturity_date": 20250601, "issue_date": 20221201,
-     "coupon_rate": 0.0, "active": False, "verified": False},
-    {"symbol": "اخزا۵", "ins_code": "", "name": "اسناد خزانه اسلامی سری پنجم",
-     "face_value": 1_000_000, "maturity_date": 20260101, "issue_date": 20230601,
-     "coupon_rate": 0.0, "active": False, "verified": False},
-    # ── Active series (maturity > June 2026) ─────────────────────────────
-    {"symbol": "اخزا۶", "ins_code": "", "name": "اسناد خزانه اسلامی سری ششم",
-     "face_value": 1_000_000, "maturity_date": 20261201, "issue_date": 20231201,
-     "coupon_rate": 0.0, "active": True, "verified": False},
-    {"symbol": "اخزا۷", "ins_code": "", "name": "اسناد خزانه اسلامی سری هفتم",
-     "face_value": 1_000_000, "maturity_date": 20270601, "issue_date": 20240601,
-     "coupon_rate": 0.0, "active": True, "verified": False},
-    {"symbol": "اخزا۸", "ins_code": "", "name": "اسناد خزانه اسلامی سری هشتم",
-     "face_value": 1_000_000, "maturity_date": 20271201, "issue_date": 20241201,
-     "coupon_rate": 0.0, "active": True, "verified": False},
-    {"symbol": "اخزا۹", "ins_code": "", "name": "اسناد خزانه اسلامی سری نهم",
-     "face_value": 1_000_000, "maturity_date": 20280601, "issue_date": 20250601,
-     "coupon_rate": 0.0, "active": True, "verified": False},
-    {"symbol": "اخزا۱۴", "ins_code": "", "name": "اسناد خزانه اسلامی سری چهاردهم",
-     "face_value": 1_000_000, "maturity_date": 20281201, "issue_date": 20261201,
-     "coupon_rate": 0.0, "active": True, "verified": False},
-    # placeholder extras — the user should discover real series via /api/bonds/discover
-    {"symbol": "اخزا۱۰", "ins_code": "", "name": "اسناد خزانه اسلامی سری دهم",
-     "face_value": 1_000_000, "maturity_date": 20290601, "issue_date": 20260601,
-     "coupon_rate": 0.0, "active": True, "verified": False},
-    {"symbol": "اخزا۱۱", "ins_code": "", "name": "اسناد خزانه اسلامی سری یازدهم",
-     "face_value": 1_000_000, "maturity_date": 20291201, "issue_date": 20261201,
-     "coupon_rate": 0.0, "active": True, "verified": False},
-]
+
+# =========================================================================== #
+#  اخزا instrument classification & maturity parsing                            #
+# =========================================================================== #
+
+def _jalali6_to_greg_int(j6: str) -> int:
+    """Convert a 6-digit Jalali ``YYMMDD`` string to a Gregorian YYYYMMDD int.
+
+    اخزا maturities use a 2-digit Jalali year: 94/95 → 1394/1395, 00–10 → 1400s.
+    Returns 0 if conversion fails or jdatetime is unavailable.
+    """
+    if not j6 or len(j6) != 6 or not j6.isdigit():
+        return 0
+    try:
+        import jdatetime
+    except ImportError:
+        return 0
+    yy, mm, dd = int(j6[:2]), int(j6[2:4]), int(j6[4:6])
+    # Disambiguate the century: اخزا exist from ~1394 to ~1412.
+    year = 1300 + yy if yy >= 60 else 1400 + yy
+    try:
+        g = jdatetime.date(year, mm, dd).togregorian()
+        return g.year * 10_000 + g.month * 100 + g.day
+    except Exception:
+        return 0
+
+
+def parse_akhza_maturity(name: str) -> int:
+    """Extract the maturity (Gregorian YYYYMMDD) from an اخزا instrument name.
+
+    The Jalali maturity is the LAST 6-digit group in the name, e.g.
+        "اسنادخزانه-م3بودجه04-070718"  → 1407/07/18 → Gregorian
+        "اسناد خزانه اسلامي950821"      → 1395/08/21 → Gregorian
+    Returns 0 when no maturity can be parsed.
+    """
+    if not name:
+        return 0
+    groups = re.findall(r"\d{6}", name)
+    if not groups:
+        return 0
+    return _jalali6_to_greg_int(groups[-1])
+
+
+def is_akhza_treasury(symbol: str, name: str) -> bool:
+    """True only for real اخزا treasury bills — excludes options/derivatives.
+
+    Options on اخزا appear in search results with "اختيار" in the name and
+    ض/ط symbol prefixes (call/put). Those are NOT zero-coupon bills and must
+    never enter the yield-curve universe.
+    """
+    n = name or ""
+    s = (symbol or "").strip()
+    if "اختيار" in n or "اختیار" in n:          # option (call/put) on an اخزا
+        return False
+    if s[:1] in ("ض", "ط"):                      # ضاخزا / طاخزا = option symbols
+        return False
+    return "خزانه" in n                          # must be a treasury instrument
 
 
 # =========================================================================== #
@@ -664,6 +681,7 @@ def collect_bond_history(db, fetcher, *,
                          intraday_days: int = 30,
                          fetch_intraday: bool = True,
                          fetch_ob: bool = True,
+                         rediscover: bool = True,
                          workers: int = None) -> dict:
     """Collect historical daily + intraday-tick + order-book data for every اخزا.
 
@@ -699,6 +717,21 @@ def collect_bond_history(db, fetcher, *,
         FETCH_WORKERS = 5
 
     workers = max(1, workers or FETCH_WORKERS)
+
+    # ── Self-heal the registry from live TSE before collecting ───────────
+    # Rebuilds bond_series with only active treasury bills (real maturities,
+    # no options/matured). This prevents querying delisted instruments that
+    # return HTTP 500, and fixes any stale/polluted registry from older runs.
+    if rediscover and hasattr(fetcher, "discover_akhza"):
+        try:
+            discovered = fetcher.discover_akhza()
+            if discovered and hasattr(db, "clear_bond_series"):
+                db.clear_bond_series()
+                db.upsert_bond_series(discovered)
+                logger.info("collect_bond_history: registry rebuilt — %d bills (%d active)",
+                            len(discovered), sum(1 for d in discovered if d["active"]))
+        except Exception as exc:
+            logger.warning("collect_bond_history: rediscovery failed (%s) — using existing registry", exc)
 
     # Load registry; seed with built-ins if empty.
     try:

@@ -3763,17 +3763,17 @@ async function bondDiscover() {
   const btn = event?.target;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال جستجو ...'; }
   const r = await fetch('/api/bonds/discover').catch(()=>null);
-  if (btn) { btn.disabled = false; btn.textContent = '🔍 کشف خودکار از TSE'; }
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 کشف نمادها'; }
   if (!r?.ok) { showError('کشف ناموفق — شبکه TSE در دسترس نیست'); return; }
   const j = await r.json();
-  const updated = (j.updated || []).length;
-  const added   = (j.added   || []).length;
-  const msg = updated + added > 0
-    ? `✅ ${updated} نماد به‌روز شد، ${added} سری جدید اضافه شد (از ${j.bulk_hits} نتیجه TSETMC)`
-    : `ℹ️ TSETMC ${j.bulk_hits} نتیجه برگرداند ولی تطابقی یافت نشد — شاید نمادها قبلاً ثبت شده‌اند`;
+  const disc = j.discovered || 0;
+  const act  = j.active || 0;
+  const msg = disc > 0
+    ? `✅ ${disc} اوراق خزانه یافت شد — ${act} فعال، ${(j.matured||0)} سررسیدشده (رد شد). حالا «اسکن اوراق» را بزنید.`
+    : `ℹ️ هیچ اوراق خزانه‌ای یافت نشد — دسترسی شبکه به TSE را بررسی کنید`;
   showError(msg);
   await loadBondRegistry();
-  if (updated + added > 0) await loadBonds();
+  if (disc > 0) await loadBonds();
 }
 
 // ── Bond historical data collection (for tick-by-tick backtest) ────────────

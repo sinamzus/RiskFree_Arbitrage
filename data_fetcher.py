@@ -331,6 +331,49 @@ class TSETMCFetcher:
         logger.info("discover_bond_ins_codes('%s'): %d results", keyword, len(mapping))
         return mapping
 
+    def discover_akhza(self, queries: list[str] = None) -> list[dict]:
+        """Discover ACTIVE اخزا treasury bills from TSETMC with real maturities.
+
+        Runs several keyword searches (to beat TSETMC's ~40-result cap), keeps
+        only genuine treasury bills (drops options/derivatives), parses each
+        instrument's maturity from its name, and flags active vs matured.
+
+        Returns a de-duplicated list of registry dicts:
+            {symbol, ins_code, name, face_value, maturity_date(greg int),
+             issue_date, coupon_rate, active(bool), verified=True}
+        """
+        from bonds import parse_akhza_maturity, is_akhza_treasury, _today_int, days_to_maturity
+
+        # Budget-year prefixes cover the currently-tradeable universe; broad
+        # "اخزا" catches the rest. Searches are cheap (rate-limited) and merged.
+        queries = queries or ["اخزا", "اخزا4", "اخزا3", "اخزا2", "اخزا1", "اخزا0"]
+        today = _today_int()
+
+        by_code: dict[str, dict] = {}
+        for q in queries:
+            for r in self.search_instrument(q):
+                code = (r.get("ins_code") or "").strip()
+                sym  = (r.get("symbol") or "").strip()
+                name = (r.get("full_name") or "").strip()
+                if not code or not sym or code in by_code:
+                    continue
+                if not is_akhza_treasury(sym, name):
+                    continue
+                mat = parse_akhza_maturity(name)
+                active = bool(mat and days_to_maturity(mat, today) > 0)
+                by_code[code] = {
+                    "symbol": sym, "ins_code": code, "name": name,
+                    "face_value": 1_000_000, "maturity_date": mat or 0,
+                    "issue_date": 0, "coupon_rate": 0.0,
+                    "active": active, "verified": True,
+                }
+
+        out = sorted(by_code.values(), key=lambda d: d["maturity_date"] or 99999999)
+        n_active = sum(1 for d in out if d["active"])
+        logger.info("discover_akhza: %d treasury bills (%d active) from %d queries",
+                    len(out), n_active, len(queries))
+        return out
+
     # ------------------------------------------------------------------ #
     #  Price data                                                          #
     # ------------------------------------------------------------------ #
