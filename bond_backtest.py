@@ -77,6 +77,8 @@ class BondBacktestParams:
     min_curve_points: int = 3        # min series needed to fit a curve at an instant
     step_secs: int = 0               # 0 = every snapshot time; >0 = downsample grid
     force_eod: bool = True           # liquidate any open position at day end
+    include_matured: bool = True     # include اخزا already matured (as of today)
+                                     # — on each date they only trade while alive
 
 
 @dataclass
@@ -311,9 +313,15 @@ def _summarize(trades: list[BondTrade]) -> dict:
     }
 
 
-def _resolve_universe(db, symbols):
-    """Return (universe, meta) — symbol list + per-symbol face value & maturity."""
-    from bonds import AKHZA_SERIES
+def _resolve_universe(db, symbols, include_matured: bool = True):
+    """Return (universe, meta) — symbol list + per-symbol face value & maturity.
+
+    When *include_matured* is False, اخزا whose maturity date is on/before today
+    (already matured as of the run) are dropped from the universe entirely.
+    Note that even when included, a series only contributes to a given backtest
+    date while it was still alive on that date (see _load_day_cache).
+    """
+    from bonds import AKHZA_SERIES, _today_int
     try:
         registry = db.get_bond_series(active_only=False)
     except AttributeError:
@@ -331,6 +339,12 @@ def _resolve_universe(db, symbols):
             "maturity_date": int(s.get("maturity_date", 0) or 0),
         }
     universe = [s for s in (symbols or list(meta)) if s in meta]
+
+    if not include_matured:
+        today = _today_int()
+        universe = [s for s in universe
+                    if not meta[s]["maturity_date"]
+                    or meta[s]["maturity_date"] > today]
     return universe, meta
 
 
@@ -415,7 +429,7 @@ def run_bond_backtest(db, symbols: list[str] | None = None,
     dict: {symbols, params, days_tested, days_skipped, trades:[…], summary:{…}}
     """
     p = params or BondBacktestParams()
-    universe, meta = _resolve_universe(db, symbols)
+    universe, meta = _resolve_universe(db, symbols, include_matured=p.include_matured)
     dates, cache = _load_day_cache(db, universe, meta, start_date, end_date)
     all_trades, days_tested, days_skipped = _simulate_cache(dates, cache, p)
 
@@ -479,7 +493,7 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
     import threading
     base = base or BondBacktestParams()
     grid = grid or DEFAULT_GRID
-    universe, meta = _resolve_universe(db, symbols)
+    universe, meta = _resolve_universe(db, symbols, include_matured=base.include_matured)
     dates, cache = _load_day_cache(db, universe, meta, start_date, end_date)
 
     combos = []

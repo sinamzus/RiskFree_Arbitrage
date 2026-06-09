@@ -1377,6 +1377,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     </div>
     <div id="dm-toolbar">
       <label><input type="checkbox" id="dm-all" onchange="dmToggleAll(this.checked)"> انتخاب همه</label>
+      <label id="dm-active-wrap" style="display:none"><input type="checkbox" id="dm-active-only" onchange="renderCoverage(dmToday)"> فقط سررسیدنشده</label>
       <div class="h-div"></div>
       <label>روزهای اخیر (تیک/اردربوک):</label>
       <input type="number" id="dm-days" value="30" min="1" max="90">
@@ -1737,6 +1738,11 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <div class="bbt-field"><label>تا تاریخ (شمسی)</label>
           <input id="bbt-end" type="text" readonly placeholder="اختیاری"
                  onclick="jpOpen(this)"></div>
+        <label class="chk" style="align-self:flex-end;margin-bottom:6px"
+               title="اگر روشن باشد اخزاهایی که اکنون سررسید شده‌اند هم در روزهایی که هنوز زنده بوده‌اند در منحنی شرکت می‌کنند">
+          <input id="bbt-matured" type="checkbox" checked>
+          شامل اخزاهای سررسیدشده
+        </label>
         <button class="scan-btn" id="bbt-opt-btn" onclick="bondOptimize()"
                 title="جستجوی شبکه‌ای پارامترها و پیشنهاد بهترین ترکیب (درجه منحنی، آستانه‌ها)">🔧 بهینه‌سازی</button>
         <button class="scan-btn" id="bbt-run" onclick="bondBacktest()">🧪 اجرای بک‌تست</button>
@@ -4342,6 +4348,7 @@ async function bondBacktest() {
     degree:    document.getElementById('bbt-degree').value  || '2',
     min_pts:   document.getElementById('bbt-minpts').value  || '3',
     step:      document.getElementById('bbt-step').value    || '0',
+    include_matured: document.getElementById('bbt-matured').checked ? '1' : '0',
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4369,6 +4376,7 @@ async function bondOptimize() {
     step:      +document.getElementById('bbt-step').value || 0,
     force_eod: '1',
     min_trades: 3,
+    include_matured: document.getElementById('bbt-matured').checked ? '1' : '0',
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
@@ -4496,6 +4504,7 @@ function renderBondBacktest(res) {
 // ══════════════════════════════════════════════════════════════════
 let dmKind = 'funds';
 let dmRows = [];
+let dmToday = 0;
 let dmPollTimer = null;
 
 async function openDataModal(kind) {
@@ -4504,6 +4513,9 @@ async function openDataModal(kind) {
     dmKind === 'bonds' ? '📊 وضعیت داده — اوراق (اخزا)' : '📊 وضعیت داده — صندوق‌ها';
   document.getElementById('dm-overlay').classList.add('visible');
   document.getElementById('dm-all').checked = false;
+  // The «فقط سررسیدنشده» filter only makes sense for اخزا (funds never mature).
+  document.getElementById('dm-active-wrap').style.display =
+    dmKind === 'bonds' ? '' : 'none';
   await dmRefresh();
   dmPollStatus();           // reflect any in-flight collection
 }
@@ -4518,6 +4530,7 @@ async function dmRefresh() {
   if (!r?.ok) { showError('دریافت وضعیت داده ناموفق'); return; }
   const j = await r.json();
   dmRows = (dmKind === 'bonds' ? j.bonds : j.funds) || [];
+  dmToday = j.today;
   renderCoverage(j.today);
 }
 
@@ -4543,16 +4556,23 @@ function dmCellHtml(c, today, kind) {
 
 function renderCoverage(today) {
   const tb = document.getElementById('dm-tbody');
-  if (!dmRows.length) {
+  // Optional اخزا filter: keep only series not yet matured (maturity in the future).
+  const activeOnly = document.getElementById('dm-active-only');
+  let rows = dmRows;
+  if (dmKind === 'bonds' && activeOnly && activeOnly.checked) {
+    rows = dmRows.filter(r => !r.maturity_date || r.maturity_date > today);
+  }
+  if (!rows.length) {
     const hint = dmKind === 'bonds'
-      ? 'هیچ اوراقی ثبت نشده — ابتدا «🔍 کشف نمادها» را بزنید'
+      ? (dmRows.length ? 'همهٔ اوراق ثبت‌شده سررسید شده‌اند'
+                       : 'هیچ اوراقی ثبت نشده — ابتدا «🔍 کشف نمادها» را بزنید')
       : 'هیچ نمادی پیکربندی نشده';
     tb.innerHTML = `<tr><td colspan="7" style="color:var(--muted);padding:24px">${hint}</td></tr>`;
     document.getElementById('dm-sub').textContent = '';
     return;
   }
   let nDaily=0, nTicks=0, nOb=0;
-  tb.innerHTML = dmRows.map(r => {
+  tb.innerHTML = rows.map(r => {
     if (r.daily?.count) nDaily++;
     if (r.ticks?.days)  nTicks++;
     if (r.ob?.days)     nOb++;
@@ -4573,8 +4593,10 @@ function renderCoverage(today) {
       <td class="${overall}">${oTxt}</td>
     </tr>`;
   }).join('');
+  const matured = dmKind === 'bonds' ? (dmRows.length - rows.length) : 0;
   document.getElementById('dm-sub').textContent =
-    `${dmRows.length} نماد · روزانه ${nDaily} · تیک ${nTicks} · اردربوک ${nOb}`;
+    `${rows.length} نماد · روزانه ${nDaily} · تیک ${nTicks} · اردربوک ${nOb}`
+    + (matured > 0 ? ` · ${matured} سررسیدشده پنهان` : '');
   attachSort('dm-table');
 }
 
