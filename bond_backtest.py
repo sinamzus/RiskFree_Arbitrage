@@ -628,12 +628,17 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
             if not bids:
                 continue
             t = int(snap.get("time", 0))
+            # Exit on the date of the snapshot actually used (the symbol's last
+            # traded day), NOT the global last backtest date — otherwise the
+            # recorded exit_date points at a day with no matching order book and
+            # the OB popup can't show the executed price.
+            exit_d = int(snap.get("date", 0)) or final_date
             held = st["units"]
             units, notional = _sell_against_bids(bids, 0, held)
             if units < held:
                 notional += (held - units) * bids[-1][0]
                 units = held
-            _record_close(sym, st, units, notional, t, final_date, 0.0, "final", p, trades)
+            _record_close(sym, st, units, notional, t, exit_d, 0.0, "final", p, trades)
 
     return trades, tested, skipped
 
@@ -812,12 +817,15 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
             if not bids:
                 continue
             t = int(snap.get("time", 0))
+            # Use the snapshot's own date (the symbol's last traded day) so the
+            # recorded exit_date matches a day that actually has an order book.
+            exit_d = int(snap.get("date", 0)) or final_date
             held = st["units"]
             units, notional = _sell_against_bids(bids, 0, held)
             if units < held:
                 notional += (held - units) * bids[-1][0]
                 units = held
-            _record_close(sym, st, units, notional, t, final_date, 0.0, "final", p, trades)
+            _record_close(sym, st, units, notional, t, exit_d, 0.0, "final", p, trades)
 
     return trades
 

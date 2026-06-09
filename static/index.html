@@ -4675,8 +4675,12 @@ function renderBondBacktest(res) {
     const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}"      data-time="${t.entry_time}" data-side="buy"  data-price="${t.entry_price||0}`;
     const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.exit_date||t.date}" data-time="${t.exit_time}"  data-side="sell" data-price="${t.exit_price||0}`;
     const ic = insCodes[t.symbol];
+    // Deep-link to TSETMC's "instrument state on a specific date" page
+    // (ParTree=15131P&d=YYYYMMDD) for the trade's ENTRY date — that page shows
+    // the day's order book and tick-by-tick trades so the exact moment can be
+    // located. (TSETMC has no time-of-day deep link, only per-date.)
     const tseTd = ic
-      ? `<td><a class="tse-link" href="https://www.tsetmc.com/instInfo/${ic}" target="_blank" rel="noopener" title="مشاهده در TSETMC">↗</a></td>`
+      ? `<td><a class="tse-link" href="https://www.tsetmc.com/Loader.aspx?ParTree=15131P&i=${ic}&d=${t.date}" target="_blank" rel="noopener" title="مشاهده وضعیت نماد در تاریخ معامله در TSETMC">↗</a></td>`
       : `<td style="color:var(--muted)">—</td>`;
     return `<tr>
       <td>${t.symbol}</td>${tseTd}<td>${entryJ}</td>${exitDateTd}<td>${ht}</td><td>${xt}</td>
