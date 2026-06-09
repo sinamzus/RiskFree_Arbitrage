@@ -75,7 +75,7 @@ class BondBacktestParams:
     capital: float = 1_000_000_000   # max Rials per open position
     entry_bps: float = 50.0          # BUY when z-spread ≥ this (bond is cheap)
     exit_bps: float = 10.0           # SELL when z-spread ≤ this (reverted)
-    degree: int = 2                  # yield-curve polynomial degree
+    degree: int = 2                  # yield-curve polynomial degree (1 or 2 only)
     min_curve_points: int = 3        # min series needed to fit a curve at an instant
     step_secs: int = 0               # 0 = every snapshot time; >0 = downsample grid
     force_eod: bool = False          # True = liquidate at day end; False = carry overnight
@@ -83,6 +83,8 @@ class BondBacktestParams:
                                      # — on each date they only trade while alive
     buy_fee: float = BUY_COST        # buy-side commission (fraction, e.g. 0.00145)
     sell_fee: float = SELL_COST      # sell-side commission + tax (fraction)
+    strategy: str = "zspread"        # "zspread" = mid-based mean-reversion (all-in);
+                                     # "outlier" = grab mispriced individual OB orders
 
 
 @dataclass
@@ -256,6 +258,82 @@ def _record_close(sym: str, st: dict,
 
 
 # --------------------------------------------------------------------------- #
+#  Outlier-order strategy                                                       #
+# --------------------------------------------------------------------------- #
+#
+# Distinct from the z-spread mean-reversion engine: instead of trading on the
+# bond's *mid* drifting off the curve (and committing the whole capital), this
+# scans the live order book for individual mispriced orders.  When a single ask
+# sits far CHEAP of fair value (its implied YTM is above the curve by
+# ≥ entry_bps) we lift just that order's quantity (capped by capital) — the size
+# is whatever the opportunity offers, large or small.  Symmetrically, while we
+# hold a series, a single bid sitting far RICH of fair value (implied YTM below
+# the curve by ≤ exit_bps) is hit for its quantity.  Any leftover position is
+# still subject to force_eod / end-of-range final close.
+
+def _outlier_step(sym, sd, curve_y, t, date_int, pos,
+                  entry_bps, exit_bps, capital, close_fn):
+    face, dtm, snap = sd.face_value, sd.dtm, sd.cur
+
+    # ── SELL first: realise rich-bid opportunities on an existing holding ──
+    if sym in pos:
+        bids = _ladder(snap, "bid")
+        if bids:
+            held = pos[sym]["units"]
+            su = 0
+            sn = 0.0
+            for price, vol in bids:        # best-first = descending price
+                z = (ytm_zero_coupon(price, face, dtm) - curve_y) * 10_000.0
+                if z <= exit_bps:          # bid overpays vs fair → sell into it
+                    take = vol if vol < (held - su) else (held - su)
+                    if take > 0:
+                        su += take
+                        sn += take * price
+                    if su >= held:
+                        break
+                else:
+                    break                  # deeper bids are even less rich
+            if su > 0:
+                ep = sn / su
+                ez = (ytm_zero_coupon(ep, face, dtm) - curve_y) * 10_000.0
+                close_fn(sym, su, sn, t, ez, "outlier")
+
+    # ── BUY: grab cheap-ask outliers, sized by what's offered (≤ capital) ──
+    asks = _ladder(snap, "ask")
+    if not asks:
+        return
+    cur_notional = pos[sym]["buy_notional"] if sym in pos else 0.0
+    budget = capital - cur_notional
+    if budget <= 0:
+        return
+    bu = 0
+    bn = 0.0
+    for price, vol in asks:                # best-first = ascending price
+        z = (ytm_zero_coupon(price, face, dtm) - curve_y) * 10_000.0
+        if z >= entry_bps:                 # ask is cheap vs fair → lift it
+            affordable = int((budget - bn) // price)
+            take = vol if vol < affordable else affordable
+            if take > 0:
+                bu += take
+                bn += take * price
+        else:
+            break                          # deeper asks are even less cheap
+    if bu > 0:
+        if sym in pos:
+            pos[sym]["units"] += bu
+            pos[sym]["buy_notional"] += bn
+        else:
+            ep = bn / bu
+            ey = ytm_zero_coupon(ep, face, dtm)
+            pos[sym] = {
+                "units": bu, "buy_notional": bn,
+                "entry_date": date_int, "entry_time": t,
+                "entry_ytm": ey, "entry_curve": curve_y,
+                "entry_z": (ey - curve_y) * 10_000.0,
+            }
+
+
+# --------------------------------------------------------------------------- #
 #  Per-date simulation                                                          #
 # --------------------------------------------------------------------------- #
 
@@ -311,6 +389,7 @@ def _simulate_bond_day(date_int: int,
     entry_bps = p.entry_bps
     exit_bps  = p.exit_bps
     capital   = p.capital
+    outlier   = (p.strategy == "outlier")
 
     for t in timeline:
         # Advance cursors; track whether any series' YTM actually moved.
@@ -344,10 +423,14 @@ def _simulate_bond_day(date_int: int,
             y = sd._ytm
             if y <= 0.0 or sd.cur is None:
                 continue
-            x = sd.x
-            curve_y = a0 + a1 * x + a2 * sd.x2
-            z_bps = (y - curve_y) * 10_000.0
+            curve_y = a0 + a1 * sd.x + a2 * sd.x2
 
+            if outlier:
+                _outlier_step(sym, sd, curve_y, t, date_int, pos,
+                              entry_bps, exit_bps, capital, _close)
+                continue
+
+            z_bps = (y - curve_y) * 10_000.0
             if sym not in pos:
                 if z_bps >= entry_bps:
                     asks = _ladder(sd.cur, "ask")
@@ -841,7 +924,7 @@ def _objective_v2(summary: dict, metrics: dict, min_trades: int,
 
 # Phase-1 coarse grid: wide spacing over expanded parameter space
 COARSE_GRID = {
-    "degree":           [1, 2, 3],
+    "degree":           [1, 2],
     "min_curve_points": [3, 4, 5],
     "entry_bps":        [15, 30, 45, 65, 85, 110],
     "exit_bps":         [-20, -10, 0, 10, 20],
@@ -893,9 +976,16 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             degree=int(degree), min_curve_points=int(minpts),
             step_secs=int(step), force_eod=base.force_eod,
             include_matured=base.include_matured,
-            buy_fee=base.buy_fee, sell_fee=base.sell_fee)
-        st = _get_stream(degree, minpts, step)
-        trades = _replay_stream(st, p)
+            buy_fee=base.buy_fee, sell_fee=base.sell_fee,
+            strategy=base.strategy)
+        if base.strategy == "outlier":
+            # Per-order outlier z depends on the OB ladders, not just the mid,
+            # so the mid-based decision-stream cache doesn't apply — simulate.
+            trades, tested, _ = _simulate_cache(dates, cache, p)
+        else:
+            st = _get_stream(degree, minpts, step)
+            trades = _replay_stream(st, p)
+            tested = st["tested"]
         summary = _summarize(trades, base.buy_fee)
         metrics = _risk_metrics(trades, base.buy_fee)
         return {
@@ -903,7 +993,7 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             "summary":     summary,
             "metrics":     metrics,
             "score":       round(_objective_v2(summary, metrics, min_trades, opt_metric), 4),
-            "days_tested": st["tested"],
+            "days_tested": tested,
         }
 
     def _run_combos(combos):
@@ -981,7 +1071,7 @@ def _param_stability(dates: list, cache: dict, best_params: dict,
             degree=int(bp["degree"]), min_curve_points=int(bp["min_curve_points"]),
             step_secs=int(bp.get("step_secs", 0)), force_eod=base.force_eod,
             include_matured=base.include_matured,
-            buy_fee=base.buy_fee, sell_fee=base.sell_fee)
+            buy_fee=base.buy_fee, sell_fee=base.sell_fee, strategy=base.strategy)
         trades, _, _ = _simulate_cache(dates, cache, p)
         s = _summarize(trades, base.buy_fee)
         m = _risk_metrics(trades, base.buy_fee)
@@ -1022,7 +1112,8 @@ def _walk_forward(dates: list, cache: dict, params: dict,
             force_eod=base.force_eod,
             include_matured=base.include_matured,
             buy_fee=base.buy_fee,
-            sell_fee=base.sell_fee)
+            sell_fee=base.sell_fee,
+            strategy=base.strategy)
 
     windows = []
     for i in range(n_windows):

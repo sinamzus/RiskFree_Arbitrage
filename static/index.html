@@ -1195,6 +1195,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 #bbt-opt-table tr.best td { background: rgba(38,166,154,.10); font-weight: 700; }
 #bbt-opt-table td.pos { color: var(--green); }
 #bbt-opt-table td.neg { color: var(--red); }
+.tse-link {
+  display: inline-block; text-decoration: none; color: var(--accent);
+  font-weight: 700; border: 1px solid var(--brd2); border-radius: 5px;
+  padding: 0 6px; line-height: 1.5;
+}
+.tse-link:hover { background: var(--accent); color: #fff; }
 #yc-legend  {
   font-size: 10px; color: var(--sub); display: flex; gap: 12px;
   align-items: center; margin-top: 4px;
@@ -1761,14 +1767,19 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <span class="bbt-sub">ورود وقتی بازده اوراق ≥ آستانه بالای منحنی (ارزان) باشد، خروج هنگام بازگشت به منحنی</span>
       </div>
       <div id="bbt-params">
+        <div class="bbt-field"><label>استراتژی</label>
+          <select id="bbt-strategy" title="z-spread: بازگشت میانگین قیمت میانه (تمام سرمایه)؛ outlier: شکار سفارش‌های پرت اردربوک">
+            <option value="zspread">z-spread (بازگشت به منحنی)</option>
+            <option value="outlier">سفارش پرت (Outlier)</option>
+          </select></div>
         <div class="bbt-field"><label>سرمایه (ریال)</label>
           <input id="bbt-capital" type="number" value="1000000000" step="100000000"></div>
         <div class="bbt-field"><label>ورود ≥ (bps)</label>
           <input id="bbt-entry" type="number" value="50" step="5"></div>
         <div class="bbt-field"><label>خروج ≤ (bps)</label>
           <input id="bbt-exit" type="number" value="10" step="5"></div>
-        <div class="bbt-field"><label>درجه منحنی</label>
-          <input id="bbt-degree" type="number" value="2" min="1" max="3"></div>
+        <div class="bbt-field"><label>درجه منحنی (۱ یا ۲)</label>
+          <input id="bbt-degree" type="number" value="2" min="1" max="2"></div>
         <div class="bbt-field"><label>حداقل اوراق همزمان</label>
           <input id="bbt-minpts" type="number" value="3" min="2"></div>
         <div class="bbt-field"><label>گام شبکه (ثانیه، ۰=هر تیک)</label>
@@ -1815,7 +1826,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div id="bbt-table-wrap">
         <table id="bbt-table">
           <thead><tr>
-            <th>نماد</th><th>تاریخ ورود</th><th>تاریخ خروج</th><th>ورود</th><th>خروج</th><th>حجم</th>
+            <th>نماد</th><th data-nosort>TSE</th><th>تاریخ ورود</th><th>تاریخ خروج</th><th>ورود</th><th>خروج</th><th>حجم</th>
             <th>قیمت ورود</th><th>قیمت خروج</th><th>Z ورود</th><th>Z خروج</th>
             <th>سود خالص</th><th>%</th><th>مدت</th><th>دلیل</th>
           </tr></thead>
@@ -4419,6 +4430,7 @@ async function bondCollect() {
 async function bondBacktest() {
   const btn = document.getElementById('bbt-run');
   const q = new URLSearchParams({
+    strategy:  document.getElementById('bbt-strategy').value || 'zspread',
     capital:   document.getElementById('bbt-capital').value || '1000000000',
     entry_bps: document.getElementById('bbt-entry').value   || '50',
     exit_bps:  document.getElementById('bbt-exit').value    || '10',
@@ -4452,6 +4464,7 @@ let bondOptTimer = null;
 async function bondOptimize() {
   const btn = document.getElementById('bbt-opt-btn');
   const body = {
+    strategy:     document.getElementById('bbt-strategy').value || 'zspread',
     capital:      +document.getElementById('bbt-capital').value || 1e9,
     step:         +document.getElementById('bbt-step').value || 0,
     force_eod:    document.getElementById('bbt-forceeod').checked ? '1' : '0',
@@ -4643,6 +4656,7 @@ function renderBondBacktest(res) {
     + card('کارمزد کل', fmt(s.total_fees));
 
   btObCache = {};   // results changed — drop any cached OB snapshots
+  const insCodes = res.ins_codes || {};
   const tb = document.getElementById('bbt-tbody');
   const trs = (res.trades||[]).map(t => {
     const pc = (t.net_pnl||0) >= 0 ? 'pos' : 'neg';
@@ -4661,8 +4675,12 @@ function renderBondBacktest(res) {
     // Entry/exit price cells are hover-able: pop the OB at that instant.
     const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}"      data-time="${t.entry_time}" data-side="buy`;
     const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.exit_date||t.date}" data-time="${t.exit_time}"  data-side="sell`;
+    const ic = insCodes[t.symbol];
+    const tseTd = ic
+      ? `<td><a class="tse-link" href="https://www.tsetmc.com/instInfo/${ic}" target="_blank" rel="noopener" title="مشاهده در TSETMC">↗</a></td>`
+      : `<td style="color:var(--muted)">—</td>`;
     return `<tr>
-      <td>${t.symbol}</td><td>${entryJ}</td>${exitDateTd}<td>${ht}</td><td>${xt}</td>
+      <td>${t.symbol}</td>${tseTd}<td>${entryJ}</td>${exitDateTd}<td>${ht}</td><td>${xt}</td>
       <td>${(t.volume||0).toLocaleString('en-US')}</td>
       <td class="${ec}">${(t.entry_price||0).toLocaleString('en-US')}</td>
       <td class="${xc}">${(t.exit_price||0).toLocaleString('en-US')}</td>
@@ -4672,7 +4690,7 @@ function renderBondBacktest(res) {
       <td>${holdStr}</td><td>${t.exit_reason}</td>
     </tr>`;
   }).join('');
-  tb.innerHTML = trs || '<tr><td colspan="14" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
+  tb.innerHTML = trs || '<tr><td colspan="15" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
   attachSort('bbt-table');
   attachBtObHover();
 }

@@ -1119,17 +1119,23 @@ def create_app(db, scan_callback=None):
         symbols = [s.strip() for s in syms_arg.split(",") if s.strip()] or None
 
         from bond_backtest import BUY_COST, SELL_COST
+        strategy = request.args.get("strategy", "zspread")
+        if strategy not in ("zspread", "outlier"):
+            strategy = "zspread"
+        degree = int(_float("degree", 2)) or 2
+        degree = 1 if degree < 1 else (2 if degree > 2 else degree)   # curve degree 1 or 2 only
         params = BondBacktestParams(
             capital=_float("capital", 1_000_000_000),
             entry_bps=_float("entry_bps", 50.0),
             exit_bps=_float("exit_bps", 10.0),
-            degree=int(_float("degree", 2)) or 2,
+            degree=degree,
             min_curve_points=int(_float("min_pts", 3)) or 3,
             step_secs=int(_float("step", 0)),
             force_eod=request.args.get("force_eod", "1") != "0",
             include_matured=request.args.get("include_matured", "1") != "0",
             buy_fee=_float("buy_fee", BUY_COST),
             sell_fee=_float("sell_fee", SELL_COST),
+            strategy=strategy,
         )
 
         try:
@@ -1138,8 +1144,17 @@ def create_app(db, scan_callback=None):
             logger.exception("bond backtest failed")
             return jsonify({"error": str(e)}), 500
 
-        logger.info("[BondBacktest] %d days, %d trades, net=%s",
-                    result["days_tested"], result["summary"]["trade_count"],
+        # Attach symbol → ins_code so the UI can deep-link each row to TSETMC.
+        try:
+            ins_codes = {s.get("symbol", ""): (s.get("ins_code") or "").strip()
+                         for s in db.get_bond_series(active_only=False)
+                         if s.get("symbol")}
+        except Exception:
+            ins_codes = {}
+        result["ins_codes"] = ins_codes
+
+        logger.info("[BondBacktest] %s, %d days, %d trades, net=%s",
+                    strategy, result["days_tested"], result["summary"]["trade_count"],
                     result["summary"]["total_net_pnl"])
         return jsonify(result)
 
@@ -1185,6 +1200,9 @@ def create_app(db, scan_callback=None):
             symbols = [s.strip() for s in str(syms_arg).split(",") if s.strip()] or None
 
         from bond_backtest import BUY_COST, SELL_COST
+        opt_strategy = str(_get("strategy", "zspread"))
+        if opt_strategy not in ("zspread", "outlier"):
+            opt_strategy = "zspread"
         base = BondBacktestParams(
             capital=_float("capital", 1_000_000_000),
             step_secs=int(_float("step", 0)),
@@ -1192,6 +1210,7 @@ def create_app(db, scan_callback=None):
             include_matured=str(_get("include_matured", "1")) != "0",
             buy_fee=_float("buy_fee", BUY_COST),
             sell_fee=_float("sell_fee", SELL_COST),
+            strategy=opt_strategy,
         )
         min_trades   = int(_float("min_trades", 3))
         opt_metric   = str(_get("opt_metric",   "sharpe"))
