@@ -28,6 +28,7 @@ def default_params() -> BondBacktestParams:
         signal_price="exec", min_exit_profit_bps=-1.0,
         total_capital=10_000_000_000.0, max_position_pct=0.5,
         entry_max_bps=150.0, curve_trim_bps=150.0, min_dtm=30,
+        exit_needs_replacement=True,
     )
 
 
@@ -68,6 +69,8 @@ def diagnose_real() -> int:
     print("=" * 72)
     print(f"guards              : entry_max={p.entry_max_bps:g}bps  "
           f"curve_trim={p.curve_trim_bps:g}bps  min_dtm={p.min_dtm}d  (0=off)")
+    print(f"exit model          : "
+          f"{'rotate-only (cash=loss: hold unless a fresh buy exists)' if p.exit_needs_replacement else 'sell-to-cash on reversion (legacy)'}")
     print(f"days tested/skipped : {res['days_tested']}/{res['days_skipped']}")
     print(f"symbols             : {len(res['symbols'])}  {res['symbols']}")
     print(f"trades              : {s['trade_count']}   win-rate {s['win_rate']}%")

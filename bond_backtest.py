@@ -130,6 +130,15 @@ class BondBacktestParams:
                                      # tiny price wiggle becomes a huge yield swing that
                                      # is pure noise and distorts the whole curve.
                                      # 0 = off (include everything down to 1 day).
+    exit_needs_replacement: bool = True  # اخزا has a deterministic pull-to-par drift,
+                                     # so sitting in cash forgoes the risk-free yield —
+                                     # cash IS the loss.  When True, a reverted position
+                                     # (z ≤ exit_bps) is sold ONLY if there is a fresh
+                                     # buy candidate that same tick to redeploy the
+                                     # freed capital into; otherwise it keeps holding
+                                     # and riding the drift.  Forced exits (eod/final/
+                                     # maturity) still always fire.  False = legacy
+                                     # (always sell to cash on reversion).
 
 
 @dataclass
@@ -578,6 +587,7 @@ def _simulate_bond_day(date_int: int,
     exec_mode = (p.signal_price == "exec")
     trim_bps  = p.curve_trim_bps
     entry_max = p.entry_max_bps
+    needs_repl = p.exit_needs_replacement
 
     for t in timeline:
         # Advance cursors; track whether any series' YTM actually moved.
@@ -595,6 +605,29 @@ def _simulate_bond_day(date_int: int,
         if coeffs is None:
             continue
         a0, a1, a2 = coeffs
+
+        # "Cash = loss" exit gate: is there a fresh buy candidate this tick whose
+        # freed capital could be redeployed?  Computed from the tick-start state so
+        # a reverted position only sells if there's somewhere better to rotate.
+        has_candidate = False
+        if needs_repl:
+            for s2, sd2 in series_items:
+                if s2 in pos:
+                    continue
+                y2 = sd2._ytm
+                if y2 <= 0.0 or sd2.cur is None:
+                    continue
+                cy2 = a0 + a1 * sd2.x + a2 * sd2.x2
+                if exec_mode:
+                    ya2 = sd2._ytm_ask
+                    if ya2 <= 0.0:
+                        continue
+                    zc = (ya2 - cy2) * 10_000.0
+                else:
+                    zc = (y2 - cy2) * 10_000.0
+                if zc >= entry_bps and (entry_max <= 0.0 or zc <= entry_max):
+                    has_candidate = True
+                    break
 
         for sym, sd in series_items:
             y = sd._ytm
@@ -656,6 +689,11 @@ def _simulate_bond_day(date_int: int,
                 else:
                     z_sig = (y - curve_y) * 10_000.0
                 if z_sig <= exit_bps:
+                    # "Cash = loss": only realise a reverted position if there is
+                    # somewhere better to put the money this tick; else keep riding
+                    # the pull-to-par drift. Forced exits below are unaffected.
+                    if needs_repl and not has_candidate:
+                        continue
                     bids = _ladder(sd.cur, "bid")
                     if not bids:
                         continue
@@ -1093,6 +1131,7 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
     force_eod = p.force_eod
     exec_mode = (p.signal_price == "exec")
     entry_max = p.entry_max_bps
+    needs_repl = p.exit_needs_replacement
     trades: list[BondTrade] = []
     pos: dict[str, dict] = {}
     portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
@@ -1108,6 +1147,24 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
             continue                       # positions carry silently
         date_int = day["date"]
         for t, items in day["events"]:
+            # "Cash = loss" gate: any fresh buy candidate this tick to rotate into?
+            # Computed from tick-start pos; mirrors _simulate_bond_day exactly.
+            has_candidate = False
+            if needs_repl:
+                for it in items:
+                    if it[0] in pos:
+                        continue
+                    cy2 = it[3]
+                    if exec_mode:
+                        ya2 = it[5]
+                        if ya2 <= 0.0:
+                            continue
+                        zc = (ya2 - cy2) * 10_000.0
+                    else:
+                        zc = it[1]
+                    if zc >= entry_bps and (entry_max <= 0.0 or zc <= entry_max):
+                        has_candidate = True
+                        break
             for sym, z_bps, y, curve_y, snap, ya, yb, fv, dtm in items:
                 if sym not in pos:
                     # Entry on executable ask in exec mode, else mid z-spread.
@@ -1149,6 +1206,9 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                     else:
                         z_sig = z_bps
                     if z_sig <= exit_bps:
+                        # "Cash = loss": hold unless there's a better buy this tick.
+                        if needs_repl and not has_candidate:
+                            continue
                         bids = _ladder(snap, "bid")
                         if not bids:
                             continue
@@ -1366,7 +1426,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             signal_price=base.signal_price,
             entry_max_bps=base.entry_max_bps,
             curve_trim_bps=base.curve_trim_bps,
-            min_dtm=base.min_dtm)
+            min_dtm=base.min_dtm,
+            exit_needs_replacement=base.exit_needs_replacement)
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.

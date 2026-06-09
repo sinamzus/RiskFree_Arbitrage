@@ -1896,6 +1896,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             <label class="chk" title="اگر روشن باشد، خروج سیگنالی فقط وقتی انجام می‌شود که بازده خالص (پس از کارمزد دو طرف) دستِ‌کم به «حداقل سود خروج» برسد؛ وگرنه موقعیت نگه داشته می‌شود. فروش اجباری پایان بازه همچنان انجام می‌شود.">
               <input id="bbt-noloss" type="checkbox"> فقط خروج سودده
             </label>
+            <label class="chk" title="در اوراق درآمد ثابت، نقد ماندن یعنی از دست دادن بازده بدون‌ریسک (کشش به سمت ارزش اسمی). با این گزینه، موقعیتِ برگشته‌به‌منحنی فقط زمانی فروخته می‌شود که همان لحظه یک سیگنال خریدِ تازه وجود داشته باشد تا سرمایه فوراً جابه‌جا شود؛ در غیر این‌صورت نگه داشته می‌شود و به کشش قیمت ادامه می‌دهد. خروج‌های اجباری (پایان روز/بازه/سررسید) همچنان انجام می‌شوند.">
+              <input id="bbt-needrepl" type="checkbox" checked> خروج فقط با جایگزین (نقد نمان)
+            </label>
           </div>
           <div class="bbt-actions">
             <div class="bbt-field bbt-metric"><label>معیار بهینه‌ساز</label>
@@ -4545,6 +4548,8 @@ async function bondBacktest() {
     entry_max_bps:    document.getElementById('bbt-entrymax').value  || '0',
     curve_trim_bps:   document.getElementById('bbt-curvetrim').value || '0',
     min_dtm:          document.getElementById('bbt-mindtm').value    || '0',
+    // Cash = loss: only exit a reverted position when there's a fresh buy to fund.
+    exit_needs_replacement: document.getElementById('bbt-needrepl').checked ? '1' : '0',
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4586,6 +4591,7 @@ async function bondOptimize() {
     entry_max_bps:    +document.getElementById('bbt-entrymax').value  || 0,
     curve_trim_bps:   +document.getElementById('bbt-curvetrim').value || 0,
     min_dtm:          +document.getElementById('bbt-mindtm').value    || 0,
+    exit_needs_replacement: document.getElementById('bbt-needrepl').checked ? '1' : '0',
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
