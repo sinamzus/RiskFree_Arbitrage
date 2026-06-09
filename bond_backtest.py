@@ -555,6 +555,190 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
     return trades, tested, skipped
 
 
+# --------------------------------------------------------------------------- #
+#  Decision-stream cache (optimizer fast path)                                 #
+# --------------------------------------------------------------------------- #
+#
+# In the optimizer, every combo that shares the same (degree, min_curve_points,
+# step_secs) produces IDENTICAL curve fits and z-spreads at every tick — only
+# the entry/exit thresholds change the buy/sell decisions.  So we walk the
+# expensive tick timeline ONCE per such group, emit a compact "decision stream"
+# of (tick, [(sym, z, ytm, curve, snapshot), …]) events, and then replay a very
+# cheap state machine for each (entry_bps, exit_bps) pair.  This collapses the
+# dominant work from O(combos × ticks × series) to O(groups × ticks × series).
+
+def _day_events(date_int: int, day_series: dict, degree: int,
+                min_pts: int, step: int):
+    """Emit the per-tick z-spread decision stream for one day (no buy/sell).
+
+    Returns (events, eod_snaps) where events is a list of
+    ``(t, [(sym, z_bps, ytm, curve_y, snap), …])`` and eod_snaps maps
+    sym → that series' last snapshot of the day (for force_eod replay).
+    The z-spreads are computed exactly as the live engine does, so replaying
+    them is bit-identical to running _simulate_bond_day per combo.
+    """
+    times: set[int] = set()
+    for sd in day_series.values():
+        for s in sd.snaps:
+            times.add(int(s.get("time", 0)))
+    timeline = sorted(t for t in times if t > 0)
+    eod_snaps = {sym: sd.snaps[-1] for sym, sd in day_series.items() if sd.snaps}
+    if not timeline:
+        return [], eod_snaps
+
+    if step > 0:
+        kept, last_bucket = [], -1
+        for t in timeline:
+            b = _secs(t) // step
+            if b != last_bucket:
+                kept.append(t)
+                last_bucket = b
+        timeline = kept
+
+    series_items = list(day_series.items())
+    series_list = [sd for _, sd in series_items]
+    events = []
+    for t in timeline:
+        changed = False
+        for sd in series_list:
+            if sd.advance_to(t):
+                changed = True
+        if not changed:
+            continue
+        n = 0
+        sx = sx2 = sx3 = sx4 = sy = sxy = sx2y = 0.0
+        for sd in series_list:
+            y = sd._ytm
+            if y > 0.0:
+                x, x2 = sd.x, sd.x2
+                n += 1
+                sx += x; sx2 += x2; sx3 += sd.x3; sx4 += sd.x4
+                sy += y; sxy += x * y; sx2y += x2 * y
+        if n < min_pts:
+            continue
+        coeffs = _fit_from_sums(n, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree)
+        if coeffs is None:
+            continue
+        a0, a1, a2 = coeffs
+        items = []
+        for sym, sd in series_items:
+            y = sd._ytm
+            if y <= 0.0 or sd.cur is None:
+                continue
+            curve_y = a0 + a1 * sd.x + a2 * sd.x2
+            z_bps = (y - curve_y) * 10_000.0
+            items.append((sym, z_bps, y, curve_y, sd.cur))
+        if items:
+            events.append((t, items))
+    return events, eod_snaps
+
+
+def _build_decision_stream(dates, cache, tmpl: BondBacktestParams):
+    """Precompute the day-by-day decision stream for one (degree, min_pts, step)
+    group.  Reused across every (entry, exit) combo in that group."""
+    degree, min_pts, step = tmpl.degree, tmpl.min_curve_points, tmpl.step_secs
+    days = []
+    last_snap: dict = {}
+    tested = skipped = 0
+    for date_int in dates:
+        rows = cache.get(date_int)
+        if not rows:
+            continue
+        for sym, face, dtm, snaps in rows:
+            if snaps:
+                last_snap[sym] = (face, dtm, snaps[-1])
+        if len(rows) < min_pts:
+            skipped += 1
+            days.append({"date": date_int, "skipped": True})
+            continue
+        tested += 1
+        day_series = {sym: _SeriesDay(sym, face, dtm, snaps)
+                      for (sym, face, dtm, snaps) in rows}
+        events, eod_snaps = _day_events(date_int, day_series, degree, min_pts, step)
+        days.append({"date": date_int, "skipped": False,
+                     "events": events, "eod_snaps": eod_snaps})
+    return {"days": days, "last_snap": last_snap,
+            "final_date": dates[-1] if dates else 0,
+            "tested": tested, "skipped": skipped}
+
+
+def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
+    """Replay a precomputed decision stream under one (entry_bps, exit_bps)
+    pair.  Produces exactly the trades _simulate_cache would for the same p."""
+    entry_bps, exit_bps, capital = p.entry_bps, p.exit_bps, p.capital
+    force_eod = p.force_eod
+    trades: list[BondTrade] = []
+    pos: dict[str, dict] = {}
+
+    def _close(sym, st, units, notional, t, exit_date, z, reason):
+        _record_close(sym, st, units, notional, t, exit_date, z, reason, p, trades)
+        if st["units"] <= 0:
+            pos.pop(sym, None)
+
+    for day in stream["days"]:
+        if day["skipped"]:
+            continue                       # positions carry silently
+        date_int = day["date"]
+        for t, items in day["events"]:
+            for sym, z_bps, y, curve_y, snap in items:
+                if sym not in pos:
+                    if z_bps >= entry_bps:
+                        asks = _ladder(snap, "ask")
+                        if not asks:
+                            continue
+                        units, notional = _buy_against_asks(asks, asks[-1][0], capital)
+                        if units > 0:
+                            pos[sym] = {
+                                "units": units, "buy_notional": notional,
+                                "entry_date": date_int, "entry_time": t,
+                                "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_bps,
+                            }
+                else:
+                    if z_bps <= exit_bps:
+                        bids = _ladder(snap, "bid")
+                        if not bids:
+                            continue
+                        units, notional = _sell_against_bids(bids, bids[-1][0], pos[sym]["units"])
+                        if units > 0:
+                            _close(sym, pos[sym], units, notional, t, date_int, z_bps, "signal")
+        if force_eod:
+            for sym in list(pos.keys()):
+                snap = day["eod_snaps"].get(sym)
+                if snap is None:
+                    continue
+                bids = _ladder(snap, "bid")
+                if not bids:
+                    continue
+                t = int(snap.get("time", 0))
+                held = pos[sym]["units"]
+                units, notional = _sell_against_bids(bids, 0, held)
+                if units < held:
+                    notional += (held - units) * bids[-1][0]
+                    units = held
+                _close(sym, pos[sym], units, notional, t, date_int, 0.0, "eod")
+
+    # End-of-backtest forced close (matches _simulate_cache).
+    if pos:
+        final_date = stream["final_date"]
+        for sym, st in list(pos.items()):
+            ls = stream["last_snap"].get(sym)
+            if ls is None:
+                continue
+            snap = ls[2]
+            bids = _ladder(snap, "bid")
+            if not bids:
+                continue
+            t = int(snap.get("time", 0))
+            held = st["units"]
+            units, notional = _sell_against_bids(bids, 0, held)
+            if units < held:
+                notional += (held - units) * bids[-1][0]
+                units = held
+            _record_close(sym, st, units, notional, t, final_date, 0.0, "final", p, trades)
+
+    return trades
+
+
 def run_bond_backtest(db, symbols: list[str] | None = None,
                       start_date: int | None = None,
                       end_date: int | None = None,
@@ -680,9 +864,28 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                   top_k: int = 5,
                   progress: dict | None = None,
                   lock=None) -> list[dict]:
-    """Two-phase coarse-to-fine search. Returns all evaluated combos sorted by score."""
+    """Two-phase coarse-to-fine search. Returns all evaluated combos sorted by score.
+
+    Combos are grouped by (degree, min_curve_points, step_secs); the expensive
+    z-spread decision stream is built once per group (and cached across phases),
+    then each (entry, exit) combo is replayed cheaply on top of it.
+    """
     import threading
     _lock = lock or threading.Lock()
+    stream_cache: dict = {}     # (degree, minpts, step) → decision stream
+
+    def _get_stream(degree, minpts, step):
+        key = (degree, minpts, step)
+        st = stream_cache.get(key)
+        if st is None:
+            tmpl = BondBacktestParams(
+                capital=base.capital, degree=int(degree),
+                min_curve_points=int(minpts), step_secs=int(step),
+                force_eod=base.force_eod, include_matured=base.include_matured,
+                buy_fee=base.buy_fee, sell_fee=base.sell_fee)
+            st = _build_decision_stream(dates, cache, tmpl)
+            stream_cache[key] = st
+        return st
 
     def _eval(degree, minpts, entry, exit_, step):
         p = BondBacktestParams(
@@ -691,7 +894,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             step_secs=int(step), force_eod=base.force_eod,
             include_matured=base.include_matured,
             buy_fee=base.buy_fee, sell_fee=base.sell_fee)
-        trades, tested, _ = _simulate_cache(dates, cache, p)
+        st = _get_stream(degree, minpts, step)
+        trades = _replay_stream(st, p)
         summary = _summarize(trades, base.buy_fee)
         metrics = _risk_metrics(trades, base.buy_fee)
         return {
@@ -699,8 +903,21 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             "summary":     summary,
             "metrics":     metrics,
             "score":       round(_objective_v2(summary, metrics, min_trades, opt_metric), 4),
-            "days_tested": tested,
+            "days_tested": st["tested"],
         }
+
+    def _run_combos(combos):
+        """Evaluate combos, building each group's stream once (grouped first)."""
+        # Sort by group so a group's stream is built once then reused, and can
+        # be dropped right after to bound memory.
+        combos = sorted(combos, key=lambda c: (c[0], c[1], c[4]))
+        out = []
+        for combo in combos:
+            out.append(_eval(*combo))
+            if progress is not None:
+                with _lock:
+                    progress["done"] += 1
+        return out
 
     # Phase 1 — coarse
     coarse = [
@@ -716,15 +933,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
         with _lock:
             progress.update({"done": 0, "total": len(coarse), "phase": "coarse"})
 
-    seen: set = set()
-    results: list[dict] = []
-    for combo in coarse:
-        seen.add(combo)
-        results.append(_eval(*combo))
-        if progress is not None:
-            with _lock:
-                progress["done"] += 1
-
+    seen: set = set(coarse)
+    results: list[dict] = _run_combos(coarse)
     results.sort(key=lambda r: r["score"], reverse=True)
 
     # Phase 2 — fine-grid zoom around top-K coarse winners
@@ -744,12 +954,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             progress["total"] = progress.get("total", 0) + len(fine_new)
             progress["phase"] = "fine"
 
-    for combo in fine_new:
-        seen.add(combo)
-        results.append(_eval(*combo))
-        if progress is not None:
-            with _lock:
-                progress["done"] += 1
+    if fine_new:
+        results.extend(_run_combos(fine_new))
 
     results.sort(key=lambda r: r["score"], reverse=True)
     return results
