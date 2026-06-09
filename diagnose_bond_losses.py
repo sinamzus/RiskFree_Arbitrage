@@ -186,7 +186,67 @@ def diagnose_real() -> int:
     combo = [t for t in trades if t["entry_z_bps"] <= 150 and t["exit_date"] == t["date"]]
     print(f"{'intraday AND entry z ≤ 150 bps':40s} "
           f"{sum(t['net_pnl'] for t in combo):>18,.0f}  ({len(combo)} trades)")
+
+    _data_sanity(db, p)
     return 0
+
+
+def _data_sanity(db, p) -> None:
+    """Per-series curve bias: a healthy اخزا oscillates around the curve (mean z≈0).
+
+    A series with a large PERSISTENT |mean z| sits permanently off the fitted
+    curve — the signature of a wrong maturity_date / face_value (so its dtm and
+    therefore its YTM are systematically biased). Those series throw off endless
+    one-sided 'cheap' (or 'rich') signals that never revert → guaranteed losses.
+    This recomputes every tick's z-spread (exactly as the engine does) and
+    aggregates it per symbol so the broken inputs can be named and fixed.
+    """
+    from bond_backtest import (_resolve_universe, _load_day_cache,
+                               _build_decision_stream)
+    from bonds import days_to_maturity
+    universe, meta = _resolve_universe(db, None, include_matured=p.include_matured)
+    dates, cache = _load_day_cache(db, universe, meta, None, None)
+    stream = _build_decision_stream(dates, cache, p)
+
+    acc: dict = {}   # sym -> [n, sum_z, sum_z2]
+    for day in stream["days"]:
+        if day.get("skipped"):
+            continue
+        for _t, items in day["events"]:
+            for it in items:
+                sym, z = it[0], it[1]
+                d = acc.setdefault(sym, [0, 0.0, 0.0])
+                d[0] += 1; d[1] += z; d[2] += z * z
+
+    rows = []
+    last = dates[-1] if dates else 0
+    for sym, (n, sz, sz2) in acc.items():
+        if n == 0:
+            continue
+        mean = sz / n
+        var = max(sz2 / n - mean * mean, 0.0)
+        std = var ** 0.5
+        mat = meta.get(sym, {}).get("maturity_date", 0)
+        dtm = days_to_maturity(mat, last) if mat else 0
+        rows.append((sym, n, mean, std, mat, dtm))
+
+    rows.sort(key=lambda r: abs(r[2]), reverse=True)
+    print("\n" + "-" * 72)
+    print("DATA SANITY — per-series curve bias  (|mean z| large ⇒ off-curve / bad data)")
+    print("-" * 72)
+    print(f"{'symbol':10s} {'ticks':>7s} {'mean z':>9s} {'std z':>8s} "
+          f"{'maturity':>10s} {'dtm':>6s}  flag")
+    for sym, n, mean, std, mat, dtm in rows[:20]:
+        flag = ""
+        if abs(mean) > 150:
+            flag = "<<< BROKEN (persistent off-curve — check maturity/face_value)"
+        elif abs(mean) > 60:
+            flag = "<< suspect"
+        bad_dtm = "  ⚠dtm≤0" if dtm <= 0 else ""
+        print(f"{sym:10s} {n:>7d} {mean:>9.1f} {std:>8.1f} "
+              f"{mat:>10d} {dtm:>6d}{bad_dtm}  {flag}")
+    print("\nHealthy series have mean z within ±~30 bps. Anything persistently")
+    print("> ±150 bps is almost certainly a registry data error, not a real edge.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
