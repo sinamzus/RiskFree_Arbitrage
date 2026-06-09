@@ -975,8 +975,14 @@ def create_app(db, scan_callback=None):
 
     @app.route("/api/bonds/discover")
     def api_bonds_discover():
-        """Search TSETMC for اخزا instrument codes and update the registry."""
-        from data_fetcher import TSETMCFetcher
+        """Search TSETMC for اخزا instrument codes and update the registry.
+
+        Does a single bulk search for "اخزا" (no fund filter) then matches
+        results to registered series by normalized symbol name.  Falls back
+        to a per-symbol search for any series still unmatched after the bulk
+        pass.
+        """
+        from data_fetcher import TSETMCFetcher, _normalize
         from bonds import AKHZA_SERIES
 
         series = db.get_bond_series(active_only=False)
@@ -985,18 +991,82 @@ def create_app(db, scan_callback=None):
             series = db.get_bond_series(active_only=False)
 
         fetcher = TSETMCFetcher()
+
+        # ── Bulk search ── one request covers all اخزا series ────────────
+        bulk_map = fetcher.discover_bond_ins_codes("اخزا")
+
         updated = []
+        still_missing = []
+
         for s in series:
             if s.get("ins_code") and s.get("verified"):
                 continue
-            sym = s["symbol"]
-            code = fetcher.discover_ins_code(sym)
+            sym       = s["symbol"]
+            norm_sym  = _normalize(sym)
+
+            # Direct hit from bulk map
+            code = bulk_map.get(norm_sym, "")
+
+            # Fallback: try stripping leading zero from series number
+            # TSETMC may store "اخزا6" but our registry has "اخزا۶" → after
+            # normalization both become "اخزا6", so this is already handled.
+            # Extra fallback: search by the two-digit zero-padded form "اخزا06".
+            if not code:
+                digits = "".join(c for c in norm_sym if c.isdigit())
+                zero_padded = f"اخزا{digits.zfill(2)}"
+                code = bulk_map.get(zero_padded, "")
+
             if code:
                 db.update_bond_ins_code(sym, code)
                 updated.append({"symbol": sym, "ins_code": code})
-                logger.info("Bond discovery: %s → %s", sym, code)
+                logger.info("Bond discovery (bulk): %s → %s", sym, code)
+            else:
+                still_missing.append(sym)
 
-        return jsonify({"updated": updated, "total": len(series)})
+        # ── Per-symbol fallback for anything not in bulk results ──────────
+        for sym in still_missing:
+            norm_sym = _normalize(sym)
+            digits = "".join(c for c in norm_sym if c.isdigit())
+            for query in [sym, f"اخزا{digits}", f"اخزا{digits.zfill(2)}"]:
+                extra = fetcher.discover_bond_ins_codes(query)
+                if extra:
+                    best = (extra.get(norm_sym)
+                            or extra.get(f"اخزا{digits.zfill(2)}")
+                            or next(iter(extra.values()), ""))
+                    if best:
+                        db.update_bond_ins_code(sym, best)
+                        updated.append({"symbol": sym, "ins_code": best})
+                        logger.info("Bond discovery (fallback '%s'): %s → %s", query, sym, best)
+                        break
+
+        # ── Add newly discovered series that aren't in registry yet ────────
+        known_norm = {_normalize(s["symbol"]) for s in series}
+        added = []
+        for norm_sym, code in bulk_map.items():
+            if norm_sym not in known_norm and norm_sym.startswith("اخزا"):
+                # Build a minimal entry for unknown series
+                digits = "".join(c for c in norm_sym if c.isdigit())
+                new_entry = {
+                    "symbol":       norm_sym,
+                    "ins_code":     code,
+                    "name":         f"اسناد خزانه اسلامی سری {digits}",
+                    "face_value":   1_000_000,
+                    "maturity_date": 0,
+                    "issue_date":   0,
+                    "coupon_rate":  0.0,
+                    "active":       True,
+                    "verified":     False,
+                }
+                db.upsert_bond_series([new_entry])
+                added.append({"symbol": norm_sym, "ins_code": code})
+                logger.info("Bond discovery: new series added: %s → %s", norm_sym, code)
+
+        return jsonify({
+            "updated":   updated,
+            "added":     added,
+            "total":     len(series),
+            "bulk_hits": len(bulk_map),
+        })
 
     @app.route("/api/stream")
     def api_stream():

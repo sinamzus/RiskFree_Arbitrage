@@ -89,18 +89,25 @@ def _try_parse_embedded_json(html: str):
 
 
 def _normalize(text: str) -> str:
-    """Normalize Arabic-script characters to Persian equivalents.
+    """Normalize Arabic-script characters to Persian/ASCII equivalents.
 
     TSETMC stores fund names using Arabic letters (e.g. Arabic ya ي U+064A,
     Arabic kaf ك U+0643) while Python strings typically use the visually
     identical Persian codepoints (ya ی U+06CC, kaf ک U+06A9).
-    A plain == comparison therefore fails even though the names look the same.
+    Also normalizes Persian/Arabic-Indic numerals (۰-۹ / ٠-٩) to ASCII
+    digits so that "اخزا۶" == "اخزا6" after normalization.
     """
+    # Persian (Extended Arabic-Indic) numerals ۰-۹ → 0-9
+    _FA = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    # Arabic-Indic numerals ٠-٩ → 0-9
+    _AR = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
     return (
         text
-        .replace("ي", "ی")  # ي → ی  (Arabic ya → Persian ya)
-        .replace("ك", "ک")  # ك → ک  (Arabic kaf → Persian kaf)
-        .replace("ة", "ه")  # ة → ه  (ta marbuta → Persian he)
+        .replace("ي", "ی")  # Arabic ya → Persian ya
+        .replace("ك", "ک")  # Arabic kaf → Persian kaf
+        .replace("ة", "ه")  # ta marbuta → Persian he
+        .translate(_FA)
+        .translate(_AR)
         .strip()
     )
 
@@ -254,6 +261,28 @@ class TSETMCFetcher:
             symbol, candidates,
         )
         return None
+
+    def discover_bond_ins_codes(self, keyword: str = "اخزا") -> dict[str, str]:
+        """Search TSETMC for all debt instruments matching *keyword*.
+
+        Unlike ``discover_ins_code`` (which filters for صندوق / ETF funds),
+        this method returns every instrument whose symbol or name contains the
+        keyword — suitable for اخزا (treasury bills), sukuk, etc.
+
+        Returns
+        -------
+        dict mapping normalized_symbol → insCode for every match.
+        """
+        results = self.search_instrument(keyword)
+        mapping: dict[str, str] = {}
+        for r in results:
+            code = r.get("ins_code", "").strip()
+            sym  = _normalize(r.get("symbol", "").strip())
+            if code and sym:
+                mapping[sym] = code
+                logger.info("  Bond discovery hit: %s → %s  (%s)", sym, code, r.get("full_name", ""))
+        logger.info("discover_bond_ins_codes('%s'): %d results", keyword, len(mapping))
+        return mapping
 
     # ------------------------------------------------------------------ #
     #  Price data                                                          #

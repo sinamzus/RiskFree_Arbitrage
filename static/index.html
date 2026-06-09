@@ -3681,11 +3681,20 @@ async function bondRegistrySave() {
 }
 
 async function bondDiscover() {
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال جستجو ...'; }
   const r = await fetch('/api/bonds/discover').catch(()=>null);
-  if (!r?.ok) { showError('کشف ناموفق'); return; }
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 کشف خودکار از TSE'; }
+  if (!r?.ok) { showError('کشف ناموفق — شبکه TSE در دسترس نیست'); return; }
   const j = await r.json();
-  showError(`کشف شد: ${j.updated.length} نماد از ${j.total} سری`);
+  const updated = (j.updated || []).length;
+  const added   = (j.added   || []).length;
+  const msg = updated + added > 0
+    ? `✅ ${updated} نماد به‌روز شد، ${added} سری جدید اضافه شد (از ${j.bulk_hits} نتیجه TSETMC)`
+    : `ℹ️ TSETMC ${j.bulk_hits} نتیجه برگرداند ولی تطابقی یافت نشد — شاید نمادها قبلاً ثبت شده‌اند`;
+  showError(msg);
   await loadBondRegistry();
+  if (updated + added > 0) await loadBonds();
 }
 </script>
 </body>
