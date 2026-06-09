@@ -42,7 +42,8 @@ import logging
 import math
 from dataclasses import dataclass, asdict
 
-from bonds import ytm_zero_coupon, fit_yield_curve, eval_curve, days_to_maturity
+from bonds import (ytm_zero_coupon, fit_yield_curve, eval_curve,
+                   days_to_maturity, _solve_3x3)
 # Reuse the fund engine's validated execution primitives.
 from backtest import _ladder, _buy_against_asks, _sell_against_bids, _mid, _secs
 
@@ -115,10 +116,15 @@ class _SeriesDay:
     """Holds one series' OB snapshots for a date and a carry-forward cursor.
 
     ``advance_to(t)`` moves the cursor to the latest snapshot whose time is
-    ≤ *t* (so we never peek into the future) and exposes that snapshot.
+    ≤ *t* (so we never peek into the future).  Because days-to-maturity is
+    constant within a day, the powers x, x², x³, x⁴ are precomputed once, and
+    the YTM is **cached** — recomputed only when the order-book mid actually
+    changes (most OB updates touch only quantities, not best bid/ask), which
+    is the single biggest intraday speed lever.
     """
 
-    __slots__ = ("symbol", "face_value", "dtm", "snaps", "_i", "cur")
+    __slots__ = ("symbol", "face_value", "dtm", "snaps", "_i", "cur",
+                 "x", "x2", "x3", "x4", "_ytm", "_price")
 
     def __init__(self, symbol: str, face_value: float, dtm: int,
                  snaps: list[dict]):
@@ -128,20 +134,71 @@ class _SeriesDay:
         self.snaps = snaps          # sorted ascending by time
         self._i = -1
         self.cur: dict | None = None
+        # Precompute powers once (dtm is constant intraday).  Use ** to stay
+        # bit-identical with fit_yield_curve / eval_curve which use d**k.
+        x = float(dtm)
+        self.x  = x
+        self.x2 = x ** 2
+        self.x3 = x ** 3
+        self.x4 = x ** 4
+        self._ytm   = 0.0
+        self._price = 0.0
 
-    def advance_to(self, t: int) -> None:
-        while self._i + 1 < len(self.snaps) and int(self.snaps[self._i + 1].get("time", 0)) <= t:
-            self._i += 1
-            self.cur = self.snaps[self._i]
+    def advance_to(self, t: int) -> bool:
+        """Move cursor to latest snapshot ≤ t. Returns True if the YTM changed."""
+        moved = False
+        snaps = self.snaps
+        i = self._i
+        n = len(snaps)
+        while i + 1 < n and int(snaps[i + 1].get("time", 0)) <= t:
+            i += 1
+            moved = True
+        if not moved:
+            return False
+        self._i = i
+        self.cur = snaps[i]
+        p = _mid(self.cur)
+        if p == self._price:
+            return False            # mid unchanged → YTM unchanged
+        self._price = p
+        if p > 0 and self.dtm > 0:
+            self._ytm = ytm_zero_coupon(p, self.face_value, self.dtm)
+        else:
+            self._ytm = 0.0
+        return True
 
     def price(self) -> float:
-        return _mid(self.cur) if self.cur else 0.0
+        return self._price
 
     def ytm(self) -> float:
-        p = self.price()
-        if p <= 0 or self.dtm <= 0:
-            return 0.0
-        return ytm_zero_coupon(p, self.face_value, self.dtm)
+        return self._ytm
+
+
+def _fit_from_sums(n, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree):
+    """Solve the polynomial least-squares curve from precomputed sufficient
+    statistics — numerically identical to fit_yield_curve but without rebuilding
+    the power-sums each call. Returns (a0, a1, a2) with a2=0 for degree-1, or None."""
+    if n < 2:
+        return None
+    deg = degree if degree <= 2 else 2
+    if n < deg + 1:
+        deg = n - 1
+    if deg == 1:
+        denom = n * sx2 - sx * sx
+        if abs(denom) < 1e-15:
+            return (sy / n, 0.0, 0.0)
+        return ((sy * sx2 - sxy * sx) / denom,
+                (n * sxy - sx * sy) / denom, 0.0)
+    A = [[float(n), sx, sx2], [sx, sx2, sx3], [sx2, sx3, sx4]]
+    c = _solve_3x3(A, [sy, sxy, sx2y])
+    if c[0] == 0.0 and c[1] == 0.0 and c[2] == 0.0:
+        # singular degree-2 → fall back to degree-1 (matches fit_yield_curve)
+        denom = n * sx2 - sx * sx
+        if abs(denom) < 1e-15:
+            return (sy / n, 0.0, 0.0)
+        return ((sy * sx2 - sxy * sx) / denom,
+                (n * sxy - sx * sy) / denom, 0.0)
+    return (c[0], c[1], c[2])
 
 
 # --------------------------------------------------------------------------- #
@@ -246,35 +303,58 @@ def _simulate_bond_day(date_int: int,
         if st["units"] <= 0:
             pos.pop(sym, None)
 
+    # Stable iteration order (== fit_yield_curve's point order) for bit parity.
+    series_items = list(day_series.items())
+    series_list  = [sd for _, sd in series_items]
+    min_pts   = p.min_curve_points
+    degree    = p.degree
+    entry_bps = p.entry_bps
+    exit_bps  = p.exit_bps
+    capital   = p.capital
+
     for t in timeline:
-        for sd in day_series.values():
-            sd.advance_to(t)
-
-        pts: list[tuple[float, float]] = []
-        for sd in day_series.values():
-            y = sd.ytm()
-            if y > 0 and sd.dtm > 0:
-                pts.append((float(sd.dtm), y))
-        if len(pts) < p.min_curve_points:
-            continue
-        coeffs = fit_yield_curve(pts, degree=p.degree)
-        if not coeffs:
+        # Advance cursors; track whether any series' YTM actually moved.
+        changed = False
+        for sd in series_list:
+            if sd.advance_to(t):
+                changed = True
+        # If no mid changed, the curve and every z-spread are identical to the
+        # last processed tick — no new threshold can be crossed → skip entirely.
+        if not changed:
             continue
 
-        for sym, sd in day_series.items():
-            y = sd.ytm()
-            if y <= 0 or sd.dtm <= 0 or sd.cur is None:
+        # Build sufficient statistics in one pass (no pow / ** in the loop).
+        n = 0
+        sx = sx2 = sx3 = sx4 = sy = sxy = sx2y = 0.0
+        for sd in series_list:
+            y = sd._ytm
+            if y > 0.0:
+                x, x2 = sd.x, sd.x2
+                n += 1
+                sx += x; sx2 += x2; sx3 += sd.x3; sx4 += sd.x4
+                sy += y; sxy += x * y; sx2y += x2 * y
+        if n < min_pts:
+            continue
+        coeffs = _fit_from_sums(n, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree)
+        if coeffs is None:
+            continue
+        a0, a1, a2 = coeffs
+
+        for sym, sd in series_items:
+            y = sd._ytm
+            if y <= 0.0 or sd.cur is None:
                 continue
-            curve_y = eval_curve(coeffs, float(sd.dtm))
+            x = sd.x
+            curve_y = a0 + a1 * x + a2 * sd.x2
             z_bps = (y - curve_y) * 10_000.0
 
             if sym not in pos:
-                if z_bps >= p.entry_bps:
+                if z_bps >= entry_bps:
                     asks = _ladder(sd.cur, "ask")
                     if not asks:
                         continue
                     ceiling = asks[-1][0]
-                    units, notional = _buy_against_asks(asks, ceiling, p.capital)
+                    units, notional = _buy_against_asks(asks, ceiling, capital)
                     if units > 0:
                         pos[sym] = {
                             "units": units, "buy_notional": notional,
@@ -282,7 +362,7 @@ def _simulate_bond_day(date_int: int,
                             "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_bps,
                         }
             else:
-                if z_bps <= p.exit_bps:
+                if z_bps <= exit_bps:
                     bids = _ladder(sd.cur, "bid")
                     if not bids:
                         continue
