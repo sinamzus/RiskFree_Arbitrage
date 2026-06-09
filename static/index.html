@@ -1323,6 +1323,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
                 background:var(--surf); }
 #bbt-table td.pos { color:var(--green); font-weight:700; }
 #bbt-table td.neg { color:var(--red);   font-weight:700; }
+/* Losing-trade P&L cell: dotted underline + help cursor signals a hover tooltip
+   explaining WHY the position lost.  The ⓘ marker makes it discoverable. */
+#bbt-table td.bbt-lossreason { cursor:help; text-decoration:underline dotted var(--red);
+                text-underline-offset:3px; }
+#bbt-table td.bbt-lossreason::after { content:" ⓘ"; font-size:0.85em; opacity:0.7;
+                text-decoration:none; }
 
 /* ─── Sortable table headers ─────────────────────────────────── */
 .th-sort { cursor: pointer; user-select: none; }
@@ -4764,6 +4770,12 @@ function applyBondOpt(bp) {
   bondBacktest();
 }
 
+// Escape a string for safe use inside an HTML attribute value (title="…").
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                  .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function renderBondBacktest(res) {
   const s = res.summary || {};
   const card = (k, v, cls) =>
@@ -4812,13 +4824,19 @@ function renderBondBacktest(res) {
     const tseTd = ic
       ? `<td><a class="tse-link" href="https://www.tsetmc.com/Loader.aspx?ParTree=15131P&i=${ic}&d=${t.date}" target="_blank" rel="noopener" title="مشاهده وضعیت نماد در تاریخ معامله در TSETMC">↗</a></td>`
       : `<td style="color:var(--muted)">—</td>`;
+    // Loss-reason tooltip: only losing trades carry a non-empty loss_reason from
+    // the backend. Render it as a hover title on the P&L cell (dotted-underline +
+    // ⓘ via the .bbt-lossreason class) so the user can see WHY it lost.
+    const lr = (t.net_pnl < 0 && t.loss_reason) ? t.loss_reason : '';
+    const pnlCls = lr ? `${pc} bbt-lossreason` : pc;
+    const pnlTitle = lr ? ` title="${escAttr(lr)}"` : '';
     return `<tr>
       <td>${t.symbol}</td>${tseTd}<td>${entryJ}</td>${exitDateTd}<td>${ht}</td><td>${xt}</td>
       <td>${(t.volume||0).toLocaleString('en-US')}</td>
       <td class="${ec}">${(t.entry_price||0).toLocaleString('en-US')}</td>
       <td class="${xc}">${(t.exit_price||0).toLocaleString('en-US')}</td>
       <td>${t.entry_z_bps}</td><td>${t.exit_z_bps}</td>
-      <td class="${pc}">${(t.net_pnl||0).toLocaleString('en-US')}</td>
+      <td class="${pnlCls}"${pnlTitle}>${(t.net_pnl||0).toLocaleString('en-US')}</td>
       <td class="${pc}">${t.net_pct}%</td>
       <td>${holdStr}</td><td>${t.exit_reason}</td>
     </tr>`;

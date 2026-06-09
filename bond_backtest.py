@@ -803,6 +803,63 @@ def _xirr(flows: list[tuple[int, float]]) -> float:
     return (lo + hi) / 2.0
 
 
+def _loss_reason(t: "BondTrade", p: "BondBacktestParams") -> str:
+    """Human-readable (Persian) attribution of WHY a single trade lost money.
+
+    Decomposes the loss into the dominant cause from the data carried on the
+    trade — z-spread move (entry→exit), price move, fees, and exit reason — and
+    returns one clear sentence with the numbers.  Empty string for winners.
+
+    Priority of causes:
+      1. forced exit (final/eod) before the spread reverted to the curve;
+      2. curve shifted up — the relative (z) bet won but the market level lost;
+      3. the round-trip commission exceeded the gross price gain;
+      4. the z-spread widened instead of reverting (bond got cheaper, not richer);
+      5. generic price drop net of fees.
+    """
+    if t.net_pnl >= 0:
+        return ""
+    f = lambda n: f"{round(n):,}"
+    gross = t.net_pnl + t.fees            # price P&L before fees
+    ez, xz = t.entry_z_bps, t.exit_z_bps
+    reverted = xz <= ez - 5.0             # z came in toward the curve (>5 bps)
+    px_in, px_out = t.entry_price, t.exit_price
+
+    # 1) Forced out before the spread reverted to the exit threshold.
+    if t.exit_reason in ("final", "eod") and xz > p.exit_bps:
+        tag = "پایان بازهٔ تست" if t.exit_reason == "final" else "پایان روز"
+        return (f"خروج اجباری ({tag}) پیش از بازگشت اسپرد به منحنی: "
+                f"z از {ez:.0f} به {xz:.0f} bps رسید (هنوز بالای آستانهٔ خروج "
+                f"{p.exit_bps:.0f} bps). موقعیت زودتر از موعد بسته شد و فرصت بازگشت نیافت.")
+
+    # 2) Relative bet won (z reverted) but the whole yield curve rose → price fell.
+    if reverted and px_out < px_in:
+        return (f"شیفت منحنی به بالا: اسپرد z درست برگشت ({ez:.0f}→{xz:.0f} bps) "
+                f"اما چون کل منحنی بازده بالا رفت، قیمت اوراق افت کرد "
+                f"({f(px_in)}→{f(px_out)} ریال). شرط نسبی برنده شد ولی سطح بازار بازنده.")
+
+    # 3) Gross price gain was positive but smaller than the round-trip commission.
+    if gross > 0:
+        return (f"کارمزد رفت‌وبرگشت ({f(t.fees)} ریال) بزرگ‌تر از سود قیمتی ناخالص "
+                f"({f(gross)} ریال) شد — لبهٔ z کمتر از مجموع اسپرد بید/اَسک و کارمزد بود.")
+
+    # 4) z-spread widened instead of reverting — the bond got cheaper, not richer.
+    if xz >= ez:
+        return (f"اسپرد z به‌جای بازگشت، بازتر شد ({ez:.0f}→{xz:.0f} bps): "
+                f"اوراق ارزان‌تر شد نه گران‌تر؛ سیگنال در جهت مخالف حرکت کرد.")
+
+    # 5) Generic: price fell more than fees could absorb.
+    return (f"قیمت فروش کمتر از قیمت خرید بود ({f(px_in)}→{f(px_out)} ریال) "
+            f"به‌علاوهٔ کارمزد {f(t.fees)} ریال؛ اسپرد z از {ez:.0f} به {xz:.0f} bps رفت.")
+
+
+def _trade_to_dict(t: "BondTrade", p: "BondBacktestParams") -> dict:
+    """Serialise a trade for the API, attaching a loss-reason tooltip string."""
+    d = asdict(t)
+    d["loss_reason"] = _loss_reason(t, p)
+    return d
+
+
 def _capital_report(trades: list[BondTrade], p: "BondBacktestParams") -> dict:
     """Whole-period capital view: starting → ending capital, MWRR, peak deployed.
 
@@ -1321,7 +1378,7 @@ def run_bond_backtest(db, symbols: list[str] | None = None,
         "params": asdict(p),
         "days_tested": days_tested,
         "days_skipped": days_skipped,
-        "trades": [asdict(t) for t in all_trades],
+        "trades": [_trade_to_dict(t, p) for t in all_trades],
         "summary": _summarize(all_trades, p.buy_fee),
         "capital": _capital_report(all_trades, p),
     }
