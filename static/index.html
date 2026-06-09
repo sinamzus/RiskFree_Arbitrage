@@ -1280,14 +1280,25 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   padding: 2px 5px; border-radius: 4px; font-size: 10px; font-family: var(--font);
   margin-right: 6px; max-width: 120px;
 }
-#bd-ob-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
-#bd-ob-table th, #bd-ob-table td {
+.bd-ob-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.bd-ob-table th, .bd-ob-table td {
   padding: 3px 6px; text-align: center; font-variant-numeric: tabular-nums;
   border-bottom: 1px solid var(--brd);
 }
-#bd-ob-table th { color: var(--muted); font-weight: 600; font-size: 9px; background: var(--surf); }
-#bd-ob-table .bd-bid { color: var(--green); }
-#bd-ob-table .bd-ask { color: var(--red); }
+.bd-ob-table th { color: var(--muted); font-weight: 600; font-size: 9px; background: var(--surf); }
+.bd-ob-table .bd-bid { color: var(--green); }
+.bd-ob-table .bd-ask { color: var(--red); }
+.bd-ob-table .bd-hl  { background: rgba(91,156,246,.16); }
+
+/* ─── Backtest hover order-book popup ────────────────────────── */
+.bt-pc { cursor: help; text-decoration: underline dotted var(--muted); }
+#bt-ob-pop {
+  position: fixed; z-index: 100002; display: none;
+  background: var(--surf); border: 1px solid var(--brd2); border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.5); padding: 8px 10px;
+  pointer-events: none; min-width: 220px;
+}
+#bt-ob-pop .bt-pop-h { font-size: 10px; font-weight: 700; margin-bottom: 5px; }
 </style>
 </head>
 <body>
@@ -1732,6 +1743,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <input id="bbt-minpts" type="number" value="3" min="2"></div>
         <div class="bbt-field"><label>گام شبکه (ثانیه، ۰=هر تیک)</label>
           <input id="bbt-step" type="number" value="0" min="0" step="30"></div>
+        <div class="bbt-field"><label>کارمزد خرید ٪</label>
+          <input id="bbt-buyfee" type="number" value="0.145" min="0" step="0.005"
+                 title="درصد کارمزد خرید — پیش‌فرض ۰.۱۴۵٪"></div>
+        <div class="bbt-field"><label>کارمزد فروش ٪</label>
+          <input id="bbt-sellfee" type="number" value="0.145" min="0" step="0.005"
+                 title="درصد کارمزد فروش (+ مالیات) — پیش‌فرض ۰.۱۴۵٪"></div>
         <div class="bbt-field"><label>از تاریخ (شمسی)</label>
           <input id="bbt-start" type="text" readonly placeholder="اختیاری"
                  onclick="jpOpen(this)"></div>
@@ -1786,6 +1803,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   </div><!-- /#bond-main -->
 </div><!-- /#bond-app -->
+
+<!-- Backtest hover order-book popup (follows cursor over price cells) -->
+<div id="bt-ob-pop"></div>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -4349,6 +4369,8 @@ async function bondBacktest() {
     min_pts:   document.getElementById('bbt-minpts').value  || '3',
     step:      document.getElementById('bbt-step').value    || '0',
     include_matured: document.getElementById('bbt-matured').checked ? '1' : '0',
+    buy_fee:   ((+document.getElementById('bbt-buyfee').value  || 0) / 100).toString(),
+    sell_fee:  ((+document.getElementById('bbt-sellfee').value || 0) / 100).toString(),
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4377,6 +4399,8 @@ async function bondOptimize() {
     force_eod: '1',
     min_trades: 3,
     include_matured: document.getElementById('bbt-matured').checked ? '1' : '0',
+    buy_fee:   ((+document.getElementById('bbt-buyfee').value  || 0) / 100).toString(),
+    sell_fee:  ((+document.getElementById('bbt-sellfee').value || 0) / 100).toString(),
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
@@ -4478,17 +4502,21 @@ function renderBondBacktest(res) {
     + card('میانگین مدت', `${s.avg_hold_min||0} دقیقه`)
     + card('کارمزد کل', fmt(s.total_fees));
 
+  btObCache = {};   // results changed — drop any cached OB snapshots
   const tb = document.getElementById('bbt-tbody');
   const trs = (res.trades||[]).map(t => {
     const pc = (t.net_pnl||0) >= 0 ? 'pos' : 'neg';
     const ht = (t.entry_time+'').padStart(6,'0').replace(/(\d\d)(\d\d)(\d\d)/,'$1:$2:$3');
     const xt = (t.exit_time+'').padStart(6,'0').replace(/(\d\d)(\d\d)(\d\d)/,'$1:$2:$3');
     const mins = Math.round((t.hold_secs||0)/60);
+    // Entry/exit price cells are hover-able: they pop the OB at that instant.
+    const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}" data-time="${t.entry_time}" data-side="buy`;
+    const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}" data-time="${t.exit_time}" data-side="sell`;
     return `<tr>
       <td>${t.symbol}</td><td>${t.date}</td><td>${ht}</td><td>${xt}</td>
       <td>${(t.volume||0).toLocaleString('en-US')}</td>
-      <td>${(t.entry_price||0).toLocaleString('en-US')}</td>
-      <td>${(t.exit_price||0).toLocaleString('en-US')}</td>
+      <td class="${ec}">${(t.entry_price||0).toLocaleString('en-US')}</td>
+      <td class="${xc}">${(t.exit_price||0).toLocaleString('en-US')}</td>
       <td>${t.entry_z_bps}</td><td>${t.exit_z_bps}</td>
       <td class="${pc}">${(t.net_pnl||0).toLocaleString('en-US')}</td>
       <td class="${pc}">${t.net_pct}%</td>
@@ -4497,6 +4525,73 @@ function renderBondBacktest(res) {
   }).join('');
   tb.innerHTML = trs || '<tr><td colspan="13" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
   attachSort('bbt-table');
+  attachBtObHover();
+}
+
+// ── Backtest hover OB popup: show the order-book at a trade's exact moment ──
+let btObCache = {};   // 'sym|date' → snapshots[] (carry-forward source)
+let _btObCell = null;
+
+function attachBtObHover() {
+  const tb = document.getElementById('bbt-tbody');
+  if (!tb) return;
+  tb.onmouseover = (e) => { const c = e.target.closest('.bt-pc'); if (c) showBtOb(c, e); };
+  tb.onmousemove = (e) => { if (e.target.closest('.bt-pc')) moveBtOb(e); };
+  tb.onmouseout  = (e) => {
+    const c = e.target.closest('.bt-pc');
+    if (c && !c.contains(e.relatedTarget)) hideBtOb();
+  };
+}
+
+async function showBtOb(cell, ev) {
+  if (cell === _btObCell) { moveBtOb(ev); return; }
+  _btObCell = cell;
+  const sym = cell.dataset.sym, date = cell.dataset.date;
+  const time = +cell.dataset.time, side = cell.dataset.side;
+  const pop = document.getElementById('bt-ob-pop');
+  pop.style.display = 'block';
+  pop.innerHTML = '<div class="bt-pop-h">در حال بارگذاری اردربوک ...</div>';
+  moveBtOb(ev);
+
+  const key = sym + '|' + date;
+  let snaps = btObCache[key];
+  if (!snaps) {
+    const r = await fetch(
+      `/api/orderbook_history?symbol=${encodeURIComponent(sym)}&date=${date}&limit=20000`
+    ).catch(() => null);
+    snaps = (r?.ok ? (await r.json()).snapshots : []) || [];
+    btObCache[key] = snaps;
+  }
+  if (_btObCell !== cell) return;   // moved away while fetching
+
+  // Carry-forward: latest snapshot at-or-before the trade time.
+  let snap = null;
+  for (const s of snaps) { if ((s.time || 0) <= time) snap = s; else break; }
+  if (!snap && snaps.length) snap = snaps[0];
+
+  const sideLbl = side === 'buy' ? 'خرید ← از صف فروش' : 'فروش ← از صف خرید';
+  const col = side === 'buy' ? 'var(--green)' : 'var(--red)';
+  pop.innerHTML = snap
+    ? `<div class="bt-pop-h" style="color:${col}">${sym} · ${sideLbl}</div>` + bondOBTableHtml(snap, side)
+    : `<div class="bt-pop-h">${sym} — اردربوکی برای این لحظه ثبت نشده</div>`;
+  moveBtOb(ev);
+}
+
+function moveBtOb(ev) {
+  const pop = document.getElementById('bt-ob-pop');
+  if (pop.style.display === 'none') return;
+  const pad = 14;
+  const w = pop.offsetWidth || 230, h = pop.offsetHeight || 170;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > window.innerWidth)  x = ev.clientX - w - pad;
+  if (y + h > window.innerHeight) y = ev.clientY - h - pad;
+  pop.style.left = Math.max(4, x) + 'px';
+  pop.style.top  = Math.max(4, y) + 'px';
+}
+
+function hideBtOb() {
+  _btObCell = null;
+  document.getElementById('bt-ob-pop').style.display = 'none';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4765,8 +4860,13 @@ async function loadBondOBDate(date) {
   renderBondOBSnap(snaps[snaps.length - 1]);
 }
 
-function renderBondOBSnap(snap) {
+// Build the bid/ask ladder HTML for one OB snapshot.
+// *highlight* = 'buy' emphasises the ask side (where a buy executes),
+//              'sell' emphasises the bid side; null = no emphasis.
+function bondOBTableHtml(snap, highlight) {
   const fmt = n => (n || 0).toLocaleString('en-US');
+  const bidHL = highlight === 'sell' ? ' bd-hl' : '';
+  const askHL = highlight === 'buy'  ? ' bd-hl' : '';
   let rows = '';
   for (let i = 1; i <= 5; i++) {
     const bp = snap[`b${i}p`] || 0, bv = snap[`b${i}v`] || 0;
@@ -4774,22 +4874,25 @@ function renderBondOBSnap(snap) {
     if (!bp && !ap) continue;
     const spread = (ap > 0 && bp > 0) ? ((ap - bp) / bp * 100).toFixed(2) + '%' : '—';
     rows += `<tr>
-      <td class="bd-bid">${fmt(bv)}</td>
-      <td class="bd-bid"><b>${fmt(bp)}</b></td>
+      <td class="bd-bid${bidHL}">${fmt(bv)}</td>
+      <td class="bd-bid${bidHL}"><b>${fmt(bp)}</b></td>
       <td style="color:var(--muted);font-size:9px">${i === 1 ? spread : ''}</td>
-      <td class="bd-ask"><b>${fmt(ap)}</b></td>
-      <td class="bd-ask">${fmt(av)}</td>
+      <td class="bd-ask${askHL}"><b>${fmt(ap)}</b></td>
+      <td class="bd-ask${askHL}">${fmt(av)}</td>
     </tr>`;
   }
   const t = snap.time ? String(snap.time).padStart(6, '0').replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2:$3') : '';
-  document.getElementById('bd-ob-wrap').innerHTML =
-    `<div style="font-size:9px;color:var(--muted);margin-bottom:4px">زمان: ${t}</div>
-     <table id="bd-ob-table">
+  return `<div style="font-size:9px;color:var(--muted);margin-bottom:4px">زمان: ${t}</div>
+     <table class="bd-ob-table">
        <thead><tr>
          <th>حجم خرید</th><th>قیمت خرید</th><th>اسپرد</th><th>قیمت فروش</th><th>حجم فروش</th>
        </tr></thead>
        <tbody>${rows || '<tr><td colspan="5" style="color:var(--muted)">—</td></tr>'}</tbody>
      </table>`;
+}
+
+function renderBondOBSnap(snap) {
+  document.getElementById('bd-ob-wrap').innerHTML = bondOBTableHtml(snap, null);
 }
 
 function closeBondDetail() {

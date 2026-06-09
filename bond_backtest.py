@@ -79,6 +79,8 @@ class BondBacktestParams:
     force_eod: bool = True           # liquidate any open position at day end
     include_matured: bool = True     # include اخزا already matured (as of today)
                                      # — on each date they only trade while alive
+    buy_fee: float = BUY_COST        # buy-side commission (fraction, e.g. 0.00145)
+    sell_fee: float = SELL_COST      # sell-side commission + tax (fraction)
 
 
 @dataclass
@@ -180,8 +182,8 @@ def _simulate_bond_day(date_int: int,
         st = pos[sym]
         frac = exit_units / st["units"] if st["units"] else 0
         cost_part = st["buy_notional"] * frac
-        buy_fee  = cost_part * BUY_COST
-        sell_fee = sell_notional * SELL_COST
+        buy_fee  = cost_part * p.buy_fee
+        sell_fee = sell_notional * p.sell_fee
         invested = cost_part + buy_fee
         net = (sell_notional - sell_fee) - invested
         trades.append(BondTrade(
@@ -286,13 +288,13 @@ def _simulate_bond_day(date_int: int,
 #  Summary + public API                                                        #
 # --------------------------------------------------------------------------- #
 
-def _summarize(trades: list[BondTrade]) -> dict:
+def _summarize(trades: list[BondTrade], buy_fee: float = BUY_COST) -> dict:
     if not trades:
         return {"trade_count": 0, "win_count": 0, "loss_count": 0, "win_rate": 0,
                 "total_net_pnl": 0, "total_invested": 0, "total_return_pct": 0,
                 "avg_net_pct": 0, "best_pct": 0, "worst_pct": 0, "eod_count": 0,
                 "avg_hold_min": 0, "total_fees": 0, "avg_entry_z": 0}
-    invested = sum(t.buy_notional + t.buy_notional * BUY_COST for t in trades)
+    invested = sum(t.buy_notional * (1 + buy_fee) for t in trades)
     net = sum(t.net_pnl for t in trades)
     wins = [t for t in trades if t.net_pnl > 0]
     return {
@@ -439,7 +441,7 @@ def run_bond_backtest(db, symbols: list[str] | None = None,
         "days_tested": days_tested,
         "days_skipped": days_skipped,
         "trades": [asdict(t) for t in all_trades],
-        "summary": _summarize(all_trades),
+        "summary": _summarize(all_trades, p.buy_fee),
     }
 
 
@@ -514,9 +516,10 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
         p = BondBacktestParams(
             capital=base.capital, entry_bps=float(entry), exit_bps=float(exit_),
             degree=int(degree), min_curve_points=int(minpts),
-            step_secs=base.step_secs, force_eod=base.force_eod)
+            step_secs=base.step_secs, force_eod=base.force_eod,
+            buy_fee=base.buy_fee, sell_fee=base.sell_fee)
         trades, tested, skipped = _simulate_cache(dates, cache, p)
-        summary = _summarize(trades)
+        summary = _summarize(trades, p.buy_fee)
         results.append({
             "params": asdict(p),
             "summary": summary,

@@ -1118,6 +1118,7 @@ def create_app(db, scan_callback=None):
         syms_arg = request.args.get("symbols", "").strip()
         symbols = [s.strip() for s in syms_arg.split(",") if s.strip()] or None
 
+        from bond_backtest import BUY_COST, SELL_COST
         params = BondBacktestParams(
             capital=_float("capital", 1_000_000_000),
             entry_bps=_float("entry_bps", 50.0),
@@ -1127,6 +1128,8 @@ def create_app(db, scan_callback=None):
             step_secs=int(_float("step", 0)),
             force_eod=request.args.get("force_eod", "1") != "0",
             include_matured=request.args.get("include_matured", "1") != "0",
+            buy_fee=_float("buy_fee", BUY_COST),
+            sell_fee=_float("sell_fee", SELL_COST),
         )
 
         try:
@@ -1181,11 +1184,14 @@ def create_app(db, scan_callback=None):
         else:
             symbols = [s.strip() for s in str(syms_arg).split(",") if s.strip()] or None
 
+        from bond_backtest import BUY_COST, SELL_COST
         base = BondBacktestParams(
             capital=_float("capital", 1_000_000_000),
             step_secs=int(_float("step", 0)),
             force_eod=str(_get("force_eod", "1")) != "0",
             include_matured=str(_get("include_matured", "1")) != "0",
+            buy_fee=_float("buy_fee", BUY_COST),
+            sell_fee=_float("sell_fee", SELL_COST),
         )
         min_trades = int(_float("min_trades", 3))
         start, end = _int("start"), _int("end")
