@@ -37,7 +37,9 @@ snapshot (``eod``).
 
 from __future__ import annotations
 
+import itertools
 import logging
+import math
 from dataclasses import dataclass, asdict
 
 from bonds import ytm_zero_coupon, fit_yield_curve, eval_curve, days_to_maturity
@@ -448,95 +450,337 @@ def run_bond_backtest(db, symbols: list[str] | None = None,
 #  Parameter optimizer                                                         #
 # --------------------------------------------------------------------------- #
 
+# ── Risk-adjusted metrics ─────────────────────────────────────────────────
+
+def _risk_metrics(trades: list[BondTrade], buy_fee: float = BUY_COST) -> dict:
+    """Compute per-trade risk-adjusted performance: Sharpe, Sortino, PF, MDD, Calmar, Expectancy."""
+    empty = {"sharpe": 0.0, "sortino": 0.0, "profit_factor": 0.0,
+             "max_drawdown_pct": 0.0, "calmar": 0.0, "expectancy": 0.0}
+    if not trades:
+        return empty
+    rets = [t.net_pct for t in trades]
+    n = len(rets)
+    mu = sum(rets) / n
+    var = sum((r - mu) ** 2 for r in rets) / max(n - 1, 1)
+    std = math.sqrt(var) if var > 0 else 0.0
+    sharpe = mu / std if std > 0 else (10.0 if mu > 0 else 0.0)
+    down_sq = sum((r - mu) ** 2 for r in rets if r < mu)
+    dstd = math.sqrt(down_sq / max(n - 1, 1)) if down_sq > 0 else 0.0
+    sortino = mu / dstd if dstd > 0 else (10.0 if mu > 0 else 0.0)
+    gross_w = sum(t.net_pnl for t in trades if t.net_pnl > 0)
+    gross_l = abs(sum(t.net_pnl for t in trades if t.net_pnl < 0))
+    pf = gross_w / gross_l if gross_l > 0 else (99.0 if gross_w > 0 else 0.0)
+    ordered = sorted(trades, key=lambda x: (x.date, x.exit_time))
+    cum = peak = max_dd = 0.0
+    for t in ordered:
+        cum += t.net_pnl
+        if cum > peak:
+            peak = cum
+        if peak > 0:
+            dd = (peak - cum) / peak
+            if dd > max_dd:
+                max_dd = dd
+    max_dd_pct = max_dd * 100
+    total_ret = sum(rets)
+    calmar = total_ret / max_dd_pct if max_dd_pct > 0 else (total_ret if total_ret > 0 else 0.0)
+    return {
+        "sharpe":           round(sharpe, 4),
+        "sortino":          round(sortino, 4),
+        "profit_factor":    round(min(pf, 99.0), 4),
+        "max_drawdown_pct": round(max_dd_pct, 4),
+        "calmar":           round(calmar, 4),
+        "expectancy":       round(mu, 6),
+    }
+
+
+def _objective_v2(summary: dict, metrics: dict, min_trades: int,
+                  opt_metric: str = "sharpe") -> float:
+    """Risk-adjusted objective. Higher is better. Penalises EOD-forced exits."""
+    tc = summary.get("trade_count", 0)
+    if tc < min_trades:
+        return -1000.0 + tc
+    eod_frac = summary.get("eod_count", 0) / tc if tc else 1.0
+    scores = {
+        "sharpe":        metrics.get("sharpe", 0.0),
+        "sortino":       metrics.get("sortino", 0.0),
+        "calmar":        metrics.get("calmar", 0.0),
+        "profit_factor": min(metrics.get("profit_factor", 0.0), 10.0),
+        "expectancy":    metrics.get("expectancy", 0.0),
+        "total_return":  summary.get("total_return_pct", 0.0),
+    }
+    return scores.get(opt_metric, scores["sharpe"]) - 0.2 * eod_frac
+
+
+# ── Coarse-to-Fine search ─────────────────────────────────────────────────
+
+# Phase-1 coarse grid: wide spacing over expanded parameter space
+COARSE_GRID = {
+    "degree":           [1, 2, 3],
+    "min_curve_points": [3, 4, 5],
+    "entry_bps":        [15, 30, 45, 65, 85, 110],
+    "exit_bps":         [-20, -10, 0, 10, 20],
+    "step_secs":        [0, 30, 60],
+}
+# Phase-2 refinement: ±step around best coarse results
+_FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
+
+# Legacy grid kept for reference (no longer used by default)
 DEFAULT_GRID = {
-    "degree":           [1, 2],          # yield-curve polynomial degree
-    "min_curve_points": [3, 4],          # min simultaneous series to fit a curve
+    "degree":           [1, 2],
+    "min_curve_points": [3, 4],
     "entry_bps":        [25, 40, 55, 70, 90],
     "exit_bps":         [-10, 0, 10, 20],
 }
 
 
-def _objective(summary: dict, min_trades: int) -> float:
-    """Score a backtest summary. Higher is better.
+def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
+                  opt_metric: str, min_trades: int,
+                  top_k: int = 5,
+                  progress: dict | None = None,
+                  lock=None) -> list[dict]:
+    """Two-phase coarse-to-fine search. Returns all evaluated combos sorted by score."""
+    import threading
+    _lock = lock or threading.Lock()
 
-    Combos with fewer than *min_trades* trades are pushed below everything
-    statistically meaningful (but still ordered by trade count so an empty grid
-    degrades gracefully).  Otherwise reward total return, lightly tie-break on
-    win-rate, and nudge away from results that are mostly forced EOD exits
-    (i.e. the signal never actually reverted).
-    """
-    tc = summary.get("trade_count", 0)
-    if tc < min_trades:
-        return -1000.0 + tc
-    ret = summary.get("total_return_pct", 0.0)
-    win = summary.get("win_rate", 0.0)
-    eod = summary.get("eod_count", 0)
-    eod_frac = eod / tc if tc else 1.0
-    return ret + 0.01 * win - 0.5 * eod_frac
+    def _eval(degree, minpts, entry, exit_, step):
+        p = BondBacktestParams(
+            capital=base.capital, entry_bps=float(entry), exit_bps=float(exit_),
+            degree=int(degree), min_curve_points=int(minpts),
+            step_secs=int(step), force_eod=base.force_eod,
+            include_matured=base.include_matured,
+            buy_fee=base.buy_fee, sell_fee=base.sell_fee)
+        trades, tested, _ = _simulate_cache(dates, cache, p)
+        summary = _summarize(trades, base.buy_fee)
+        metrics = _risk_metrics(trades, base.buy_fee)
+        return {
+            "params":      asdict(p),
+            "summary":     summary,
+            "metrics":     metrics,
+            "score":       round(_objective_v2(summary, metrics, min_trades, opt_metric), 4),
+            "days_tested": tested,
+        }
+
+    # Phase 1 — coarse
+    coarse = [
+        (deg, minp, ent, ex, stp)
+        for deg, minp, ent, ex, stp in itertools.product(
+            COARSE_GRID["degree"], COARSE_GRID["min_curve_points"],
+            COARSE_GRID["entry_bps"], COARSE_GRID["exit_bps"],
+            COARSE_GRID["step_secs"],
+        )
+        if ex < ent
+    ]
+    if progress is not None:
+        with _lock:
+            progress.update({"done": 0, "total": len(coarse), "phase": "coarse"})
+
+    seen: set = set()
+    results: list[dict] = []
+    for combo in coarse:
+        seen.add(combo)
+        results.append(_eval(*combo))
+        if progress is not None:
+            with _lock:
+                progress["done"] += 1
+
+    results.sort(key=lambda r: r["score"], reverse=True)
+
+    # Phase 2 — fine-grid zoom around top-K coarse winners
+    fine_set: set = set()
+    for r in results[:top_k]:
+        p = r["params"]
+        for de in [-_FINE_STEP["entry_bps"], _FINE_STEP["entry_bps"]]:
+            for dx in [-_FINE_STEP["exit_bps"], _FINE_STEP["exit_bps"]]:
+                ne = p["entry_bps"] + de
+                nx = p["exit_bps"] + dx
+                if nx < ne and ne > 5:
+                    fine_set.add((p["degree"], p["min_curve_points"], ne, nx, p["step_secs"]))
+    fine_new = [c for c in fine_set if c not in seen]
+
+    if fine_new and progress is not None:
+        with _lock:
+            progress["total"] = progress.get("total", 0) + len(fine_new)
+            progress["phase"] = "fine"
+
+    for combo in fine_new:
+        seen.add(combo)
+        results.append(_eval(*combo))
+        if progress is not None:
+            with _lock:
+                progress["done"] += 1
+
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results
+
+
+# ── Parameter stability ───────────────────────────────────────────────────
+
+def _param_stability(dates: list, cache: dict, best_params: dict,
+                     base: BondBacktestParams,
+                     min_trades: int, opt_metric: str) -> float:
+    """Measure robustness: how stable is the score across ±1 step neighbours? 0=knife-edge, 1=plateau."""
+    bp = best_params
+    scores = []
+    for de, dx in itertools.product([-_FINE_STEP["entry_bps"], 0, _FINE_STEP["entry_bps"]],
+                                     [-_FINE_STEP["exit_bps"],  0, _FINE_STEP["exit_bps"]]):
+        if de == 0 and dx == 0:
+            continue
+        ne, nx = bp["entry_bps"] + de, bp["exit_bps"] + dx
+        if nx >= ne or ne <= 0:
+            continue
+        p = BondBacktestParams(
+            capital=base.capital, entry_bps=float(ne), exit_bps=float(nx),
+            degree=int(bp["degree"]), min_curve_points=int(bp["min_curve_points"]),
+            step_secs=int(bp.get("step_secs", 0)), force_eod=base.force_eod,
+            include_matured=base.include_matured,
+            buy_fee=base.buy_fee, sell_fee=base.sell_fee)
+        trades, _, _ = _simulate_cache(dates, cache, p)
+        s = _summarize(trades, base.buy_fee)
+        m = _risk_metrics(trades, base.buy_fee)
+        sc = _objective_v2(s, m, min_trades, opt_metric)
+        if sc > -900:
+            scores.append(sc)
+    if not scores:
+        return 0.0
+    mu = sum(scores) / len(scores)
+    if abs(mu) < 1e-9:
+        return 0.0
+    std = math.sqrt(sum((s - mu) ** 2 for s in scores) / max(len(scores) - 1, 1))
+    cv = std / abs(mu)
+    return round(max(0.0, 1.0 - min(cv, 1.0)), 3)
+
+
+# ── Walk-forward validation ───────────────────────────────────────────────
+
+def _walk_forward(dates: list, cache: dict, params: dict,
+                  base: BondBacktestParams,
+                  n_windows: int = 4, oos_frac: float = 0.3,
+                  min_trades: int = 3) -> dict:
+    """Rolling walk-forward: split history into n_windows × (IS + OOS). Measures out-of-sample consistency."""
+    if len(dates) < 8:
+        return {"valid": False, "windows": []}
+    wsize = len(dates) // n_windows
+    if wsize < 3:
+        return {"valid": False, "windows": []}
+
+    def _make_params(p_dict):
+        return BondBacktestParams(
+            capital=base.capital,
+            entry_bps=float(p_dict["entry_bps"]),
+            exit_bps=float(p_dict["exit_bps"]),
+            degree=int(p_dict["degree"]),
+            min_curve_points=int(p_dict["min_curve_points"]),
+            step_secs=int(p_dict.get("step_secs", 0)),
+            force_eod=base.force_eod,
+            include_matured=base.include_matured,
+            buy_fee=base.buy_fee,
+            sell_fee=base.sell_fee)
+
+    windows = []
+    for i in range(n_windows):
+        s = i * wsize
+        e = s + wsize if i < n_windows - 1 else len(dates)
+        wd = dates[s:e]
+        split = max(1, int(len(wd) * (1 - oos_frac)))
+        is_d, oos_d = wd[:split], wd[split:]
+        if not oos_d:
+            continue
+        p = _make_params(params)
+        is_t, _, _  = _simulate_cache(is_d,  cache, p)
+        oos_t, _, _ = _simulate_cache(oos_d, cache, p)
+        is_s  = _summarize(is_t,  base.buy_fee)
+        oos_s = _summarize(oos_t, base.buy_fee)
+        is_m  = _risk_metrics(is_t,  base.buy_fee)
+        oos_m = _risk_metrics(oos_t, base.buy_fee)
+        windows.append({
+            "window": i + 1,
+            "is_days":        len(is_d),
+            "oos_days":       len(oos_d),
+            "is_trades":      is_s["trade_count"],
+            "oos_trades":     oos_s["trade_count"],
+            "is_return_pct":  is_s["total_return_pct"],
+            "oos_return_pct": oos_s["total_return_pct"],
+            "is_sharpe":      is_m["sharpe"],
+            "oos_sharpe":     oos_m["sharpe"],
+            "is_win_rate":    is_s["win_rate"],
+            "oos_win_rate":   oos_s["win_rate"],
+        })
+    if not windows:
+        return {"valid": False, "windows": []}
+    oos_win = sum(1 for w in windows if w["oos_return_pct"] > 0)
+    return {
+        "valid":               True,
+        "n_windows":           len(windows),
+        "windows":             windows,
+        "oos_win_rate_pct":    round(oos_win / len(windows) * 100, 1),
+        "avg_oos_return_pct":  round(sum(w["oos_return_pct"] for w in windows) / len(windows), 4),
+        "avg_oos_sharpe":      round(sum(w["oos_sharpe"]     for w in windows) / len(windows), 4),
+    }
 
 
 def optimize_bond_backtest(db, symbols: list[str] | None = None,
                            start_date: int | None = None,
                            end_date: int | None = None,
                            base: BondBacktestParams | None = None,
-                           grid: dict | None = None,
+                           grid: dict | None = None,      # ignored (kept for compat)
                            min_trades: int = 3,
                            top_n: int = 10,
+                           opt_metric: str = "sharpe",
+                           walk_forward: bool = True,
                            progress: dict | None = None,
                            progress_lock=None) -> dict:
-    """Grid-search اخزا backtest parameters and rank by risk-adjusted return.
+    """Advanced coarse-to-fine اخزا parameter optimizer.
 
-    The expensive OB history is loaded once; every parameter combination then
-    re-simulates in memory.  Returns the best combination plus the *top_n*
-    ranked results so the UI can show what was tried and let the user apply
-    the winner.
+    Phases
+    ------
+    1. **Coarse** — evaluate all combos in COARSE_GRID (~270–350 combos after
+       validity filter).
+    2. **Fine** — zoom into top-5 coarse winners with ±8 bps / ±4 bps steps.
+    3. **Stability** — evaluate 8 neighbours of the best combo; compute a
+       0–1 robustness score.
+    4. **Walk-Forward** — split history into 4 rolling windows (30% OOS each);
+       measure out-of-sample consistency.
     """
     import threading
     base = base or BondBacktestParams()
-    grid = grid or DEFAULT_GRID
     universe, meta = _resolve_universe(db, symbols, include_matured=base.include_matured)
-    dates, cache = _load_day_cache(db, universe, meta, start_date, end_date)
+    dates, cache   = _load_day_cache(db, universe, meta, start_date, end_date)
 
-    combos = []
-    for degree in grid["degree"]:
-        for minpts in grid["min_curve_points"]:
-            for entry in grid["entry_bps"]:
-                for exit_ in grid["exit_bps"]:
-                    if exit_ > entry:        # nonsensical: exit above entry
-                        continue
-                    combos.append((degree, minpts, entry, exit_))
+    # Phases 1 + 2: coarse-to-fine
+    all_results = _c2f_optimize(
+        dates, cache, base,
+        opt_metric=opt_metric, min_trades=min_trades,
+        top_k=5, progress=progress, lock=progress_lock)
 
-    if progress is not None:
-        with (progress_lock or threading.Lock()):
-            progress.update({"done": 0, "total": len(combos)})
+    best = all_results[0] if all_results else None
 
-    results = []
-    for (degree, minpts, entry, exit_) in combos:
-        p = BondBacktestParams(
-            capital=base.capital, entry_bps=float(entry), exit_bps=float(exit_),
-            degree=int(degree), min_curve_points=int(minpts),
-            step_secs=base.step_secs, force_eod=base.force_eod,
-            buy_fee=base.buy_fee, sell_fee=base.sell_fee)
-        trades, tested, skipped = _simulate_cache(dates, cache, p)
-        summary = _summarize(trades, p.buy_fee)
-        results.append({
-            "params": asdict(p),
-            "summary": summary,
-            "score": round(_objective(summary, min_trades), 4),
-            "days_tested": tested,
-        })
+    # Phase 3: stability around best
+    if best and best["score"] > -900:
         if progress is not None:
             with (progress_lock or threading.Lock()):
-                progress["done"] += 1
+                progress["phase"] = "stability"
+        best["stability"] = _param_stability(
+            dates, cache, best["params"], base, min_trades, opt_metric)
+    else:
+        if best:
+            best["stability"] = 0.0
 
-    results.sort(key=lambda r: r["score"], reverse=True)
-    best = results[0] if results else None
+    # Phase 4: walk-forward validation
+    wf = {"valid": False, "windows": []}
+    if best and walk_forward and best["score"] > -900 and len(dates) >= 8:
+        if progress is not None:
+            with (progress_lock or threading.Lock()):
+                progress["phase"] = "walk_forward"
+        wf = _walk_forward(dates, cache, best["params"], base,
+                           n_windows=4, oos_frac=0.3, min_trades=min_trades)
+        best["walk_forward"] = wf
 
     return {
-        "symbols":       universe,
-        "tested_combos": len(results),
-        "min_trades":    min_trades,
+        "symbols":        universe,
+        "tested_combos":  len(all_results),
+        "min_trades":     min_trades,
+        "opt_metric":     opt_metric,
         "days_available": len(dates),
-        "best":          best,
-        "top":           results[:top_n],
+        "best":           best,
+        "top":            all_results[:top_n],
     }

@@ -1193,8 +1193,10 @@ def create_app(db, scan_callback=None):
             buy_fee=_float("buy_fee", BUY_COST),
             sell_fee=_float("sell_fee", SELL_COST),
         )
-        min_trades = int(_float("min_trades", 3))
-        start, end = _int("start"), _int("end")
+        min_trades   = int(_float("min_trades", 3))
+        opt_metric   = str(_get("opt_metric",   "sharpe"))
+        walk_forward = str(_get("walk_forward", "1")) != "0"
+        start, end   = _int("start"), _int("end")
 
         if _bond_opt_state["running"]:
             return jsonify({"status": "already running",
@@ -1203,17 +1205,19 @@ def create_app(db, scan_callback=None):
         def _run():
             with _bond_opt_lock:
                 _bond_opt_state["running"] = True
-                _bond_opt_state["progress"] = {"done": 0, "total": 0}
+                _bond_opt_state["progress"] = {"done": 0, "total": 0, "phase": "coarse"}
                 _bond_opt_state["result"] = None
             try:
                 res = optimize_bond_backtest(
                     db, symbols, start, end, base=base, min_trades=min_trades,
+                    opt_metric=opt_metric, walk_forward=walk_forward,
                     progress=_bond_opt_state["progress"],
                     progress_lock=_bond_opt_lock)
                 _bond_opt_state["result"] = res
-                logger.info("[BondOptimize] %d combos, best score=%s",
+                logger.info("[BondOptimize] %d combos, best score=%s metric=%s",
                             res["tested_combos"],
-                            res["best"]["score"] if res["best"] else None)
+                            res["best"]["score"] if res["best"] else None,
+                            opt_metric)
             except Exception:
                 logger.exception("bond optimize failed")
                 _bond_opt_state["result"] = {"error": "optimization failed"}

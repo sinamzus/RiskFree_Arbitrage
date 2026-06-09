@@ -1148,7 +1148,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   border: 1px solid var(--brd2); border-radius: 8px; padding: 10px 12px;
   margin-bottom: 8px; font-size: var(--fs-sm);
 }
-#bbt-opt-best .ob-h { font-weight: 700; color: var(--txt); margin-bottom: 4px; }
+#bbt-opt-best .ob-h { font-weight: 700; color: var(--txt); margin-bottom: 6px; }
 #bbt-opt-best .ob-p { color: var(--sub); font-size: var(--fs-xs); line-height: 1.7; }
 #bbt-opt-best .ob-p b { color: var(--txt); font-variant-numeric: tabular-nums; }
 #bbt-opt-apply {
@@ -1156,6 +1156,36 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   border-radius: 6px; padding: 6px 14px; font-weight: 700; cursor: pointer;
   font-family: var(--font); font-size: var(--fs-xs);
 }
+/* Risk-metric cards row inside optimizer */
+.opt-metric-row {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px;
+}
+.opt-mc {
+  background: var(--panel2); border: 1px solid var(--brd); border-radius: 6px;
+  padding: 5px 10px; font-size: var(--fs-xs); min-width: 80px; text-align: center;
+}
+.opt-mc .omk { color: var(--muted); font-size: 10px; margin-bottom: 2px; }
+.opt-mc .omv { font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Stability badge */
+.stab-badge {
+  display: inline-block; border-radius: 12px; padding: 2px 10px;
+  font-size: 11px; font-weight: 700; margin-right: 6px;
+}
+.stab-hi  { background: rgba(38,166,154,.22); color: var(--green); }
+.stab-mid { background: rgba(255,183,0,.18);  color: #c8960a; }
+.stab-lo  { background: rgba(239,83,80,.18);  color: var(--red); }
+/* Walk-forward table */
+#opt-wf-wrap { margin-top: 10px; }
+#opt-wf-wrap .wf-h { font-size: var(--fs-xs); color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+#opt-wf-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+#opt-wf-table th, #opt-wf-table td {
+  padding: 3px 6px; text-align: center; border-bottom: 1px solid var(--brd);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+#opt-wf-table th { color: var(--muted); font-weight: 600; }
+#opt-wf-table td.pos { color: var(--green); }
+#opt-wf-table td.neg { color: var(--red); }
+/* Optimizer top-N table */
 #bbt-opt-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
 #bbt-opt-table th, #bbt-opt-table td {
   padding: 4px 7px; text-align: center; border-bottom: 1px solid var(--brd);
@@ -1760,8 +1790,19 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <input id="bbt-matured" type="checkbox" checked>
           شامل اخزاهای سررسیدشده
         </label>
+        <div class="bbt-field" style="align-self:flex-end;margin-bottom:6px">
+          <label>معیار بهینه</label>
+          <select id="bbt-opt-metric" title="معیار هدف بهینه‌ساز">
+            <option value="sharpe">Sharpe</option>
+            <option value="sortino">Sortino</option>
+            <option value="calmar">Calmar</option>
+            <option value="profit_factor">Profit Factor</option>
+            <option value="expectancy">Expectancy</option>
+            <option value="total_return">بازده کل</option>
+          </select>
+        </div>
         <button class="scan-btn" id="bbt-opt-btn" onclick="bondOptimize()"
-                title="جستجوی شبکه‌ای پارامترها و پیشنهاد بهترین ترکیب (درجه منحنی، آستانه‌ها)">🔧 بهینه‌سازی</button>
+                title="بهینه‌ساز پیشرفته: جستجوی درشت→ریز + پایداری پارامتر + Walk-Forward">🔧 بهینه‌سازی</button>
         <button class="scan-btn" id="bbt-run" onclick="bondBacktest()">🧪 اجرای بک‌تست</button>
       </div>
       <div id="bbt-opt" style="display:none"></div>
@@ -4394,13 +4435,15 @@ let bondOptTimer = null;
 async function bondOptimize() {
   const btn = document.getElementById('bbt-opt-btn');
   const body = {
-    capital:   +document.getElementById('bbt-capital').value || 1e9,
-    step:      +document.getElementById('bbt-step').value || 0,
-    force_eod: '1',
-    min_trades: 3,
+    capital:      +document.getElementById('bbt-capital').value || 1e9,
+    step:         +document.getElementById('bbt-step').value || 0,
+    force_eod:    '1',
+    min_trades:   3,
     include_matured: document.getElementById('bbt-matured').checked ? '1' : '0',
-    buy_fee:   ((+document.getElementById('bbt-buyfee').value  || 0) / 100).toString(),
-    sell_fee:  ((+document.getElementById('bbt-sellfee').value || 0) / 100).toString(),
+    buy_fee:      ((+document.getElementById('bbt-buyfee').value  || 0) / 100).toString(),
+    sell_fee:     ((+document.getElementById('bbt-sellfee').value || 0) / 100).toString(),
+    opt_metric:   document.getElementById('bbt-opt-metric').value,
+    walk_forward: '1',
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
@@ -4418,7 +4461,14 @@ async function bondOptimize() {
   btn.disabled = true; btn.textContent = '⏳ بهینه‌سازی ...';
   const panel = document.getElementById('bbt-opt');
   panel.style.display = 'block';
-  panel.innerHTML = '<div class="ob-p">در حال جستجوی شبکه‌ای پارامترها ...</div>';
+  panel.innerHTML = '<div class="ob-p">⏳ مرحله ۱: جستجوی درشت (coarse grid) ...</div>';
+
+  const phaseLabel = {
+    coarse:       '⏳ مرحله ۱: جستجوی درشت',
+    fine:         '⏳ مرحله ۲: ریزگردی اطراف بهترین‌ها',
+    stability:    '⏳ مرحله ۳: سنجش پایداری پارامتر',
+    walk_forward: '⏳ مرحله ۴: اعتبارسنجی Walk-Forward',
+  };
 
   if (bondOptTimer) clearInterval(bondOptTimer);
   const poll = async () => {
@@ -4427,7 +4477,8 @@ async function bondOptimize() {
     const j = await s.json();
     const p = j.progress || {};
     if (j.running) {
-      panel.innerHTML = `<div class="ob-p">⏳ ${p.done||0}/${p.total||0} ترکیب آزموده شد ...</div>`;
+      const lbl = phaseLabel[p.phase] || '⏳ در حال بهینه‌سازی';
+      panel.innerHTML = `<div class="ob-p">${lbl} — ${p.done||0}/${p.total||0} ترکیب</div>`;
       return;
     }
     clearInterval(bondOptTimer); bondOptTimer = null;
@@ -4447,33 +4498,104 @@ function renderBondOptimize(res) {
       + `ابتدا «📊 وضعیت داده» را پر کنید تا چند سری اوراق همزمان اردربوک داشته باشند.</div></div>`;
     return;
   }
-  const b = res.best, bp = b.params, bs = b.summary;
+  const b = res.best, bp = b.params, bs = b.summary, bm = b.metrics || {};
   const fmt = n => (n||0).toLocaleString('en-US');
-  const best = `<div id="bbt-opt-best">
-      <div class="ob-h">🏆 بهترین ترکیب — بازده ${bs.total_return_pct}% · نرخ برد ${bs.win_rate}% · ${bs.trade_count} معامله</div>
-      <div class="ob-p">درجهٔ منحنی <b>${bp.degree}</b> · حداقل اوراق همزمان <b>${bp.min_curve_points}</b>
-        · ورود ≥ <b>${bp.entry_bps} bps</b> · خروج ≤ <b>${bp.exit_bps} bps</b>
-        · سود خالص <b>${fmt(bs.total_net_pnl)}</b> ریال · میانگین مدت <b>${bs.avg_hold_min}m</b></div>
-      <button id="bbt-opt-apply" onclick='applyBondOpt(${JSON.stringify(bp)})'>اعمال و اجرای بک‌تست ▸</button>
+  const fmtR = n => (+n||0).toFixed(4);
+
+  // Stability badge
+  const stab = b.stability ?? null;
+  let stabHtml = '';
+  if (stab !== null) {
+    const cls = stab >= 0.65 ? 'stab-hi' : stab >= 0.35 ? 'stab-mid' : 'stab-lo';
+    const lbl = stab >= 0.65 ? 'پایدار' : stab >= 0.35 ? 'متوسط' : 'شکننده';
+    stabHtml = `<span class="stab-badge ${cls}" title="پایداری پارامتر: ${stab}">● ${lbl} (${stab})</span>`;
+  }
+
+  // Risk-metric cards
+  const mc = (k, v, unit='') =>
+    `<div class="opt-mc"><div class="omk">${k}</div><div class="omv">${v}${unit}</div></div>`;
+  const metricsRow = `<div class="opt-metric-row">
+    ${mc('Sharpe',       fmtR(bm.sharpe))}
+    ${mc('Sortino',      fmtR(bm.sortino))}
+    ${mc('Profit Factor', fmtR(bm.profit_factor))}
+    ${mc('Max Drawdown', fmtR(bm.max_drawdown_pct), '%')}
+    ${mc('Calmar',       fmtR(bm.calmar))}
+    ${mc('Expectancy',   fmtR(bm.expectancy), '%')}
+  </div>`;
+
+  // Walk-forward section
+  const wf = b.walk_forward;
+  let wfHtml = '';
+  if (wf && wf.valid && wf.windows?.length) {
+    const wfRows = wf.windows.map(w => {
+      const irc = w.is_return_pct  >= 0 ? 'pos' : 'neg';
+      const orc = w.oos_return_pct >= 0 ? 'pos' : 'neg';
+      return `<tr>
+        <td>${w.window}</td>
+        <td>${w.is_days}/${w.oos_days}</td>
+        <td>${w.is_trades}/${w.oos_trades}</td>
+        <td class="${irc}">${w.is_return_pct}%</td>
+        <td class="${orc}">${w.oos_return_pct}%</td>
+        <td>${w.is_sharpe?.toFixed(3)||0}</td>
+        <td>${w.oos_sharpe?.toFixed(3)||0}</td>
+      </tr>`;
+    }).join('');
+    const consCls = wf.oos_win_rate_pct >= 75 ? 'pos' : wf.oos_win_rate_pct >= 50 ? '' : 'neg';
+    wfHtml = `<div id="opt-wf-wrap">
+      <div class="wf-h">📊 Walk-Forward — ${wf.n_windows} پنجره · میانگین OOS بازده <b class="${consCls}">${wf.avg_oos_return_pct}%</b>
+        · میانگین OOS Sharpe <b>${wf.avg_oos_sharpe}</b>
+        · سازگاری <b class="${consCls}">${wf.oos_win_rate_pct}%</b></div>
+      <table id="opt-wf-table"><thead><tr>
+        <th>پنجره</th><th>IS/OOS روز</th><th>IS/OOS معامله</th>
+        <th>بازده IS</th><th>بازده OOS</th><th>Sharpe IS</th><th>Sharpe OOS</th>
+      </tr></thead><tbody>${wfRows}</tbody></table>
     </div>`;
+  }
+
+  const metricName = {'sharpe':'Sharpe','sortino':'Sortino','calmar':'Calmar',
+    'profit_factor':'Profit Factor','expectancy':'Expectancy','total_return':'بازده کل'};
+  const usedMetric = metricName[res.opt_metric] || res.opt_metric || 'Sharpe';
+
+  const best = `<div id="bbt-opt-best">
+    <div class="ob-h">🏆 بهترین ترکیب (معیار: ${usedMetric}) &nbsp;${stabHtml}</div>
+    <div class="ob-p">
+      درجهٔ منحنی <b>${bp.degree}</b> · حداقل اوراق همزمان <b>${bp.min_curve_points}</b>
+      · ورود ≥ <b>${bp.entry_bps} bps</b> · خروج ≤ <b>${bp.exit_bps} bps</b>
+      · تناوب <b>${bp.step_secs||0}s</b>
+      · ${bs.trade_count} معامله · نرخ برد <b>${bs.win_rate}%</b>
+      · سود خالص <b>${fmt(bs.total_net_pnl)}</b> ریال
+      · بازده <b>${bs.total_return_pct}%</b> · EOD <b>${bs.eod_count}</b>
+    </div>
+    ${metricsRow}
+    ${wfHtml}
+    <button id="bbt-opt-apply" onclick='applyBondOpt(${JSON.stringify(bp)})'>اعمال و اجرای بک‌تست ▸</button>
+  </div>`;
 
   const rows = (res.top || []).map((r, i) => {
-    const s = r.summary, p = r.params;
+    const s = r.summary, p = r.params, m = r.metrics || {};
     const rc = s.total_return_pct >= 0 ? 'pos' : 'neg';
     return `<tr class="${i===0?'best':''}">
       <td>${p.degree}</td><td>${p.min_curve_points}</td>
       <td>${p.entry_bps}</td><td>${p.exit_bps}</td>
+      <td>${p.step_secs||0}s</td>
       <td>${s.trade_count}</td><td>${s.win_rate}%</td>
       <td class="${rc}">${s.total_return_pct}%</td>
+      <td>${fmtR(m.sharpe)}</td>
+      <td>${fmtR(m.sortino)}</td>
+      <td>${fmtR(m.profit_factor)}</td>
+      <td>${fmtR(m.max_drawdown_pct)}%</td>
       <td class="${rc}">${fmt(s.total_net_pnl)}</td>
       <td>${s.eod_count}</td>
     </tr>`;
   }).join('');
   const table = `<table id="bbt-opt-table"><thead><tr>
-      <th>درجه</th><th>حداقل</th><th>ورود</th><th>خروج</th><th>معامله</th>
-      <th>برد</th><th>بازده</th><th>سود خالص</th><th>EOD</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    <th>درجه</th><th>حداقل</th><th>ورود</th><th>خروج</th><th>step</th>
+    <th>معامله</th><th>برد</th><th>بازده</th>
+    <th>Sharpe</th><th>Sortino</th><th>PF</th><th>MDD</th>
+    <th>سود خالص</th><th>EOD</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
   panel.innerHTML = best + table;
+  attachSort('bbt-opt-table');
 }
 
 function applyBondOpt(bp) {
