@@ -1133,6 +1133,21 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
             cur = conn.execute("DELETE FROM bond_series")
             return cur.rowcount
 
+    def purge_placeholder_bond_series(self) -> int:
+        """Delete unusable bond rows — those with no ins_code. Returns count.
+
+        The اخزا universe is now discovery-only (AKHZA_SERIES is empty), and
+        every genuinely discovered bill carries an ins_code.  Therefore any row
+        with a blank ins_code is a stale placeholder from an older code version
+        and can never be priced — purging it keeps it from silently breaking the
+        scan and emptying the yield-curve chart.  Safe to call unconditionally.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM bond_series WHERE ins_code IS NULL OR TRIM(ins_code)=''"
+            )
+            return cur.rowcount
+
     def save_bond_prices(self, prices: list[dict]) -> int:
         """Upsert today's bond price + yield snapshot. Returns count."""
         if not prices:

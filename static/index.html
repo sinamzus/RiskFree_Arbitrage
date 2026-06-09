@@ -3636,7 +3636,15 @@ function drawYieldCurve(snaps, coeffs) {
   const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
 
   const valid = snaps.filter(s => s.ytm > 0 && s.days_to_mat > 0);
-  if (!valid.length) { svg.innerHTML = ''; return; }
+  if (!valid.length) {
+    // Don't go silently blank — tell the user what to do next.
+    const hint = snaps.length
+      ? 'قیمت معتبری دریافت نشد — «📡 اسکن اوراق» را دوباره بزنید'
+      : 'هنوز اوراقی کشف نشده — ابتدا «🔍 کشف نمادها» سپس «📡 اسکن اوراق» را بزنید';
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle"
+        font-size="13" fill="var(--muted)">${hint}</text>`;
+    return;
+  }
 
   const xMin = 0;
   const xMax = Math.max(...valid.map(s => s.days_to_mat)) * 1.05;
@@ -3769,11 +3777,14 @@ async function bondDiscover() {
   const disc = j.discovered || 0;
   const act  = j.active || 0;
   const msg = disc > 0
-    ? `✅ ${disc} اوراق خزانه یافت شد — ${act} فعال، ${(j.matured||0)} سررسیدشده (رد شد). حالا «اسکن اوراق» را بزنید.`
-    : `ℹ️ هیچ اوراق خزانه‌ای یافت نشد — دسترسی شبکه به TSE را بررسی کنید`;
+    ? `✅ ${disc} اوراق خزانه یافت شد — ${act} فعال، ${(j.matured||0)} سررسیدشده (رد شد). در حال اسکن قیمت‌ها ...`
+    : `ℹ️ هیچ اوراق خزانه‌ای یافت نشد — دسترسی شبکه به TSE را بررسی کنید`
+      + (j.purged ? ` (${j.purged} ردیف ناقص پاک شد)` : '');
   showError(msg);
   await loadBondRegistry();
-  if (disc > 0) await loadBonds();
+  // Fresh discovery leaves bond_prices empty, so go straight to a live scan to
+  // populate the yield-curve chart instead of showing a blank latest-snapshot.
+  if (disc > 0) await bondScan();
 }
 
 // ── Bond historical data collection (for tick-by-tick backtest) ────────────

@@ -985,11 +985,17 @@ def create_app(db, scan_callback=None):
         """
         from data_fetcher import TSETMCFetcher
 
+        # Always purge unusable placeholder rows (no ins_code) — even if the
+        # network call below fails, this clears stale junk that would otherwise
+        # silently break the scan and empty the chart.
+        purged = db.purge_placeholder_bond_series()
+
         fetcher = TSETMCFetcher()
         discovered = fetcher.discover_akhza()
 
         if not discovered:
-            return jsonify({"discovered": 0, "active": 0, "series": [],
+            return jsonify({"discovered": 0, "active": 0, "purged": purged,
+                            "series": db.get_bond_series(active_only=False),
                             "note": "no treasury bills found — TSE network reachable?"})
 
         # Replace the registry with the clean, verified set.
