@@ -440,10 +440,13 @@ class BondSnapshot:
     # Market data (from TSETMC ClosingPriceInfo)
     last_price:  float  = 0.0
     close_price: float  = 0.0
-    ytm:         float  = 0.0          # computed from close_price
+    ytm:         float  = 0.0          # computed from ref_price (basis-dependent)
     volume:      int    = 0
     value:       float  = 0.0
     trade_count: int    = 0
+    best_bid:    float  = 0.0          # best live bid (from BestLimits)
+    best_ask:    float  = 0.0          # best live ask (from BestLimits)
+    price_basis: str    = 'close'      # which price was used for YTM
 
     # Curve / signal (filled by analyze_bonds)
     curve_ytm:    float = 0.0          # fitted curve YTM at this maturity
@@ -547,7 +550,7 @@ def analyze_bonds(
 #  Bond scan entry point                                                       #
 # =========================================================================== #
 
-def run_bond_scan(db, fetcher) -> list[BondSnapshot]:
+def run_bond_scan(db, fetcher, price_basis: str = 'close') -> list[BondSnapshot]:
     """Fetch live market data for all active اخزا series and return ranked snapshots.
 
     Parameters
@@ -562,6 +565,14 @@ def run_bond_scan(db, fetcher) -> list[BondSnapshot]:
         ``get_closing_price_info(ins_code: str) -> dict | None``.
         The returned dict must include at least: close_price, last_price,
         volume, value, trade_count.
+    price_basis:
+        Which price to use for YTM computation:
+        ``'close'`` (default) — closing price / last traded price.
+        ``'ask'``             — best ask (cheapest offer); YTM for a buyer.
+        ``'bid'``             — best bid (highest bid); YTM for a seller.
+        ``'mid'``             — midpoint of best bid and best ask.
+        When ``'ask'``/``'bid'``/``'mid'`` is chosen an extra BestLimits
+        request is made for each series.
 
     Returns
     -------
@@ -638,8 +649,29 @@ def run_bond_scan(db, fetcher) -> list[BondSnapshot]:
         snap.value       = value
         snap.trade_count = trade_count
 
-        # ── 3. Compute YTM from close price ─────────────────────────────
-        ref_price = close_price if close_price > 0 else last_price
+        # ── 3. Fetch best bid/ask when a market-side basis is requested ────
+        if price_basis in ('ask', 'bid', 'mid'):
+            try:
+                limits = fetcher.get_best_limits(ins_code)
+                if limits:
+                    bids = limits.get('bids', [])
+                    asks = limits.get('asks', [])
+                    snap.best_bid = float(bids[0]['price']) if bids and bids[0].get('price', 0) > 0 else 0.0
+                    snap.best_ask = float(asks[0]['price']) if asks and asks[0].get('price', 0) > 0 else 0.0
+            except Exception as exc:
+                logger.debug("run_bond_scan: best_limits failed for %s: %s", symbol, exc)
+
+        # ── 4. Choose reference price and compute YTM ───────────────────
+        snap.price_basis = price_basis
+        if price_basis == 'ask' and snap.best_ask > 0:
+            ref_price = snap.best_ask
+        elif price_basis == 'bid' and snap.best_bid > 0:
+            ref_price = snap.best_bid
+        elif price_basis == 'mid' and snap.best_bid > 0 and snap.best_ask > 0:
+            ref_price = (snap.best_bid + snap.best_ask) / 2.0
+        else:
+            ref_price = close_price if close_price > 0 else last_price
+
         if ref_price > 0 and dtm > 0:
             snap.ytm = ytm_zero_coupon(ref_price, face_value, dtm)
         else:
@@ -653,7 +685,7 @@ def run_bond_scan(db, fetcher) -> list[BondSnapshot]:
         sum(1 for s in snapshots if s.ytm > 0),
     )
 
-    # ── 4. Fit curve and generate signals ───────────────────────────────
+    # ── 5. Fit curve and generate signals ───────────────────────────────
     return analyze_bonds(snapshots)
 
 

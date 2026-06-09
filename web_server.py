@@ -908,9 +908,10 @@ def create_app(db, scan_callback=None):
             db.upsert_bond_series(AKHZA_SERIES)
             series = db.get_bond_series(active_only=True)
 
+        price_basis = request.args.get('price_basis', 'close')
         fetcher = TSETMCFetcher()
         try:
-            snapshots = run_bond_scan(db, fetcher)
+            snapshots = run_bond_scan(db, fetcher, price_basis=price_basis)
         except Exception as e:
             logger.exception("bond scan failed")
             return jsonify({"error": str(e)}), 500

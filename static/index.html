@@ -1247,6 +1247,47 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
                 background:var(--surf); }
 #bbt-table td.pos { color:var(--green); font-weight:700; }
 #bbt-table td.neg { color:var(--red);   font-weight:700; }
+
+/* ─── Sortable table headers ─────────────────────────────────── */
+.th-sort { cursor: pointer; user-select: none; }
+.th-sort:hover { color: var(--txt); }
+.th-sort.asc::after  { content: ' ▲'; font-size: 8px; opacity: 0.8; }
+.th-sort.desc::after { content: ' ▼'; font-size: 8px; opacity: 0.8; }
+
+/* ─── Bond detail panel (YTM chart + OB) ────────────────────── */
+#bd-panel {
+  background: var(--surf); border: 1px solid var(--brd);
+  border-radius: 8px; padding: 10px 12px; flex-shrink: 0;
+}
+#bd-hdr {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+#bd-hdr .bd-sym { font-size: var(--fs-md); font-weight: 700; color: var(--txt); }
+#bd-hdr .bd-meta { font-size: var(--fs-xs); color: var(--muted); flex: 1; }
+#bd-hdr .bd-close {
+  background: transparent; border: 1px solid var(--brd2);
+  color: var(--muted); width: 22px; height: 22px; border-radius: 4px;
+  cursor: pointer; font-size: 12px; line-height: 1; font-family: var(--font);
+}
+#bd-hdr .bd-close:hover { color: var(--txt); }
+#bd-body { display: flex; gap: 12px; }
+#bd-chart-side { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+#bd-ob-side { width: 230px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+.bd-lbl { font-size: 10px; color: var(--sub); font-weight: 600; }
+#bd-svg { display: block; background: var(--bg); border-radius: 6px; }
+#bd-ob-sel {
+  background: var(--bg); border: 1px solid var(--brd); color: var(--sub);
+  padding: 2px 5px; border-radius: 4px; font-size: 10px; font-family: var(--font);
+  margin-right: 6px; max-width: 120px;
+}
+#bd-ob-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+#bd-ob-table th, #bd-ob-table td {
+  padding: 3px 6px; text-align: center; font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--brd);
+}
+#bd-ob-table th { color: var(--muted); font-weight: 600; font-size: 9px; background: var(--surf); }
+#bd-ob-table .bd-bid { color: var(--green); }
+#bd-ob-table .bd-ask { color: var(--red); }
 </style>
 </head>
 <body>
@@ -1348,7 +1389,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div id="dm-body">
       <table id="dm-table">
         <thead><tr>
-          <th style="width:28px"></th>
+          <th style="width:28px" data-nosort></th>
           <th>نماد</th>
           <th>روزانه</th>
           <th>تیک درون‌روزی</th>
@@ -1434,6 +1475,14 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <label style="font-size:11px;color:var(--sub)">آستانه BUY:</label>
     <input id="bc-entry" type="number" step="5" value="50" title="بیشتر از این bps بخر" style="width:52px">
     <label style="font-size:11px;color:var(--sub)">bps</label>
+    <div class="h-div"></div>
+    <label style="font-size:11px;color:var(--sub)">مبنای YTM:</label>
+    <select id="bc-basis" style="background:var(--bg);border:1px solid var(--brd);color:var(--sub);padding:3px 7px;border-radius:4px;font-size:11px;font-family:var(--font)" title="محاسبه YTM بر اساس کدام قیمت؟">
+      <option value="close">قیمت پایانی</option>
+      <option value="ask">بهترین فروش</option>
+      <option value="bid">بهترین خرید</option>
+      <option value="mid">میانگین</option>
+    </select>
     <div class="h-div"></div>
     <button class="scan-btn" onclick="bondDiscover()" title="جستجوی نمادهای اخزا در TSETMC و افزودن خودکار آن‌ها">🔍 کشف نمادها</button>
     <button class="scan-btn" onclick="openDataModal('bonds')" title="مشاهده کامل بودن داده هر اوراق و فرمان جمع‌آوری (لازم برای بک‌تست)">📊 وضعیت داده</button>
@@ -1703,6 +1752,29 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           </tr></thead>
           <tbody id="bbt-tbody"></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- Bond detail panel: YTM history + OB (shown when a bond is selected) -->
+    <div id="bd-panel" style="display:none">
+      <div id="bd-hdr">
+        <span class="bd-sym" id="bd-sym-lbl">—</span>
+        <span class="bd-meta" id="bd-meta-lbl"></span>
+        <button class="bd-close" onclick="closeBondDetail()" title="بستن">✕</button>
+      </div>
+      <div id="bd-body">
+        <div id="bd-chart-side">
+          <div class="bd-lbl">سابقه بازده (YTM)</div>
+          <svg id="bd-svg" width="100%" height="150" viewBox="0 0 600 150"
+               preserveAspectRatio="none"></svg>
+        </div>
+        <div id="bd-ob-side">
+          <div class="bd-lbl">
+            اردربوک
+            <select id="bd-ob-sel" onchange="loadBondOBDate(this.value)"></select>
+          </div>
+          <div id="bd-ob-wrap"><span style="color:var(--muted);font-size:11px">—</span></div>
+        </div>
       </div>
     </div>
 
@@ -3874,6 +3946,7 @@ function setBondView(v) {
   document.getElementById('bond-history').style.display     = (v === 'history') ? '' : 'none';
   document.getElementById('bond-backtest').style.display    = (v === 'backtest') ? 'flex' : 'none';
   document.getElementById('bond-registry').style.display    = (v === 'registry') ? '' : 'none';
+  if (v !== 'live') document.getElementById('bd-panel').style.display = 'none';
   if (v === 'registry') loadBondRegistry();
 }
 
@@ -3885,10 +3958,11 @@ async function loadBonds() {
 }
 
 async function bondScan() {
-  const btn = document.querySelector('#bond-controls .scan-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
-  const r = await fetch('/api/bonds/scan').catch(() => null);
-  if (btn) { btn.disabled = false; btn.textContent = '📡 اسکن اوراق'; }
+  const basis = document.getElementById('bc-basis')?.value || 'close';
+  const scanBtn = document.querySelector('#bond-controls button[onclick="bondScan()"]');
+  if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = '⏳'; }
+  const r = await fetch(`/api/bonds/scan?price_basis=${encodeURIComponent(basis)}`).catch(() => null);
+  if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = '📡 اسکن اوراق'; }
   if (!r?.ok) { showError('خطا در اسکن اوراق'); return; }
   bondData = await r.json();
   renderBonds();
@@ -3952,14 +4026,18 @@ function renderBonds() {
     document.getElementById('yc-subtitle').textContent =
       `آخرین بروزرسانی: ${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')} — ${snaps.length} سری`;
   }
+
+  attachSort('bond-table');
 }
 
 function selBondItem(sym) {
   selBond = sym;
   document.querySelectorAll('.bl-item').forEach(el => el.classList.remove('sel'));
-  const items = document.querySelectorAll('.bl-item');
-  items.forEach(el => { if (el.querySelector('.bl-sym')?.textContent === sym) el.classList.add('sel'); });
-  if (bondView === 'live') loadBondHistory(sym);
+  document.querySelectorAll('.bl-item').forEach(el => {
+    if (el.querySelector('.bl-sym')?.textContent === sym) el.classList.add('sel');
+  });
+  if (bondView === 'live') loadBondDetail(sym);
+  else if (bondView === 'history') loadBondHistory(sym);
 }
 
 async function loadBondHistory(sym) {
@@ -4410,6 +4488,7 @@ function renderBondBacktest(res) {
     </tr>`;
   }).join('');
   tb.innerHTML = trs || '<tr><td colspan="13" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
+  attachSort('bbt-table');
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4496,6 +4575,7 @@ function renderCoverage(today) {
   }).join('');
   document.getElementById('dm-sub').textContent =
     `${dmRows.length} نماد · روزانه ${nDaily} · تیک ${nTicks} · اردربوک ${nOb}`;
+  attachSort('dm-table');
 }
 
 function dmToggleAll(on) {
@@ -4548,6 +4628,199 @@ function dmPollStatus() {
   };
   dmPollTimer = setInterval(tick, 2500);
   tick();
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Generic sortable tables
+// ══════════════════════════════════════════════════════════════════
+function attachSort(tableId) {
+  const tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  const ths = Array.from(tbl.querySelectorAll('thead th'));
+  let sCol = -1, sDir = 1;
+
+  ths.forEach((th, col) => {
+    // Skip checkbox columns (first col of dm-table) and columns marked no-sort
+    if (th.dataset.nosort !== undefined) return;
+    if (col === 0 && th.style.width === '28px') return;
+    th.classList.add('th-sort');
+    // Store original label text (strip any existing sort indicator)
+    if (!th.dataset.orig) th.dataset.orig = th.textContent.trim().replace(/[▲▼]/g, '').trim();
+
+    // Clone to remove old listeners before re-attaching (handles re-render)
+    const newTh = th.cloneNode(true);
+    th.parentNode.replaceChild(newTh, th);
+    ths[col] = newTh;
+
+    newTh.addEventListener('click', () => {
+      if (sCol === col) sDir = -sDir; else { sCol = col; sDir = 1; }
+      // Reset all headers
+      ths.forEach((h, i) => {
+        h.classList.remove('asc', 'desc');
+        h.textContent = h.dataset.orig || h.textContent.replace(/[▲▼]/g, '').trim();
+      });
+      ths[col].classList.add(sDir === 1 ? 'desc' : 'asc');
+
+      const tbody = tbl.querySelector('tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort((a, b) => {
+        const at = (a.cells[col]?.textContent || '').trim().replace(/,/g, '');
+        const bt = (b.cells[col]?.textContent || '').trim().replace(/,/g, '');
+        // Try numeric comparison first (strip non-numeric except minus/dot/percent)
+        const an = parseFloat(at.replace(/[^0-9.\-]/g, ''));
+        const bn = parseFloat(bt.replace(/[^0-9.\-]/g, ''));
+        if (!isNaN(an) && !isNaN(bn)) return sDir * (an - bn);
+        return sDir * at.localeCompare(bt, 'fa');
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Bond detail panel: YTM history chart + order-book snapshot
+// ══════════════════════════════════════════════════════════════════
+async function loadBondDetail(sym) {
+  // Header
+  document.getElementById('bd-sym-lbl').textContent = sym;
+  const snap = (bondData.snapshots || []).find(s => s.symbol === sym);
+  if (snap) {
+    const dtm = snap.days_to_mat || '—';
+    const ytmStr = snap.ytm ? (snap.ytm * 100).toFixed(2) + '%' : '—';
+    const zStr   = snap.z_spread_bps != null ? snap.z_spread_bps.toFixed(0) + ' bps' : '—';
+    document.getElementById('bd-meta-lbl').textContent =
+      `سررسید: ${dtm} روز  |  بازده: ${ytmStr}  |  Z-Spread: ${zStr}`;
+  }
+  document.getElementById('bd-panel').style.display = '';
+
+  // YTM history chart
+  const rh = await fetch(`/api/bonds/history?symbol=${encodeURIComponent(sym)}&days=120`)
+    .catch(() => null);
+  if (rh?.ok) {
+    const jh = await rh.json();
+    drawBondMiniSVG('bd-svg', jh.history || []);
+  }
+
+  // OB date list
+  const ro = await fetch(`/api/orderbook_dates?symbol=${encodeURIComponent(sym)}`)
+    .catch(() => null);
+  const sel = document.getElementById('bd-ob-sel');
+  if (ro?.ok) {
+    const jo = await ro.json();
+    const dates = jo.dates || [];
+    sel.innerHTML = dates.length
+      ? dates.slice().reverse().map(d => `<option value="${d}">${d}</option>`).join('')
+      : '<option value="">—</option>';
+    if (dates.length) {
+      loadBondOBDate(dates[dates.length - 1]);
+    } else {
+      document.getElementById('bd-ob-wrap').innerHTML =
+        '<span style="color:var(--muted);font-size:11px">اردربوک تاریخی موجود نیست</span>';
+    }
+  } else {
+    sel.innerHTML = '<option value="">—</option>';
+    document.getElementById('bd-ob-wrap').innerHTML =
+      '<span style="color:var(--muted);font-size:11px">—</span>';
+  }
+}
+
+async function loadBondOBDate(date) {
+  if (!date) return;
+  const sym = document.getElementById('bd-sym-lbl').textContent;
+  if (!sym || sym === '—') return;
+  const r = await fetch(
+    `/api/orderbook_history?symbol=${encodeURIComponent(sym)}&date=${date}&limit=500`
+  ).catch(() => null);
+  const wrap = document.getElementById('bd-ob-wrap');
+  if (!r?.ok) { wrap.innerHTML = '<span style="color:var(--muted);font-size:11px">—</span>'; return; }
+  const j = await r.json();
+  const snaps = j.snapshots || [];
+  if (!snaps.length) {
+    wrap.innerHTML = '<span style="color:var(--muted);font-size:11px">اردربوکی برای این روز موجود نیست</span>';
+    return;
+  }
+  // Show the last snapshot of the day
+  renderBondOBSnap(snaps[snaps.length - 1]);
+}
+
+function renderBondOBSnap(snap) {
+  const fmt = n => (n || 0).toLocaleString('en-US');
+  let rows = '';
+  for (let i = 1; i <= 5; i++) {
+    const bp = snap[`b${i}p`] || 0, bv = snap[`b${i}v`] || 0;
+    const ap = snap[`a${i}p`] || 0, av = snap[`a${i}v`] || 0;
+    if (!bp && !ap) continue;
+    const spread = (ap > 0 && bp > 0) ? ((ap - bp) / bp * 100).toFixed(2) + '%' : '—';
+    rows += `<tr>
+      <td class="bd-bid">${fmt(bv)}</td>
+      <td class="bd-bid"><b>${fmt(bp)}</b></td>
+      <td style="color:var(--muted);font-size:9px">${i === 1 ? spread : ''}</td>
+      <td class="bd-ask"><b>${fmt(ap)}</b></td>
+      <td class="bd-ask">${fmt(av)}</td>
+    </tr>`;
+  }
+  const t = snap.time ? String(snap.time).padStart(6, '0').replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2:$3') : '';
+  document.getElementById('bd-ob-wrap').innerHTML =
+    `<div style="font-size:9px;color:var(--muted);margin-bottom:4px">زمان: ${t}</div>
+     <table id="bd-ob-table">
+       <thead><tr>
+         <th>حجم خرید</th><th>قیمت خرید</th><th>اسپرد</th><th>قیمت فروش</th><th>حجم فروش</th>
+       </tr></thead>
+       <tbody>${rows || '<tr><td colspan="5" style="color:var(--muted)">—</td></tr>'}</tbody>
+     </table>`;
+}
+
+function closeBondDetail() {
+  document.getElementById('bd-panel').style.display = 'none';
+}
+
+// Draws a compact YTM history sparkline into any SVG element by ID.
+function drawBondMiniSVG(svgId, rows) {
+  const svg = document.getElementById(svgId);
+  if (!svg) return;
+  const W = Math.max(280, Math.round(svg.parentElement?.clientWidth || 560));
+  const H = +svg.getAttribute('height') || 150;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const pad = { l: 42, r: 12, t: 10, b: 26 };
+  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+
+  const valid = rows.filter(r => (r.ytm || 0) > 0);
+  if (!valid.length) { svg.innerHTML = ''; return; }
+
+  const ytms = valid.map(r => r.ytm);
+  const yMin = Math.min(...ytms) * 0.97, yMax = Math.max(...ytms) * 1.03;
+  const px = i => pad.l + (i / (valid.length - 1 || 1)) * iW;
+  const py = y => pad.t + iH - ((y - yMin) / (yMax - yMin || 1)) * iH;
+
+  let out = '';
+  // Horizontal grid + Y labels
+  for (let k = 0; k <= 3; k++) {
+    const yv = yMin + (yMax - yMin) * k / 3, yp = py(yv);
+    out += `<line x1="${pad.l}" y1="${yp.toFixed(1)}" x2="${W - pad.r}" y2="${yp.toFixed(1)}"
+              stroke="var(--brd)" stroke-width="0.5"/>`;
+    out += `<text x="${pad.l - 4}" y="${(yp + 4).toFixed(1)}" text-anchor="end"
+              font-size="9" fill="var(--muted)">${(yv * 100).toFixed(1)}%</text>`;
+  }
+  // X date labels (4 evenly spaced)
+  const step = Math.max(1, Math.floor((valid.length - 1) / 3));
+  [0, step, step * 2, valid.length - 1].forEach(i => {
+    const r = valid[Math.min(i, valid.length - 1)];
+    const d = String(r?.date || '');
+    if (d.length === 8) {
+      const [, jm, jd] = gregorianToJalali(+d.slice(0, 4), +d.slice(4, 6), +d.slice(6, 8));
+      out += `<text x="${px(i).toFixed(1)}" y="${H - pad.b + 12}" text-anchor="middle"
+                font-size="8" fill="var(--muted)">${jm}/${String(jd).padStart(2,'0')}</text>`;
+    }
+  });
+  // Line
+  const pts = valid.map((r, i) => `${px(i).toFixed(1)},${py(r.ytm).toFixed(1)}`).join(' ');
+  out += `<polyline points="${pts}" fill="none" stroke="var(--blue)"
+            stroke-width="1.8" stroke-linejoin="round"/>`;
+  // Dot on last point
+  const li = valid.length - 1;
+  out += `<circle cx="${px(li).toFixed(1)}" cy="${py(valid[li].ytm).toFixed(1)}"
+            r="3.5" fill="var(--blue)" stroke="var(--surf)" stroke-width="1.5"/>`;
+  svg.innerHTML = out;
 }
 </script>
 </body>
