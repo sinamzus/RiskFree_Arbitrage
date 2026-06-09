@@ -42,8 +42,8 @@ import logging
 import math
 from dataclasses import dataclass, asdict
 
-from bonds import (ytm_zero_coupon, fit_yield_curve, eval_curve,
-                   days_to_maturity, _solve_3x3)
+from bonds import (ytm_zero_coupon, price_zero_coupon, fit_yield_curve,
+                   eval_curve, days_to_maturity, _solve_3x3)
 # Reuse the fund engine's validated execution primitives.
 from backtest import _ladder, _buy_against_asks, _sell_against_bids, _mid, _secs
 
@@ -560,7 +560,14 @@ def _simulate_bond_day(date_int: int,
                     asks = _ladder(sd.cur, "ask")
                     if not asks:
                         continue
-                    ceiling = asks[-1][0]
+                    # Only fill ask levels still cheap enough to clear the entry
+                    # edge.  The ceiling is the price whose yield == curve +
+                    # entry_bps; any ask above it yields LESS than the threshold
+                    # (rich) and must not be lifted.  The old ceiling (asks[-1])
+                    # swept the whole ladder into rich deep levels and bled the
+                    # entire edge away — the core source of "stupid" losses.
+                    ceiling = price_zero_coupon(
+                        curve_y + entry_bps / 10_000.0, sd.face_value, sd.dtm)
                     budget = _buy_budget(p, portfolio, sym, pos)
                     if budget <= 0:
                         continue
@@ -587,7 +594,13 @@ def _simulate_bond_day(date_int: int,
                     bids = _ladder(sd.cur, "bid")
                     if not bids:
                         continue
-                    floor = bids[-1][0]
+                    # Only sell into bid levels still rich enough to clear the
+                    # exit edge.  The floor is the price whose yield == curve +
+                    # exit_bps; any bid below it yields MORE than the threshold
+                    # (cheap) and selling into it realises a loss.  The old floor
+                    # (bids[-1]) dumped the position down the whole bid ladder.
+                    floor = price_zero_coupon(
+                        curve_y + exit_bps / 10_000.0, sd.face_value, sd.dtm)
                     units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
                     if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
                         _close(sym, units, notional, t, z_sig, "signal")
@@ -965,9 +978,11 @@ def _day_events(date_int: int, day_series: dict, degree: int,
                 continue
             curve_y = a0 + a1 * sd.x + a2 * sd.x2
             z_bps = (y - curve_y) * 10_000.0
-            # Carry the executable touch YTMs so the replay can reproduce the
-            # exec-mode entry (vs best ask) / exit (vs best bid) decisions.
-            items.append((sym, z_bps, y, curve_y, sd.cur, sd._ytm_ask, sd._ytm_bid))
+            # Carry the executable touch YTMs (for exec-mode entry-vs-ask /
+            # exit-vs-bid decisions) plus face value & dtm (so the replay can
+            # recompute the price ceiling/floor that caps fills at the edge).
+            items.append((sym, z_bps, y, curve_y, sd.cur, sd._ytm_ask,
+                          sd._ytm_bid, sd.face_value, sd.dtm))
         if items:
             events.append((t, items))
     return events, eod_snaps
@@ -1024,7 +1039,7 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
             continue                       # positions carry silently
         date_int = day["date"]
         for t, items in day["events"]:
-            for sym, z_bps, y, curve_y, snap, ya, yb in items:
+            for sym, z_bps, y, curve_y, snap, ya, yb, fv, dtm in items:
                 if sym not in pos:
                     # Entry on executable ask in exec mode, else mid z-spread.
                     if exec_mode:
@@ -1040,7 +1055,11 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                         budget = _buy_budget(p, portfolio, sym, pos)
                         if budget <= 0:
                             continue
-                        units, notional = _buy_against_asks(asks, asks[-1][0], budget)
+                        # Cap the buy at the edge price (yield == curve+entry_bps)
+                        # so deep rich asks are never lifted — mirrors _simulate.
+                        ceiling = price_zero_coupon(
+                            curve_y + entry_bps / 10_000.0, fv, dtm)
+                        units, notional = _buy_against_asks(asks, ceiling, budget)
                         if units > 0:
                             if portfolio is not None:
                                 portfolio["cash"] -= notional * (1.0 + p.buy_fee)
@@ -1061,7 +1080,11 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                         bids = _ladder(snap, "bid")
                         if not bids:
                             continue
-                        units, notional = _sell_against_bids(bids, bids[-1][0], pos[sym]["units"])
+                        # Cap the sell at the edge price (yield == curve+exit_bps)
+                        # so the position is never dumped into cheap deep bids.
+                        floor = price_zero_coupon(
+                            curve_y + exit_bps / 10_000.0, fv, dtm)
+                        units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
                         if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
                             _close(sym, pos[sym], units, notional, t, date_int, z_sig, "signal")
         if force_eod:
