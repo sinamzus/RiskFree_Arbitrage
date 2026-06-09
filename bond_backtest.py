@@ -40,15 +40,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, asdict
 
-from config import BUYER_COMMISSION, SELLER_COMMISSION, SELLER_TAX
 from bonds import ytm_zero_coupon, fit_yield_curve, eval_curve, days_to_maturity
 # Reuse the fund engine's validated execution primitives.
 from backtest import _ladder, _buy_against_asks, _sell_against_bids, _mid, _secs
 
 logger = logging.getLogger(__name__)
 
-BUY_COST  = BUYER_COMMISSION
-SELL_COST = SELLER_COMMISSION + SELLER_TAX
+BUY_COST  = 0.00075   # bond buy commission per side
+SELL_COST = 0.00075   # bond sell commission per side
 
 # اخزا (and TSE equities) trade in a single continuous session 09:00–12:30
 # Tehran time.  TSETMC's bestLimitsHistory stream also carries pre-opening
