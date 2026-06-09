@@ -3769,6 +3769,17 @@ function unixToJalali(unix) {
   return { jy, jm, jd, hh, mm, ss };
 }
 
+// Convert a Gregorian YYYYMMDD integer (e.g. 20240115) to a Jalali "jYYYY/MM/DD" string.
+function gregIntToJalaliStr(yyyymmdd) {
+  const n = +yyyymmdd;
+  if (!n || n < 10000000) return String(yyyymmdd ?? '');
+  const gy = Math.floor(n / 10000);
+  const gm = Math.floor((n % 10000) / 100);
+  const gd = n % 100;
+  const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+  return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
+}
+
 // ══════════════════════════════════════════════════════════════════
 //  Helpers
 // ══════════════════════════════════════════════════════════════════
@@ -4642,14 +4653,16 @@ function renderBondBacktest(res) {
       ? `${Math.floor(holdSecs/86400)}ر ${Math.round((holdSecs%86400)/60)}م`
       : `${Math.round(holdSecs/60)}م`;
     const multiDay = t.exit_date && t.exit_date !== t.date;
+    const entryJ = gregIntToJalaliStr(t.date);
+    const exitJ  = gregIntToJalaliStr(t.exit_date || t.date);
     const exitDateTd = multiDay
-      ? `<td style="color:var(--accent)">${t.exit_date}</td>`
+      ? `<td style="color:var(--accent)">${exitJ}</td>`
       : `<td style="color:var(--muted)">—</td>`;
     // Entry/exit price cells are hover-able: pop the OB at that instant.
     const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}"      data-time="${t.entry_time}" data-side="buy`;
     const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.exit_date||t.date}" data-time="${t.exit_time}"  data-side="sell`;
     return `<tr>
-      <td>${t.symbol}</td><td>${t.date}</td>${exitDateTd}<td>${ht}</td><td>${xt}</td>
+      <td>${t.symbol}</td><td>${entryJ}</td>${exitDateTd}<td>${ht}</td><td>${xt}</td>
       <td>${(t.volume||0).toLocaleString('en-US')}</td>
       <td class="${ec}">${(t.entry_price||0).toLocaleString('en-US')}</td>
       <td class="${xc}">${(t.exit_price||0).toLocaleString('en-US')}</td>
