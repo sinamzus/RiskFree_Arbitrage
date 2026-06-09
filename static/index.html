@@ -126,6 +126,10 @@ html, body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
+/* Body is a flex column: header (auto height, may wrap) + app (fills rest).
+   This decouples the app height from a hardcoded header height so a wrapping
+   toolbar never pushes content off-screen. */
+body { display: flex; flex-direction: column; }
 
 /* ─── Scrollbar ──────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -135,15 +139,23 @@ html, body {
 
 /* ─── Header ─────────────────────────────────────────────────── */
 #header {
-  height: 48px;
+  min-height: 48px;
   flex-shrink: 0;
   background: var(--surf);
   border-bottom: 1px solid var(--brd);
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
+  padding: 6px 14px;
   user-select: none;
+  /* Allow controls to wrap onto a second line instead of being clipped
+     off-screen (html/body have overflow:hidden, so without this any
+     overflowing button — e.g. کشف/اسکن — becomes unreachable). */
+  flex-wrap: wrap;
+}
+/* Keep the two control groups together but let them wrap as a unit */
+#fund-controls, #bond-controls {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
 
 #status-dot {
@@ -239,7 +251,8 @@ html, body {
 /* ─── Body layout ────────────────────────────────────────────── */
 #app {
   display: flex;
-  height: calc(100vh - 48px);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -963,7 +976,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
 /* ─── Bond App layout ───────────────────────────────────────── */
 #bond-app {
-  display: flex; flex-direction: row; height: calc(100vh - 42px);
+  display: flex; flex-direction: row; flex: 1; min-height: 0;
   overflow: hidden; background: var(--bg);
 }
 #bond-list {
@@ -1211,6 +1224,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <input id="bc-entry" type="number" step="5" value="50" title="بیشتر از این bps بخر" style="width:52px">
     <label style="font-size:11px;color:var(--sub)">bps</label>
     <div class="h-div"></div>
+    <button class="scan-btn" onclick="bondDiscover()" title="جستجوی نمادهای اخزا در TSETMC و افزودن خودکار آن‌ها">🔍 کشف نمادها</button>
     <button class="scan-btn" onclick="bondScan()">📡 اسکن اوراق</button>
   </div>
 
