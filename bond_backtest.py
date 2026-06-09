@@ -50,6 +50,19 @@ logger = logging.getLogger(__name__)
 BUY_COST  = BUYER_COMMISSION
 SELL_COST = SELLER_COMMISSION + SELLER_TAX
 
+# اخزا (and TSE equities) trade in a single continuous session 09:00–12:30
+# Tehran time.  TSETMC's bestLimitsHistory stream also carries pre-opening
+# auction quotes (پیش‌گشایش) and other out-of-session noise — sometimes stamped
+# as early as 06:00 — whose prices are NOT executable.  Snapshots outside this
+# window are dropped so the backtest can never enter/exit off-session.
+SESSION_OPEN_HHMMSS  = 90000     # 09:00:00
+SESSION_CLOSE_HHMMSS = 123000    # 12:30:00
+
+
+def _in_session(hhmmss: int) -> bool:
+    """True if a HHMMSS time falls within the اخزا trading session."""
+    return SESSION_OPEN_HHMMSS <= int(hhmmss) <= SESSION_CLOSE_HHMMSS
+
 
 # --------------------------------------------------------------------------- #
 #  Parameters & results                                                        #
@@ -349,6 +362,10 @@ def _load_day_cache(db, universe, meta,
             if date_int not in sym_dates.get(sym, ()):
                 continue
             snaps = db.get_orderbook_history(sym, date_int, limit=20000)
+            # Keep only in-session snapshots — pre-opening auction and other
+            # off-hours quotes (e.g. 06:00) are not executable and would
+            # otherwise let the engine trade outside the 09:00–12:30 window.
+            snaps = [s for s in snaps if _in_session(s.get("time", 0))]
             if not snaps:
                 continue
             mat = meta[sym]["maturity_date"]
