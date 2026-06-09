@@ -1104,6 +1104,67 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .yc-pt    { transform-box: fill-box; transform-origin: center;
             animation: ycPop .5s cubic-bezier(.34,1.56,.5,1) both;
             transition: r .12s ease; }
+
+/* ─── Jalali date picker popover ─────────────────────────────── */
+#jpick {
+  position: absolute; display: none; z-index: 100001;
+  background: var(--surf); border: 1px solid var(--brd2); border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.5); padding: 8px; width: 232px;
+  font-family: var(--font); direction: rtl;
+}
+.jp-head { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.jp-head .jp-title { flex: 1; text-align: center; font-size: var(--fs-sm);
+  font-weight: 700; color: var(--txt); }
+.jp-head button {
+  background: var(--surf2); border: 1px solid var(--brd); color: var(--sub);
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: 14px;
+  line-height: 1; font-family: var(--font);
+}
+.jp-head button:hover { color: var(--txt); border-color: var(--brd2); }
+.jp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.jp-cell {
+  display: flex; align-items: center; justify-content: center;
+  height: 26px; border-radius: 6px; font-size: var(--fs-xs);
+  color: var(--txt); cursor: pointer; user-select: none;
+}
+.jp-cell:not(.jp-h):not(.jp-empty):hover { background: var(--surf2); }
+.jp-cell.jp-h { color: var(--muted); font-weight: 600; cursor: default; height: 22px; }
+.jp-cell.jp-empty { cursor: default; }
+.jp-cell.today { outline: 1px solid var(--brd2); }
+.jp-cell.sel { background: var(--blue); color: #fff; font-weight: 700; }
+.jp-dow { margin-bottom: 2px; }
+.jp-foot { display: flex; gap: 6px; margin-top: 7px; }
+.jp-foot button {
+  flex: 1; background: var(--surf2); border: 1px solid var(--brd);
+  color: var(--sub); border-radius: 6px; padding: 5px; cursor: pointer;
+  font-size: var(--fs-xs); font-family: var(--font);
+}
+.jp-foot button:hover { color: var(--txt); }
+
+/* ─── Bond optimizer results ─────────────────────────────────── */
+#bbt-opt { margin: 6px 0 12px; }
+#bbt-opt-best {
+  background: linear-gradient(90deg, rgba(38,166,154,.10), transparent);
+  border: 1px solid var(--brd2); border-radius: 8px; padding: 10px 12px;
+  margin-bottom: 8px; font-size: var(--fs-sm);
+}
+#bbt-opt-best .ob-h { font-weight: 700; color: var(--txt); margin-bottom: 4px; }
+#bbt-opt-best .ob-p { color: var(--sub); font-size: var(--fs-xs); line-height: 1.7; }
+#bbt-opt-best .ob-p b { color: var(--txt); font-variant-numeric: tabular-nums; }
+#bbt-opt-apply {
+  margin-top: 8px; background: var(--green); color: #042; border: none;
+  border-radius: 6px; padding: 6px 14px; font-weight: 700; cursor: pointer;
+  font-family: var(--font); font-size: var(--fs-xs);
+}
+#bbt-opt-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+#bbt-opt-table th, #bbt-opt-table td {
+  padding: 4px 7px; text-align: center; border-bottom: 1px solid var(--brd);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+#bbt-opt-table th { color: var(--muted); font-weight: 600; }
+#bbt-opt-table tr.best td { background: rgba(38,166,154,.10); font-weight: 700; }
+#bbt-opt-table td.pos { color: var(--green); }
+#bbt-opt-table td.neg { color: var(--red); }
 #yc-legend  {
   font-size: 10px; color: var(--sub); display: flex; gap: 12px;
   align-items: center; margin-top: 4px;
@@ -1621,12 +1682,17 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <input id="bbt-minpts" type="number" value="3" min="2"></div>
         <div class="bbt-field"><label>گام شبکه (ثانیه، ۰=هر تیک)</label>
           <input id="bbt-step" type="number" value="0" min="0" step="30"></div>
-        <div class="bbt-field"><label>از تاریخ (YYYYMMDD)</label>
-          <input id="bbt-start" type="number" placeholder="اختیاری"></div>
-        <div class="bbt-field"><label>تا تاریخ (YYYYMMDD)</label>
-          <input id="bbt-end" type="number" placeholder="اختیاری"></div>
+        <div class="bbt-field"><label>از تاریخ (شمسی)</label>
+          <input id="bbt-start" type="text" readonly placeholder="اختیاری"
+                 onclick="jpOpen(this)"></div>
+        <div class="bbt-field"><label>تا تاریخ (شمسی)</label>
+          <input id="bbt-end" type="text" readonly placeholder="اختیاری"
+                 onclick="jpOpen(this)"></div>
+        <button class="scan-btn" id="bbt-opt-btn" onclick="bondOptimize()"
+                title="جستجوی شبکه‌ای پارامترها و پیشنهاد بهترین ترکیب (درجه منحنی، آستانه‌ها)">🔧 بهینه‌سازی</button>
         <button class="scan-btn" id="bbt-run" onclick="bondBacktest()">🧪 اجرای بک‌تست</button>
       </div>
+      <div id="bbt-opt" style="display:none"></div>
       <div id="bbt-cards"></div>
       <div id="bbt-table-wrap">
         <table id="bbt-table">
@@ -3387,6 +3453,156 @@ function gregorianToJalali(gy, gm, gd) {
   return [jy, jm+1, j_day_no+1];
 }
 
+// Jalali → Gregorian (canonical jalaali-js algorithm via Julian Day Number).
+// NB: jalaali-js's integer division TRUNCATES toward zero (~~), which differs
+// from Math.floor for the negative operands below — using floor shifts the year.
+function jalaliToGregorian(jy, jm, jd) {
+  const div = (a, b) => Math.trunc(a / b);
+  const mod = (a, b) => a - div(a, b) * b;
+  function jalCal(jy) {
+    const breaks = [-61,9,38,199,426,686,756,818,1111,1181,1210,1635,2060,
+                    2097,2192,2262,2324,2394,2456,3178];
+    const gy = jy + 621; let leapJ = -14, jp = breaks[0], jump = 0;
+    for (let i = 1; i < breaks.length; i++) {
+      const jm2 = breaks[i]; jump = jm2 - jp;
+      if (jy < jm2) break;
+      leapJ += div(jump, 33) * 8 + div(mod(jump, 33), 4); jp = jm2;
+    }
+    let n = jy - jp;
+    leapJ += div(n, 33) * 8 + div(mod(n, 33) + 3, 4);
+    if (mod(jump, 33) === 4 && (jump - n) === 4) leapJ += 1;
+    const leapG = div(gy, 4) - div((div(gy, 100) + 1) * 3, 4) - 150;
+    const march = 20 + leapJ - leapG;
+    return { gy, march };
+  }
+  function g2d(gy, gm, gd) {
+    let d = div((gy + div(gm - 8, 6) + 100100) * 1461, 4)
+          + div(153 * mod(gm + 9, 12) + 2, 5) + gd - 34840408;
+    d = d - div(div(gy + 100100 + div(gm - 8, 6), 100) * 3, 4) + 752;
+    return d;
+  }
+  function d2g(jdn) {
+    let j = 4 * jdn + 139361631;
+    j += div(div(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908;
+    const i = div(mod(j, 1461), 4) * 5 + 308;
+    const gd = div(mod(i, 153), 5) + 1;
+    const gm = mod(div(i, 153), 12) + 1;
+    const gy = div(j, 1461) - 100100 + div(8 - gm, 6);
+    return [gy, gm, gd];
+  }
+  const r = jalCal(jy);
+  const jdn = g2d(r.gy, 3, r.march) + (jm - 1) * 31 - div(jm, 7) * (jm - 7) + jd - 1;
+  return d2g(jdn);
+}
+
+function jalaliToday() {
+  const n = new Date();
+  return gregorianToJalali(n.getFullYear(), n.getMonth() + 1, n.getDate());
+}
+
+function jalaliMonthLen(jy, jm) {
+  if (jm <= 6) return 31;
+  if (jm <= 11) return 30;
+  // Esfand: 29, or 30 in a leap year — measure it as days between Esfand 1
+  // and Farvardin 1 of the next year (Date month is 0-indexed).
+  const [y1, m1, d1] = jalaliToGregorian(jy, 12, 1);
+  const [y2, m2, d2] = jalaliToGregorian(jy + 1, 1, 1);
+  const date1 = new Date(y1, m1 - 1, d1);
+  const date2 = new Date(y2, m2 - 1, d2);
+  return Math.round((date2 - date1) / 86400000);
+}
+
+// ── Shared Jalali date-picker popover ──────────────────────────────────────
+const JMONTHS = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور',
+                 'مهر','آبان','آذر','دی','بهمن','اسفند'];
+const JDOW = ['ش','ی','د','س','چ','پ','ج'];
+let _jpInput = null, _jpY = 0, _jpM = 0;
+
+function jpEl() {
+  let el = document.getElementById('jpick');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'jpick';
+    document.body.appendChild(el);
+    document.addEventListener('mousedown', (e) => {
+      if (el.style.display === 'block' && !el.contains(e.target) && e.target !== _jpInput)
+        jpClose();
+    });
+  }
+  return el;
+}
+
+function jpOpen(input) {
+  _jpInput = input;
+  let jy, jm;
+  const g = input.dataset.greg;
+  if (g && g.length === 8) {
+    const a = gregorianToJalali(+g.slice(0,4), +g.slice(4,6), +g.slice(6,8));
+    jy = a[0]; jm = a[1];
+  } else { const t = jalaliToday(); jy = t[0]; jm = t[1]; }
+  _jpY = jy; _jpM = jm;
+  jpRender();
+  const el = jpEl();
+  const r = input.getBoundingClientRect();
+  el.style.display = 'block';
+  el.style.left = (r.left + window.scrollX) + 'px';
+  el.style.top  = (r.bottom + window.scrollY + 4) + 'px';
+}
+
+function jpClose() { const el = document.getElementById('jpick'); if (el) el.style.display = 'none'; _jpInput = null; }
+
+function jpNav(dM) {
+  _jpM += dM;
+  if (_jpM > 12) { _jpM = 1; _jpY++; }
+  if (_jpM < 1)  { _jpM = 12; _jpY--; }
+  jpRender();
+}
+function jpNavY(dY) { _jpY += dY; jpRender(); }
+
+function jpRender() {
+  const el = jpEl();
+  const len = jalaliMonthLen(_jpY, _jpM);
+  const [gy, gm, gd] = jalaliToGregorian(_jpY, _jpM, 1);
+  const firstDow = (new Date(gy, gm - 1, gd).getDay() + 1) % 7;   // Sat=0
+  const sel = _jpInput?.dataset.greg
+    ? gregorianToJalali(+_jpInput.dataset.greg.slice(0,4), +_jpInput.dataset.greg.slice(4,6), +_jpInput.dataset.greg.slice(6,8))
+    : null;
+  const tj = jalaliToday();
+
+  let cells = '';
+  for (let i = 0; i < firstDow; i++) cells += `<span class="jp-cell jp-empty"></span>`;
+  for (let d = 1; d <= len; d++) {
+    const isSel = sel && sel[0]===_jpY && sel[1]===_jpM && sel[2]===d;
+    const isToday = tj[0]===_jpY && tj[1]===_jpM && tj[2]===d;
+    cells += `<span class="jp-cell${isSel?' sel':''}${isToday?' today':''}"
+                onclick="jpPick(${_jpY},${_jpM},${d})">${d}</span>`;
+  }
+  el.innerHTML =
+    `<div class="jp-head">
+       <button type="button" onclick="jpNavY(-1)" title="سال قبل">«</button>
+       <button type="button" onclick="jpNav(-1)" title="ماه قبل">‹</button>
+       <span class="jp-title">${JMONTHS[_jpM-1]} ${_jpY}</span>
+       <button type="button" onclick="jpNav(1)" title="ماه بعد">›</button>
+       <button type="button" onclick="jpNavY(1)" title="سال بعد">»</button>
+     </div>
+     <div class="jp-grid jp-dow">${JDOW.map(d=>`<span class="jp-cell jp-h">${d}</span>`).join('')}</div>
+     <div class="jp-grid">${cells}</div>
+     <div class="jp-foot">
+       <button type="button" onclick="jpToday()">امروز</button>
+       <button type="button" onclick="jpClear()">پاک کردن</button>
+     </div>`;
+}
+
+function jpPick(jy, jm, jd) {
+  const [gy, gm, gd] = jalaliToGregorian(jy, jm, jd);
+  const greg = `${gy}${String(gm).padStart(2,'0')}${String(gd).padStart(2,'0')}`;
+  _jpInput.value = `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
+  _jpInput.dataset.greg = greg;
+  jpClose();
+}
+function jpToday() { const t = jalaliToday(); jpPick(t[0], t[1], t[2]); }
+function jpClear() { if (_jpInput) { _jpInput.value = ''; delete _jpInput.dataset.greg; } jpClose(); }
+
 /**
  * Convert a UTC Unix timestamp to Jalali date + Iran local time.
  * Uses Asia/Tehran timezone (handles IRST/IRDT automatically).
@@ -4049,8 +4265,9 @@ async function bondBacktest() {
     min_pts:   document.getElementById('bbt-minpts').value  || '3',
     step:      document.getElementById('bbt-step').value    || '0',
   });
-  const start = document.getElementById('bbt-start').value;
-  const end   = document.getElementById('bbt-end').value;
+  // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
+  const start = document.getElementById('bbt-start').dataset.greg;
+  const end   = document.getElementById('bbt-end').dataset.greg;
   if (start) q.set('start', start);
   if (end)   q.set('end', end);
 
@@ -4061,6 +4278,100 @@ async function bondBacktest() {
   const res = await r.json();
   if (res.error) { showError('خطا: ' + res.error); return; }
   renderBondBacktest(res);
+}
+
+// ── Bond parameter optimizer (grid search) ─────────────────────────────────
+
+let bondOptTimer = null;
+
+async function bondOptimize() {
+  const btn = document.getElementById('bbt-opt-btn');
+  const body = {
+    capital:   +document.getElementById('bbt-capital').value || 1e9,
+    step:      +document.getElementById('bbt-step').value || 0,
+    force_eod: '1',
+    min_trades: 3,
+  };
+  const start = document.getElementById('bbt-start').dataset.greg;
+  const end   = document.getElementById('bbt-end').dataset.greg;
+  if (start) body.start = start;
+  if (end)   body.end = end;
+
+  const r = await fetch('/api/bonds/optimize', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  }).catch(() => null);
+  if (!r?.ok) {
+    const j = await r?.json().catch(()=>({}));
+    showError('بهینه‌سازی ناموفق' + (j?.progress ? ' — یک اجرا در حال انجام است' : '')); return;
+  }
+  btn.disabled = true; btn.textContent = '⏳ بهینه‌سازی ...';
+  const panel = document.getElementById('bbt-opt');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">در حال جستجوی شبکه‌ای پارامترها ...</div>';
+
+  if (bondOptTimer) clearInterval(bondOptTimer);
+  const poll = async () => {
+    const s = await fetch('/api/bonds/optimize/status').catch(() => null);
+    if (!s?.ok) return;
+    const j = await s.json();
+    const p = j.progress || {};
+    if (j.running) {
+      panel.innerHTML = `<div class="ob-p">⏳ ${p.done||0}/${p.total||0} ترکیب آزموده شد ...</div>`;
+      return;
+    }
+    clearInterval(bondOptTimer); bondOptTimer = null;
+    btn.disabled = false; btn.textContent = '🔧 بهینه‌سازی';
+    if (j.result?.error) { panel.innerHTML = `<div class="ob-p">خطا: ${j.result.error}</div>`; return; }
+    renderBondOptimize(j.result);
+  };
+  bondOptTimer = setInterval(poll, 1500);
+  poll();
+}
+
+function renderBondOptimize(res) {
+  const panel = document.getElementById('bbt-opt');
+  if (!res || !res.best || (res.best.summary?.trade_count||0) === 0) {
+    panel.innerHTML = `<div id="bbt-opt-best"><div class="ob-h">نتیجهٔ معناداری یافت نشد</div>`
+      + `<div class="ob-p">${res?.tested_combos||0} ترکیب آزموده شد روی ${res?.days_available||0} روز داده. `
+      + `ابتدا «📊 وضعیت داده» را پر کنید تا چند سری اوراق همزمان اردربوک داشته باشند.</div></div>`;
+    return;
+  }
+  const b = res.best, bp = b.params, bs = b.summary;
+  const fmt = n => (n||0).toLocaleString('en-US');
+  const best = `<div id="bbt-opt-best">
+      <div class="ob-h">🏆 بهترین ترکیب — بازده ${bs.total_return_pct}% · نرخ برد ${bs.win_rate}% · ${bs.trade_count} معامله</div>
+      <div class="ob-p">درجهٔ منحنی <b>${bp.degree}</b> · حداقل اوراق همزمان <b>${bp.min_curve_points}</b>
+        · ورود ≥ <b>${bp.entry_bps} bps</b> · خروج ≤ <b>${bp.exit_bps} bps</b>
+        · سود خالص <b>${fmt(bs.total_net_pnl)}</b> ریال · میانگین مدت <b>${bs.avg_hold_min}m</b></div>
+      <button id="bbt-opt-apply" onclick='applyBondOpt(${JSON.stringify(bp)})'>اعمال و اجرای بک‌تست ▸</button>
+    </div>`;
+
+  const rows = (res.top || []).map((r, i) => {
+    const s = r.summary, p = r.params;
+    const rc = s.total_return_pct >= 0 ? 'pos' : 'neg';
+    return `<tr class="${i===0?'best':''}">
+      <td>${p.degree}</td><td>${p.min_curve_points}</td>
+      <td>${p.entry_bps}</td><td>${p.exit_bps}</td>
+      <td>${s.trade_count}</td><td>${s.win_rate}%</td>
+      <td class="${rc}">${s.total_return_pct}%</td>
+      <td class="${rc}">${fmt(s.total_net_pnl)}</td>
+      <td>${s.eod_count}</td>
+    </tr>`;
+  }).join('');
+  const table = `<table id="bbt-opt-table"><thead><tr>
+      <th>درجه</th><th>حداقل</th><th>ورود</th><th>خروج</th><th>معامله</th>
+      <th>برد</th><th>بازده</th><th>سود خالص</th><th>EOD</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  panel.innerHTML = best + table;
+}
+
+function applyBondOpt(bp) {
+  document.getElementById('bbt-degree').value = bp.degree;
+  document.getElementById('bbt-minpts').value = bp.min_curve_points;
+  document.getElementById('bbt-entry').value  = bp.entry_bps;
+  document.getElementById('bbt-exit').value   = bp.exit_bps;
+  bondBacktest();
 }
 
 function renderBondBacktest(res) {

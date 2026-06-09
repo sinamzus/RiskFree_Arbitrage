@@ -298,6 +298,87 @@ def _summarize(trades: list[BondTrade]) -> dict:
     }
 
 
+def _resolve_universe(db, symbols):
+    """Return (universe, meta) — symbol list + per-symbol face value & maturity."""
+    from bonds import AKHZA_SERIES
+    try:
+        registry = db.get_bond_series(active_only=False)
+    except AttributeError:
+        registry = []
+    if not registry:
+        registry = AKHZA_SERIES
+
+    meta: dict[str, dict] = {}
+    for s in registry:
+        sym = s.get("symbol", "")
+        if not sym:
+            continue
+        meta[sym] = {
+            "face_value": float(s.get("face_value", 1_000_000) or 1_000_000),
+            "maturity_date": int(s.get("maturity_date", 0) or 0),
+        }
+    universe = [s for s in (symbols or list(meta)) if s in meta]
+    return universe, meta
+
+
+def _load_day_cache(db, universe, meta,
+                    start_date: int | None, end_date: int | None):
+    """Load every series' OB snapshots per date ONCE (the expensive DB work).
+
+    Returns (dates, cache) where cache maps date → list of
+    ``(symbol, face_value, days_to_mat, snaps)`` tuples — fresh ``_SeriesDay``
+    objects can be rebuilt cheaply from these for each parameter combination,
+    so the optimizer never re-reads SQLite.
+    """
+    date_set: set[int] = set()
+    sym_dates: dict[str, set[int]] = {}
+    for sym in universe:
+        ds = set(db.get_ob_dates(sym))
+        sym_dates[sym] = ds
+        date_set |= ds
+    dates = sorted(date_set)
+    if start_date:
+        dates = [d for d in dates if d >= start_date]
+    if end_date:
+        dates = [d for d in dates if d <= end_date]
+
+    cache: dict[int, list] = {}
+    for date_int in dates:
+        rows = []
+        for sym in universe:
+            if date_int not in sym_dates.get(sym, ()):
+                continue
+            snaps = db.get_orderbook_history(sym, date_int, limit=20000)
+            if not snaps:
+                continue
+            mat = meta[sym]["maturity_date"]
+            dtm = days_to_maturity(mat, date_int) if mat else 0
+            if dtm <= 0:
+                continue  # matured on/before this date — skip
+            rows.append((sym, meta[sym]["face_value"], dtm, snaps))
+        if rows:
+            cache[date_int] = rows
+    return dates, cache
+
+
+def _simulate_cache(dates, cache, p: BondBacktestParams):
+    """Run the simulation over a pre-loaded day cache. Returns (trades, tested, skipped)."""
+    trades: list[BondTrade] = []
+    tested = skipped = 0
+    for date_int in dates:
+        rows = cache.get(date_int)
+        if not rows:
+            continue
+        if len(rows) < p.min_curve_points:
+            skipped += 1
+            continue
+        day_series = {sym: _SeriesDay(sym, face, dtm, snaps)
+                      for (sym, face, dtm, snaps) in rows}
+        tested += 1
+        trades.extend(_simulate_bond_day(date_int, day_series, p))
+    return trades, tested, skipped
+
+
 def run_bond_backtest(db, symbols: list[str] | None = None,
                       start_date: int | None = None,
                       end_date: int | None = None,
@@ -316,71 +397,10 @@ def run_bond_backtest(db, symbols: list[str] | None = None,
     -------
     dict: {symbols, params, days_tested, days_skipped, trades:[…], summary:{…}}
     """
-    from bonds import AKHZA_SERIES
     p = params or BondBacktestParams()
-
-    # ── Resolve the series universe + per-symbol face value & maturity ──────
-    try:
-        registry = db.get_bond_series(active_only=False)
-    except AttributeError:
-        registry = []
-    if not registry:
-        registry = AKHZA_SERIES
-
-    meta: dict[str, dict] = {}
-    for s in registry:
-        sym = s.get("symbol", "")
-        if not sym:
-            continue
-        meta[sym] = {
-            "face_value": float(s.get("face_value", 1_000_000) or 1_000_000),
-            "maturity_date": int(s.get("maturity_date", 0) or 0),
-        }
-
-    universe = symbols or [s for s in meta]
-    universe = [s for s in universe if s in meta]
-
-    # ── Collect the union of dates that have OB data across the universe ─────
-    date_set: set[int] = set()
-    sym_dates: dict[str, set[int]] = {}
-    for sym in universe:
-        ds = set(db.get_ob_dates(sym))
-        sym_dates[sym] = ds
-        date_set |= ds
-    dates = sorted(date_set)
-    if start_date:
-        dates = [d for d in dates if d >= start_date]
-    if end_date:
-        dates = [d for d in dates if d <= end_date]
-
-    all_trades: list[BondTrade] = []
-    days_tested = 0
-    days_skipped = 0
-
-    for date_int in dates:
-        # Build per-series day objects for every series with OB data this date.
-        day_series: dict[str, _SeriesDay] = {}
-        for sym in universe:
-            if date_int not in sym_dates.get(sym, ()):
-                continue
-            snaps = db.get_orderbook_history(sym, date_int, limit=20000)
-            if not snaps:
-                continue
-            mat = meta[sym]["maturity_date"]
-            dtm = days_to_maturity(mat, date_int) if mat else 0
-            if dtm <= 0:
-                continue  # matured on/before this date — skip
-            day_series[sym] = _SeriesDay(sym, meta[sym]["face_value"], dtm, snaps)
-
-        # Need enough simultaneous series to fit a curve.
-        if len(day_series) < p.min_curve_points:
-            days_skipped += 1
-            logger.debug("bond backtest %d: only %d series with data — skipping",
-                         date_int, len(day_series))
-            continue
-
-        days_tested += 1
-        all_trades.extend(_simulate_bond_day(date_int, day_series, p))
+    universe, meta = _resolve_universe(db, symbols)
+    dates, cache = _load_day_cache(db, universe, meta, start_date, end_date)
+    all_trades, days_tested, days_skipped = _simulate_cache(dates, cache, p)
 
     return {
         "symbols": universe,
@@ -389,4 +409,101 @@ def run_bond_backtest(db, symbols: list[str] | None = None,
         "days_skipped": days_skipped,
         "trades": [asdict(t) for t in all_trades],
         "summary": _summarize(all_trades),
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  Parameter optimizer                                                         #
+# --------------------------------------------------------------------------- #
+
+DEFAULT_GRID = {
+    "degree":           [1, 2],          # yield-curve polynomial degree
+    "min_curve_points": [3, 4],          # min simultaneous series to fit a curve
+    "entry_bps":        [25, 40, 55, 70, 90],
+    "exit_bps":         [-10, 0, 10, 20],
+}
+
+
+def _objective(summary: dict, min_trades: int) -> float:
+    """Score a backtest summary. Higher is better.
+
+    Combos with fewer than *min_trades* trades are pushed below everything
+    statistically meaningful (but still ordered by trade count so an empty grid
+    degrades gracefully).  Otherwise reward total return, lightly tie-break on
+    win-rate, and nudge away from results that are mostly forced EOD exits
+    (i.e. the signal never actually reverted).
+    """
+    tc = summary.get("trade_count", 0)
+    if tc < min_trades:
+        return -1000.0 + tc
+    ret = summary.get("total_return_pct", 0.0)
+    win = summary.get("win_rate", 0.0)
+    eod = summary.get("eod_count", 0)
+    eod_frac = eod / tc if tc else 1.0
+    return ret + 0.01 * win - 0.5 * eod_frac
+
+
+def optimize_bond_backtest(db, symbols: list[str] | None = None,
+                           start_date: int | None = None,
+                           end_date: int | None = None,
+                           base: BondBacktestParams | None = None,
+                           grid: dict | None = None,
+                           min_trades: int = 3,
+                           top_n: int = 10,
+                           progress: dict | None = None,
+                           progress_lock=None) -> dict:
+    """Grid-search اخزا backtest parameters and rank by risk-adjusted return.
+
+    The expensive OB history is loaded once; every parameter combination then
+    re-simulates in memory.  Returns the best combination plus the *top_n*
+    ranked results so the UI can show what was tried and let the user apply
+    the winner.
+    """
+    import threading
+    base = base or BondBacktestParams()
+    grid = grid or DEFAULT_GRID
+    universe, meta = _resolve_universe(db, symbols)
+    dates, cache = _load_day_cache(db, universe, meta, start_date, end_date)
+
+    combos = []
+    for degree in grid["degree"]:
+        for minpts in grid["min_curve_points"]:
+            for entry in grid["entry_bps"]:
+                for exit_ in grid["exit_bps"]:
+                    if exit_ > entry:        # nonsensical: exit above entry
+                        continue
+                    combos.append((degree, minpts, entry, exit_))
+
+    if progress is not None:
+        with (progress_lock or threading.Lock()):
+            progress.update({"done": 0, "total": len(combos)})
+
+    results = []
+    for (degree, minpts, entry, exit_) in combos:
+        p = BondBacktestParams(
+            capital=base.capital, entry_bps=float(entry), exit_bps=float(exit_),
+            degree=int(degree), min_curve_points=int(minpts),
+            step_secs=base.step_secs, force_eod=base.force_eod)
+        trades, tested, skipped = _simulate_cache(dates, cache, p)
+        summary = _summarize(trades)
+        results.append({
+            "params": asdict(p),
+            "summary": summary,
+            "score": round(_objective(summary, min_trades), 4),
+            "days_tested": tested,
+        })
+        if progress is not None:
+            with (progress_lock or threading.Lock()):
+                progress["done"] += 1
+
+    results.sort(key=lambda r: r["score"], reverse=True)
+    best = results[0] if results else None
+
+    return {
+        "symbols":       universe,
+        "tested_combos": len(results),
+        "min_trades":    min_trades,
+        "days_available": len(dates),
+        "best":          best,
+        "top":           results[:top_n],
     }

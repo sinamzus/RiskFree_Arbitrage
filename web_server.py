@@ -1138,6 +1138,89 @@ def create_app(db, scan_callback=None):
                     result["summary"]["total_net_pnl"])
         return jsonify(result)
 
+    # Guard + progress state for the (heavier) parameter optimizer.
+    _bond_opt_state = {"running": False, "progress": {}, "result": None}
+    _bond_opt_lock = threading.Lock()
+
+    @app.route("/api/bonds/optimize", methods=["GET", "POST"])
+    def api_bonds_optimize():
+        """Grid-search اخزا backtest parameters; suggest the best combination.
+
+        Params (query or JSON):
+          symbols, start, end, capital, force_eod, min_trades
+        Runs in the background; poll /api/bonds/optimize/status for progress
+        and the final ranked result.
+        """
+        from bond_backtest import optimize_bond_backtest, BondBacktestParams
+
+        body = request.get_json(silent=True) or {}
+        def _get(name, default=None):
+            if name in body:
+                return body[name]
+            return request.args.get(name, default)
+
+        def _int(name):
+            v = _get(name)
+            try:
+                return int(v) if v not in (None, "") else None
+            except (ValueError, TypeError):
+                return None
+
+        def _float(name, default):
+            v = _get(name)
+            try:
+                return float(v) if v not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
+
+        syms_arg = _get("symbols", "")
+        if isinstance(syms_arg, list):
+            symbols = [s for s in syms_arg if s] or None
+        else:
+            symbols = [s.strip() for s in str(syms_arg).split(",") if s.strip()] or None
+
+        base = BondBacktestParams(
+            capital=_float("capital", 1_000_000_000),
+            step_secs=int(_float("step", 0)),
+            force_eod=str(_get("force_eod", "1")) != "0",
+        )
+        min_trades = int(_float("min_trades", 3))
+        start, end = _int("start"), _int("end")
+
+        if _bond_opt_state["running"]:
+            return jsonify({"status": "already running",
+                            "progress": _bond_opt_state["progress"]}), 409
+
+        def _run():
+            with _bond_opt_lock:
+                _bond_opt_state["running"] = True
+                _bond_opt_state["progress"] = {"done": 0, "total": 0}
+                _bond_opt_state["result"] = None
+            try:
+                res = optimize_bond_backtest(
+                    db, symbols, start, end, base=base, min_trades=min_trades,
+                    progress=_bond_opt_state["progress"],
+                    progress_lock=_bond_opt_lock)
+                _bond_opt_state["result"] = res
+                logger.info("[BondOptimize] %d combos, best score=%s",
+                            res["tested_combos"],
+                            res["best"]["score"] if res["best"] else None)
+            except Exception:
+                logger.exception("bond optimize failed")
+                _bond_opt_state["result"] = {"error": "optimization failed"}
+            finally:
+                with _bond_opt_lock:
+                    _bond_opt_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="bond-optimize").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/bonds/optimize/status")
+    def api_bonds_optimize_status():
+        return jsonify({"running": _bond_opt_state["running"],
+                        "progress": _bond_opt_state["progress"],
+                        "result": _bond_opt_state["result"]})
+
     # ──────────────────────────────────────────────────────────────────────
     #  Data coverage + on-demand collection (funds + اخزا)
     # ──────────────────────────────────────────────────────────────────────
