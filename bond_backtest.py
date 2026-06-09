@@ -139,6 +139,12 @@ class BondBacktestParams:
                                      # and riding the drift.  Forced exits (eod/final/
                                      # maturity) still always fire.  False = legacy
                                      # (always sell to cash on reversion).
+    min_hold_days: int = 1           # minimum calendar days a position must be held
+                                     # before a *signal* exit is allowed.  Blocks
+                                     # same-day (intraday) exits which suffer from
+                                     # intraday curve-shift noise even when the
+                                     # z-spread has reverted.  Forced exits (eod/
+                                     # final/maturity) are never blocked.  0 = off.
 
 
 @dataclass
@@ -401,6 +407,14 @@ def _record_close(sym: str, st: dict,
         portfolio["cash"] += cash_in
 
 
+def _yyyymmdd_diff(d1: int, d2: int) -> int:
+    """Calendar days between two YYYYMMDD integers (d2 − d1)."""
+    import datetime as _dt
+    a = _dt.date(d1 // 10000, (d1 // 100) % 100, d1 % 100)
+    b = _dt.date(d2 // 10000, (d2 // 100) % 100, d2 % 100)
+    return (b - a).days
+
+
 def _exit_clears_min(st: dict, exit_units: int, sell_notional: float,
                      p: "BondBacktestParams") -> bool:
     """True if selling *exit_units* for *sell_notional* realises a net return
@@ -588,6 +602,7 @@ def _simulate_bond_day(date_int: int,
     trim_bps  = p.curve_trim_bps
     entry_max = p.entry_max_bps
     needs_repl = p.exit_needs_replacement
+    min_hold  = p.min_hold_days
 
     for t in timeline:
         # Advance cursors; track whether any series' YTM actually moved.
@@ -694,6 +709,16 @@ def _simulate_bond_day(date_int: int,
                     # the pull-to-par drift. Forced exits below are unaffected.
                     if needs_repl and not has_candidate:
                         continue
+                    # Minimum hold: intraday curve-shift noise often causes the
+                    # z-spread to look "reverted" within hours of entry even when
+                    # the position hasn't actually profited (the curve moved, not
+                    # the bond's relative value). Block signal exits until the
+                    # position has been held for at least min_hold_days calendar
+                    # days.  Forced exits (eod/final/maturity) are not blocked.
+                    if min_hold > 0:
+                        edate = pos[sym]["entry_date"]
+                        if _yyyymmdd_diff(edate, date_int) < min_hold:
+                            continue
                     bids = _ladder(sd.cur, "bid")
                     if not bids:
                         continue
@@ -1132,6 +1157,7 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
     exec_mode = (p.signal_price == "exec")
     entry_max = p.entry_max_bps
     needs_repl = p.exit_needs_replacement
+    min_hold  = p.min_hold_days
     trades: list[BondTrade] = []
     pos: dict[str, dict] = {}
     portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
@@ -1209,6 +1235,12 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                         # "Cash = loss": hold unless there's a better buy this tick.
                         if needs_repl and not has_candidate:
                             continue
+                        # Minimum hold: block intraday signal exits to avoid
+                        # curve-shift noise losses. Mirrors _simulate_bond_day.
+                        if min_hold > 0:
+                            edate = pos[sym]["entry_date"]
+                            if _yyyymmdd_diff(edate, date_int) < min_hold:
+                                continue
                         bids = _ladder(snap, "bid")
                         if not bids:
                             continue
@@ -1427,7 +1459,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             entry_max_bps=base.entry_max_bps,
             curve_trim_bps=base.curve_trim_bps,
             min_dtm=base.min_dtm,
-            exit_needs_replacement=base.exit_needs_replacement)
+            exit_needs_replacement=base.exit_needs_replacement,
+            min_hold_days=base.min_hold_days)
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.
@@ -1521,7 +1554,10 @@ def _param_stability(dates: list, cache: dict, best_params: dict,
             degree=int(bp["degree"]), min_curve_points=int(bp["min_curve_points"]),
             step_secs=int(bp.get("step_secs", 0)), force_eod=base.force_eod,
             include_matured=base.include_matured,
-            buy_fee=base.buy_fee, sell_fee=base.sell_fee, strategy=base.strategy)
+            buy_fee=base.buy_fee, sell_fee=base.sell_fee, strategy=base.strategy,
+            entry_max_bps=base.entry_max_bps, curve_trim_bps=base.curve_trim_bps,
+            min_dtm=base.min_dtm, exit_needs_replacement=base.exit_needs_replacement,
+            min_hold_days=base.min_hold_days)
         trades, _, _ = _simulate_cache(dates, cache, p)
         s = _summarize(trades, base.buy_fee)
         m = _risk_metrics(trades, base.buy_fee)

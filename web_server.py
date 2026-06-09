@@ -1144,6 +1144,7 @@ def create_app(db, scan_callback=None):
             curve_trim_bps=_float("curve_trim_bps", 150.0),
             min_dtm=int(_float("min_dtm", 30)),
             exit_needs_replacement=request.args.get("exit_needs_replacement", "1") != "0",
+            min_hold_days=int(_float("min_hold_days", 1)),
         )
 
         try:
@@ -1227,6 +1228,7 @@ def create_app(db, scan_callback=None):
             curve_trim_bps=_float("curve_trim_bps", 150.0),
             min_dtm=int(_float("min_dtm", 30)),
             exit_needs_replacement=str(_get("exit_needs_replacement", "1")) != "0",
+            min_hold_days=int(_float("min_hold_days", 1)),
         )
         min_trades   = int(_float("min_trades", 3))
         opt_metric   = str(_get("opt_metric",   "sharpe"))

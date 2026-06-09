@@ -28,7 +28,7 @@ def default_params() -> BondBacktestParams:
         signal_price="exec", min_exit_profit_bps=-1.0,
         total_capital=10_000_000_000.0, max_position_pct=0.5,
         entry_max_bps=150.0, curve_trim_bps=150.0, min_dtm=30,
-        exit_needs_replacement=True,
+        exit_needs_replacement=True, min_hold_days=1,
     )
 
 

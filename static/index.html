@@ -1900,6 +1900,13 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
               <input id="bbt-needrepl" type="checkbox" checked> خروج فقط با جایگزین (نقد نمان)
             </label>
           </div>
+          <div class="bbt-row">
+            <div class="bbt-field" title="حداقل روزهایی که یک موقعیت باید نگه داشته شود تا خروج سیگنالی مجاز باشد. خروج‌های روزانه (اینتراروز) را که ناشی از نوسان منحنی بازده هستند بلاک می‌کند. ۰ = خاموش">
+              <label>حداقل نگه‌داری (روز)</label>
+              <input id="bbt-minholddays" type="number" value="1" step="1" min="0"
+                     style="width:70px">
+            </div>
+          </div>
           <div class="bbt-actions">
             <div class="bbt-field bbt-metric"><label>معیار بهینه‌ساز</label>
               <select id="bbt-opt-metric" title="معیار هدف بهینه‌ساز">
@@ -4550,6 +4557,8 @@ async function bondBacktest() {
     min_dtm:          document.getElementById('bbt-mindtm').value    || '0',
     // Cash = loss: only exit a reverted position when there's a fresh buy to fund.
     exit_needs_replacement: document.getElementById('bbt-needrepl').checked ? '1' : '0',
+    // Min hold: block intraday signal exits to avoid intraday curve-shift losses.
+    min_hold_days: document.getElementById('bbt-minholddays').value || '1',
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4592,6 +4601,7 @@ async function bondOptimize() {
     curve_trim_bps:   +document.getElementById('bbt-curvetrim').value || 0,
     min_dtm:          +document.getElementById('bbt-mindtm').value    || 0,
     exit_needs_replacement: document.getElementById('bbt-needrepl').checked ? '1' : '0',
+    min_hold_days: +document.getElementById('bbt-minholddays').value || 1,
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
