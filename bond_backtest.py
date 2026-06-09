@@ -85,6 +85,13 @@ class BondBacktestParams:
     sell_fee: float = SELL_COST      # sell-side commission + tax (fraction)
     strategy: str = "zspread"        # "zspread" = mid-based mean-reversion (all-in);
                                      # "outlier" = grab mispriced individual OB orders
+    min_exit_profit_bps: float = -1.0  # signal-exit guard. <0 disables it (default,
+                                     # bit-identical to legacy). ≥0 = only take a
+                                     # *signal* exit when the realised round-trip
+                                     # net return (after both fees) clears this many
+                                     # bps; otherwise HOLD for a better price.
+                                     # 0 = break-even (never sell a signal at a loss).
+                                     # Forced exits (eod/final) are never guarded.
 
 
 @dataclass
@@ -257,6 +264,30 @@ def _record_close(sym: str, st: dict,
     st["buy_notional"] -= cost_part
 
 
+def _exit_clears_min(st: dict, exit_units: int, sell_notional: float,
+                     p: "BondBacktestParams") -> bool:
+    """True if selling *exit_units* for *sell_notional* realises a net return
+    (after both buy- and sell-side fees) of at least ``p.min_exit_profit_bps``.
+
+    Always True when the guard is disabled (``min_exit_profit_bps`` < 0), so the
+    legacy code path is bit-identical.  Used to make *signal* exits stricter:
+    hold the position rather than sell into a price that doesn't clear costs.
+    """
+    thr = p.min_exit_profit_bps
+    if thr < 0:
+        return True
+    units = st["units"]
+    if not units:
+        return True
+    frac = exit_units / units
+    cost_part = st["buy_notional"] * frac
+    invested = cost_part + cost_part * p.buy_fee
+    if invested <= 0:
+        return True
+    net = (sell_notional - sell_notional * p.sell_fee) - invested
+    return (net / invested) * 10_000.0 >= thr
+
+
 # --------------------------------------------------------------------------- #
 #  Outlier-order strategy                                                       #
 # --------------------------------------------------------------------------- #
@@ -272,7 +303,7 @@ def _record_close(sym: str, st: dict,
 # still subject to force_eod / end-of-range final close.
 
 def _outlier_step(sym, sd, curve_y, t, date_int, pos,
-                  entry_bps, exit_bps, capital, close_fn):
+                  entry_bps, exit_bps, capital, close_fn, p):
     face, dtm, snap = sd.face_value, sd.dtm, sd.cur
 
     # ── SELL first: realise rich-bid opportunities on an existing holding ──
@@ -293,7 +324,7 @@ def _outlier_step(sym, sd, curve_y, t, date_int, pos,
                         break
                 else:
                     break                  # deeper bids are even less rich
-            if su > 0:
+            if su > 0 and _exit_clears_min(pos[sym], su, sn, p):
                 ep = sn / su
                 ez = (ytm_zero_coupon(ep, face, dtm) - curve_y) * 10_000.0
                 close_fn(sym, su, sn, t, ez, "outlier")
@@ -427,7 +458,7 @@ def _simulate_bond_day(date_int: int,
 
             if outlier:
                 _outlier_step(sym, sd, curve_y, t, date_int, pos,
-                              entry_bps, exit_bps, capital, _close)
+                              entry_bps, exit_bps, capital, _close, p)
                 continue
 
             z_bps = (y - curve_y) * 10_000.0
@@ -451,7 +482,7 @@ def _simulate_bond_day(date_int: int,
                         continue
                     floor = bids[-1][0]
                     units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
-                    if units > 0:
+                    if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
                         _close(sym, units, notional, t, z_bps, "signal")
 
     # force_eod: close all positions at each series' last snapshot of the day.
@@ -787,7 +818,7 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                         if not bids:
                             continue
                         units, notional = _sell_against_bids(bids, bids[-1][0], pos[sym]["units"])
-                        if units > 0:
+                        if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
                             _close(sym, pos[sym], units, notional, t, date_int, z_bps, "signal")
         if force_eod:
             for sym in list(pos.keys()):
@@ -985,7 +1016,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             step_secs=int(step), force_eod=base.force_eod,
             include_matured=base.include_matured,
             buy_fee=base.buy_fee, sell_fee=base.sell_fee,
-            strategy=base.strategy)
+            strategy=base.strategy,
+            min_exit_profit_bps=base.min_exit_profit_bps)
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.

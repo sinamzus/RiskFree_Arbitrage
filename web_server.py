@@ -1136,6 +1136,7 @@ def create_app(db, scan_callback=None):
             buy_fee=_float("buy_fee", BUY_COST),
             sell_fee=_float("sell_fee", SELL_COST),
             strategy=strategy,
+            min_exit_profit_bps=_float("min_exit_profit_bps", -1.0),
         )
 
         try:
@@ -1211,6 +1212,7 @@ def create_app(db, scan_callback=None):
             buy_fee=_float("buy_fee", BUY_COST),
             sell_fee=_float("sell_fee", SELL_COST),
             strategy=opt_strategy,
+            min_exit_profit_bps=_float("min_exit_profit_bps", -1.0),
         )
         min_trades   = int(_float("min_trades", 3))
         opt_metric   = str(_get("opt_metric",   "sharpe"))

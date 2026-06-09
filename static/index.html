@@ -1806,6 +1806,14 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <input id="bbt-forceeod" type="checkbox">
           بستن اجباری پایان روز
         </label>
+        <label class="chk" style="align-self:flex-end;margin-bottom:6px"
+               title="اگر روشن باشد، خروج سیگنالی فقط زمانی انجام می‌شود که بازده خالص (پس از کارمزد دو طرف) دستِ‌کم به مقدار «حداقل سود خروج» برسد؛ در غیر این صورت موقعیت نگه داشته می‌شود. فروش اجباری پایان بازه همچنان انجام می‌شود.">
+          <input id="bbt-noloss" type="checkbox">
+          فقط خروج سودده
+        </label>
+        <div class="bbt-field"><label>حداقل سود خروج (bps)</label>
+          <input id="bbt-minexit" type="number" value="0" step="1"
+                 title="حداقل بازده خالص لازم برای خروج سیگنالی، برحسب bps. ۰ = سربه‌سر (هرگز با ضرر نفروش). فقط وقتی «فقط خروج سودده» روشن باشد اعمال می‌شود."></div>
         <div class="bbt-field" style="align-self:flex-end;margin-bottom:6px">
           <label>معیار بهینه</label>
           <select id="bbt-opt-metric" title="معیار هدف بهینه‌ساز">
@@ -4441,6 +4449,9 @@ async function bondBacktest() {
     force_eod:       document.getElementById('bbt-forceeod').checked ? '1' : '0',
     buy_fee:   ((+document.getElementById('bbt-buyfee').value  || 0) / 100).toString(),
     sell_fee:  ((+document.getElementById('bbt-sellfee').value || 0) / 100).toString(),
+    // Signal-exit guard: -1 disables it; otherwise the min net return (bps).
+    min_exit_profit_bps: document.getElementById('bbt-noloss').checked
+      ? (document.getElementById('bbt-minexit').value || '0') : '-1',
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4474,6 +4485,8 @@ async function bondOptimize() {
     sell_fee:     ((+document.getElementById('bbt-sellfee').value || 0) / 100).toString(),
     opt_metric:   document.getElementById('bbt-opt-metric').value,
     walk_forward: '1',
+    min_exit_profit_bps: document.getElementById('bbt-noloss').checked
+      ? (document.getElementById('bbt-minexit').value || '0') : '-1',
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
