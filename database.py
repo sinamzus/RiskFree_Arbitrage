@@ -258,8 +258,20 @@ class Database:
 
     @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.path)
+        # timeout: block (instead of raising "database is locked") for up to
+        # 30s when another connection holds the write lock — needed because
+        # parallel fetch workers write concurrently.
+        conn = sqlite3.connect(self.path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        # WAL lets readers run while a writer is active and greatly reduces
+        # lock contention; busy_timeout makes writers wait their turn rather
+        # than fail immediately.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.Error:
+            pass
         try:
             yield conn
             conn.commit()

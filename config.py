@@ -16,6 +16,19 @@ REQUEST_HEADERS = {
 
 REQUEST_TIMEOUT = 15
 
+# ── Parallel fetch settings (anti-ban) ──────────────────────────────────────
+# Data fetching runs concurrently across funds to overlap network latency.
+# CRITICAL: the *aggregate* request rate is capped by a process-wide rate
+# limiter (MIN_REQUEST_INTERVAL), so raising FETCH_WORKERS only overlaps
+# latency — it does NOT increase the request rate that TSETMC observes.
+# This keeps us fast without tripping TSETMC's per-IP throttling / ban.
+#
+#   FETCH_WORKERS        — number of concurrent fund fetchers
+#   MIN_REQUEST_INTERVAL — minimum seconds between request *initiations*
+#                          (global, across all threads). 0.2s ≈ 5 req/s.
+FETCH_WORKERS        = 5
+MIN_REQUEST_INTERVAL = 0.2
+
 # Fixed-income ETF funds — 30 funds, all ins_codes verified via TSETMC
 # GetClosingPriceInfo on 2026-05-24 (all returned live prices).
 #

@@ -4,6 +4,7 @@ import json
 import re
 import time
 import logging
+import threading
 from typing import Optional
 from urllib.parse import quote
 
@@ -16,11 +17,46 @@ from config import (
     REQUEST_HEADERS,
     REQUEST_TIMEOUT,
     FIXED_INCOME_ETFS,
+    MIN_REQUEST_INTERVAL,
 )
 
 logger = logging.getLogger(__name__)
 
 TSETMC_MAIN = "https://www.tsetmc.com"
+
+
+class _RateLimiter:
+    """Process-wide throttle that spaces request *initiations* in time.
+
+    No matter how many worker threads call the API concurrently, this ensures
+    at least ``min_interval`` seconds pass between the moments two requests are
+    fired.  Network latency of in-flight requests still overlaps across threads
+    (that's where the speed-up comes from), but the *rate* TSETMC sees is
+    bounded — so adding workers never increases ban risk.
+
+    The lock is intentionally held during the sleep so concurrent callers queue
+    up and are released one ``min_interval`` apart (leaky-bucket behaviour).
+    """
+
+    def __init__(self, min_interval: float):
+        self._lock = threading.Lock()
+        self._min_interval = max(0.0, float(min_interval))
+        self._next_at = 0.0
+
+    def set_interval(self, seconds: float) -> None:
+        with self._lock:
+            self._min_interval = max(0.0, float(seconds))
+
+    def acquire(self) -> None:
+        with self._lock:
+            if self._min_interval <= 0:
+                return
+            now = time.monotonic()
+            wait = self._next_at - now
+            if wait > 0:
+                time.sleep(wait)
+                now = time.monotonic()
+            self._next_at = now + self._min_interval
 
 
 def _try_parse_embedded_json(html: str):
@@ -119,11 +155,19 @@ def _normalize(text: str) -> str:
 class TSETMCFetcher:
     """Fetches price and order-book data from cdn.tsetmc.com."""
 
+    # Process-wide rate limiter, SHARED across every TSETMCFetcher instance so
+    # the aggregate request rate stays bounded even when multiple fetchers /
+    # threads run at once.  This is the core anti-ban guarantee.
+    _rate_limiter = _RateLimiter(MIN_REQUEST_INTERVAL)
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(REQUEST_HEADERS)
         self.session.headers["Referer"] = "https://www.tsetmc.com/"
         self.session.headers["Origin"]  = "https://www.tsetmc.com"
+        # Read/written from multiple worker threads during parallel discovery;
+        # plain dict get/set are atomic under CPython's GIL, and a lost race
+        # only costs a redundant lookup — no corruption — so no lock needed.
         self._ins_code_cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------ #
@@ -141,6 +185,9 @@ class TSETMCFetcher:
         delay = 1.0
         for attempt in range(retries + 1):
             try:
+                # Global throttle — bounds the aggregate request rate so that
+                # parallel fetching never exceeds a ban-safe req/s.
+                self._rate_limiter.acquire()
                 resp = self.session.get(url, timeout=REQUEST_TIMEOUT)
                 resp.raise_for_status()
                 if html:
@@ -864,66 +911,96 @@ class TSETMCFetcher:
     #  Main fetch loop                                                     #
     # ------------------------------------------------------------------ #
 
+    def _fetch_one_fund(self, fund: dict) -> dict:
+        """Fetch price + NAV + order book for a single fund.
+
+        Self-contained so it can run inside a worker thread.  Inter-request
+        spacing is handled globally by ``_rate_limiter`` inside ``_get``, so
+        no per-call ``time.sleep`` is needed here.
+        """
+        symbol      = fund["symbol"]
+        ins_code    = fund.get("ins_code", "").strip()
+        alt_symbols = fund.get("alt_symbols", [])
+
+        entry = {
+            "symbol":     symbol,
+            "name":       fund["name"],
+            "ins_code":   ins_code,
+            "price_data": None,
+            "nav_data":   None,
+            "order_book": None,
+            "error":      None,
+        }
+
+        # Ensure we have a valid ins_code
+        if not ins_code:
+            ins_code = self.discover_ins_code(symbol, alt_symbols) or ""
+            entry["ins_code"] = ins_code
+
+        # Fetch price (retry with discovery if stored code fails)
+        price, ins_code = self._fetch_price_with_fallback(
+            symbol, ins_code, alt_symbols
+        )
+        entry["ins_code"]   = ins_code
+        entry["price_data"] = price
+        if price is None:
+            entry["error"] = "قیمت دریافت نشد"
+
+        # Fetch NAV from TSETMC (multiple strategies)
+        nav = self.get_fund_nav(ins_code) if ins_code else None
+        if nav is None and price and price.get("embedded_nav"):
+            embedded = price["embedded_nav"]
+            nav = self._build_nav(embedded, embedded, embedded,
+                                  "", "TSETMC/embedded")
+        entry["nav_data"] = nav
+        if nav is None:
+            entry["error"] = (entry["error"] + "; NAV دریافت نشد"
+                              if entry["error"] else "NAV دریافت نشد")
+
+        # Fetch order book
+        if ins_code:
+            entry["order_book"] = self.get_best_limits(ins_code)
+
+        return entry
+
     def fetch_all_fund_data(self, funds: list[dict] = None,
-                            delay: float = 0.5) -> list[dict]:
+                            delay: float = 0.5,
+                            workers: int = None) -> list[dict]:
+        """Fetch data for every fund, concurrently.
+
+        Funds are fetched in parallel across a bounded thread pool to overlap
+        network latency.  The global ``_rate_limiter`` (see ``_get``) keeps the
+        aggregate request rate ban-safe regardless of *workers*, so this is
+        much faster than the old sequential loop without raising ban risk.
+
+        Results preserve the input order of *funds*.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from config import FETCH_WORKERS
+
         if funds is None:
             funds = FIXED_INCOME_ETFS
+        workers = max(1, workers or FETCH_WORKERS)
 
-        results = []
-        for i, fund in enumerate(funds):
-            symbol      = fund["symbol"]
-            ins_code    = fund.get("ins_code", "").strip()
-            alt_symbols = fund.get("alt_symbols", [])
-            logger.info("[%d/%d] Fetching %s ...", i + 1, len(funds), symbol)
+        logger.info("Fetching %d funds with %d workers ...", len(funds), workers)
+        results: list[Optional[dict]] = [None] * len(funds)
 
-            entry = {
-                "symbol":     symbol,
-                "name":       fund["name"],
-                "ins_code":   ins_code,
-                "price_data": None,
-                "nav_data":   None,
-                "order_book": None,
-                "error":      None,
-            }
+        def _job(idx: int, fund: dict):
+            try:
+                results[idx] = self._fetch_one_fund(fund)
+            except Exception as e:                       # never let one fund kill the batch
+                logger.warning("Fetch failed for %s: %s", fund.get("symbol"), e)
+                results[idx] = {
+                    "symbol": fund.get("symbol", ""), "name": fund.get("name", ""),
+                    "ins_code": fund.get("ins_code", ""), "price_data": None,
+                    "nav_data": None, "order_book": None, "error": str(e),
+                }
 
-            # Ensure we have a valid ins_code
-            if not ins_code:
-                ins_code = self.discover_ins_code(symbol, alt_symbols) or ""
-                entry["ins_code"] = ins_code
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for i, fund in enumerate(funds):
+                ex.submit(_job, i, fund)
 
-            # Fetch price (retry with discovery if stored code fails)
-            price, ins_code = self._fetch_price_with_fallback(
-                symbol, ins_code, alt_symbols
-            )
-            entry["ins_code"]   = ins_code
-            entry["price_data"] = price
-            if price is None:
-                entry["error"] = "قیمت دریافت نشد"
-
-            time.sleep(delay * 0.3)
-
-            # Fetch NAV from TSETMC (multiple strategies)
-            nav = self.get_fund_nav(ins_code) if ins_code else None
-            if nav is None and price and price.get("embedded_nav"):
-                embedded = price["embedded_nav"]
-                nav = self._build_nav(embedded, embedded, embedded,
-                                      "", "TSETMC/embedded")
-            entry["nav_data"] = nav
-            if nav is None:
-                entry["error"] = (entry["error"] + "; NAV دریافت نشد"
-                                  if entry["error"] else "NAV دریافت نشد")
-
-            time.sleep(delay * 0.3)
-
-            # Fetch order book
-            if ins_code:
-                entry["order_book"] = self.get_best_limits(ins_code)
-
-            results.append(entry)
-            if i < len(funds) - 1:
-                time.sleep(delay * 0.4)
-
-        return results
+        return [r for r in results if r is not None]
 
     def _fetch_price_with_fallback(self, symbol: str, ins_code: str,
                                    alt_symbols: list[str]) -> tuple[Optional[dict], str]:

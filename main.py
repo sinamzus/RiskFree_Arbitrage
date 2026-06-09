@@ -168,7 +168,8 @@ def update_history(aggregator: DataAggregator, db: Database,
                    fetch_intraday: bool = True,
                    fetch_ob: bool = True,
                    intraday_days: int = 7,
-                   delay: float = 0.3) -> None:
+                   delay: float = 0.3,
+                   workers: int = None) -> None:
     """Bootstrap or incrementally update daily OHLCV + intraday trade history.
 
     **Daily OHLCV (GetClosingPriceDailyList)**
@@ -215,92 +216,100 @@ def update_history(aggregator: DataAggregator, db: Database,
     recent_dates = (_recent_trading_dates(intraday_days)
                     if (fetch_intraday or fetch_ob) else [])
 
-    total_daily_new    = 0
-    total_intraday_new = 0
-    total_ob_new       = 0
+    from concurrent.futures import ThreadPoolExecutor
+    from config import FETCH_WORKERS
+    workers = max(1, workers or FETCH_WORKERS)
 
-    for i, fund in enumerate(FIXED_INCOME_ETFS):
+    funds_with_code = [f for f in FIXED_INCOME_ETFS
+                       if f.get("ins_code", "").strip()]
+    n_funds = len(funds_with_code)
+    counter = {"done": 0}
+    counter_lock = threading.Lock()
+
+    def _update_one_fund(fund: dict) -> tuple[int, int, int]:
+        """Fetch daily + intraday + OB history for one fund.
+
+        Returns (daily_new, intraday_new, ob_new).  Runs inside a worker
+        thread; inter-request spacing is enforced globally by the fetcher's
+        rate limiter, so no per-call sleep is needed here.
+        """
+        try:
+            return _update_one_fund_inner(fund)
+        except Exception as e:
+            logger.warning("update_history: %s failed: %s",
+                           fund.get("symbol", "?"), e)
+            return 0, 0, 0
+
+    def _update_one_fund_inner(fund: dict) -> tuple[int, int, int]:
         symbol   = fund["symbol"]
         ins_code = fund.get("ins_code", "").strip()
-        if not ins_code:
-            logger.debug("update_history: skipping %s (no ins_code)", symbol)
-            continue
+        d_new = i_new = o_new = 0
 
         # ── 1. Daily OHLCV ──────────────────────────────────────────────
         last_date = None if force_full else db.get_last_daily_date(symbol)
-
         if last_date is None:
-            days_n = 365
-            reason = "bootstrap"
+            days_n, reason = 365, "bootstrap"
         else:
             days_since = _days_since(last_date)
             days_n     = min(days_since + 3, 365)  # +3 day overlap buffer
             reason     = f"incremental ({days_since}d since {last_date})"
 
+        with counter_lock:
+            counter["done"] += 1
+            idx = counter["done"]
         logger.info("[%d/%d] %s — daily history %s (n=%d)",
-                    i + 1, len(FIXED_INCOME_ETFS), symbol, reason, days_n)
+                    idx, n_funds, symbol, reason, days_n)
 
         entries = fetcher.get_historical_daily(ins_code, days=days_n)
         if entries:
-            # Only insert entries newer than what we already have
             if last_date:
                 entries = [e for e in entries if e["date"] > last_date]
-            new_rows = db.save_daily_history(symbol, ins_code, entries)
-            total_daily_new += new_rows
-            logger.info("  %d new daily rows saved for %s", new_rows, symbol)
+            d_new = db.save_daily_history(symbol, ins_code, entries)
+            logger.info("  %d new daily rows saved for %s", d_new, symbol)
         else:
             logger.warning("  No daily history returned for %s", symbol)
 
-        time.sleep(delay)
-
         # ── 2. Intraday ticks ────────────────────────────────────────────
         if fetch_intraday:
-
-            # Build a map of date → tick count already in DB
-            # Today is ALWAYS re-fetched (new ticks arrive every minute during session)
-            # Past days are skipped only when they already have a meaningful number of ticks
             MIN_TICKS_COMPLETE = 10   # a day with < this is considered incomplete
             intraday_have_map: dict[int, int] = {}
             for d in db.get_intraday_dates(symbol):
-                rows = db.get_intraday_trades(symbol, d)
-                intraday_have_map[d] = len(rows)
+                intraday_have_map[d] = len(db.get_intraday_trades(symbol, d))
 
             for date_int in recent_dates:
                 if date_int > today_int:
                     continue
-
                 existing = intraday_have_map.get(date_int, 0)
                 is_today = (date_int == today_int)
-
-                # Skip past days that already have a full set of ticks
                 if not is_today and existing >= MIN_TICKS_COMPLETE:
-                    logger.debug("  Intraday %s: already have %d ticks for %d",
-                                 symbol, existing, date_int)
                     continue
 
-                logger.info("  Fetching intraday ticks for %s on %d (have=%d) ...",
-                            symbol, date_int, existing)
                 trades = fetcher.get_intraday_trades(ins_code, date_int)
                 if trades:
-                    new_rows = db.save_intraday_trades(
-                        symbol, ins_code, date_int, trades
-                    )
-                    total_intraday_new += new_rows
-                    logger.info("  %d new tick rows for %s on %d (total in DB: %d)",
-                                new_rows, symbol, date_int, existing + new_rows)
+                    rows = db.save_intraday_trades(symbol, ins_code, date_int, trades)
+                    i_new += rows
+                    logger.info("  %d new tick rows for %s on %d (total: %d)",
+                                rows, symbol, date_int, existing + rows)
                 else:
                     logger.debug("  No intraday data for %s on %d", symbol, date_int)
 
-                time.sleep(delay)
-
         # ── 3. Order-book history ─────────────────────────────────────────
-        # Past days' order book is NOT available live — it must be reconstructed
-        # from the BestLimits history endpoint. Without this, the OB ladder only
-        # shows data for today (collected live by run_scan).
+        # Past days' OB must be reconstructed from BestLimits history.
+        # delay=0 here — the fetcher's global rate limiter handles spacing.
         if fetch_ob:
-            total_ob_new += _backfill_ob_history(
-                fetcher, db, symbol, ins_code, recent_dates, today_int, delay,
+            o_new = _backfill_ob_history(
+                fetcher, db, symbol, ins_code, recent_dates, today_int, delay=0.0,
             )
+
+        return d_new, i_new, o_new
+
+    total_daily_new = total_intraday_new = total_ob_new = 0
+    logger.info("update_history: %d funds, %d workers", n_funds, workers)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for d_new, i_new, o_new in ex.map(_update_one_fund, funds_with_code):
+            total_daily_new    += d_new
+            total_intraday_new += i_new
+            total_ob_new       += o_new
 
     logger.info(
         "update_history complete: %d new daily rows, %d new tick rows, "
@@ -622,6 +631,13 @@ def main():
         "--intraday-status", action="store_true",
         help="نمایش وضعیت داده تیک‌به‌تیک در DB و خروج",
     )
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help=(
+            "تعداد thread موازی برای دریافت داده (پیش‌فرض: config.FETCH_WORKERS). "
+            "نرخ کل درخواست‌ها توسط rate limiter محدود می‌شود تا IP بن نشود."
+        ),
+    )
 
     args = parser.parse_args()
     log_file = setup_logging(args.verbose)
@@ -675,6 +691,7 @@ def main():
             fetch_ob=fetch_ob,
             intraday_days=args.intraday_days,
             delay=args.delay,
+            workers=args.workers,
         )
         return
 
@@ -739,6 +756,7 @@ def main():
                 fetch_ob=fetch_ob,
                 intraday_days=args.intraday_days,
                 delay=args.delay * 0.5,
+                workers=args.workers,
             )
         finally:
             bootstrap_done.set()
