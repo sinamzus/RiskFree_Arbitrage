@@ -1139,6 +1139,7 @@ def create_app(db, scan_callback=None):
             min_exit_profit_bps=_float("min_exit_profit_bps", -1.0),
             total_capital=_float("total_capital", 0.0),
             max_position_pct=_float("max_position_pct", 1.0),
+            signal_price=("mid" if request.args.get("signal_price") == "mid" else "exec"),
         )
 
         try:
@@ -1217,6 +1218,7 @@ def create_app(db, scan_callback=None):
             min_exit_profit_bps=_float("min_exit_profit_bps", -1.0),
             total_capital=_float("total_capital", 0.0),
             max_position_pct=_float("max_position_pct", 1.0),
+            signal_price=("mid" if str(_get("signal_price", "exec")) == "mid" else "exec"),
         )
         min_trades   = int(_float("min_trades", 3))
         opt_metric   = str(_get("opt_metric",   "sharpe"))

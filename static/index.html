@@ -1793,6 +1793,11 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             <option value="zspread">z-spread (بازگشت به منحنی)</option>
             <option value="outlier">سفارش پرت (Outlier)</option>
           </select></div>
+        <div class="bbt-field"><label>مبنای سیگنال (z-spread)</label>
+          <select id="bbt-signalprice" title="مبنای تصمیم خرید/فروش در استراتژی z-spread. «قیمت اجرایی» (پیش‌فرض و صحیح): ورود بر اساس قیمت بهترین فروشنده (آنچه واقعاً می‌پردازید) و خروج بر اساس بهترین خریدار (آنچه واقعاً می‌گیرید) — معامله فقط وقتی باز می‌شود که سودِ سیگنال بزرگ‌تر از اسپرد خرید/فروش باشد. «قیمت میانه» (قدیمی): تصمیم بر اساس میانگین خرید و فروش — معاملاتی می‌زند که اسپردشان از سود بیشتر است و ساختاری ضرر می‌دهند.">
+            <option value="exec">قیمت اجرایی (Bid/Ask) — صحیح</option>
+            <option value="mid">قیمت میانه (Mid) — قدیمی</option>
+          </select></div>
         <div class="bbt-field"><label>سقف هر پوزیشن (ریال)</label>
           <input id="bbt-capital" type="number" value="1000000000" step="100000000"
                  title="حداکثر مبلغ قابل تخصیص به یک پوزیشن (سقف مطلق هر نماد)"></div>
@@ -4484,6 +4489,8 @@ async function bondBacktest() {
     // Capital management: shared cash pool (0 = off) + per-position cap (% → fraction).
     total_capital:    document.getElementById('bbt-totalcap').value || '0',
     max_position_pct: ((+document.getElementById('bbt-maxpos').value || 100) / 100).toString(),
+    // Signal basis: exec (executable bid/ask, correct) vs mid (legacy).
+    signal_price:     document.getElementById('bbt-signalprice').value || 'exec',
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4522,6 +4529,7 @@ async function bondOptimize() {
       ? (document.getElementById('bbt-minexit').value || '0') : '-1',
     total_capital:    +document.getElementById('bbt-totalcap').value || 0,
     max_position_pct: (+document.getElementById('bbt-maxpos').value || 100) / 100,
+    signal_price:     document.getElementById('bbt-signalprice').value || 'exec',
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;

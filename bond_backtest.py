@@ -85,6 +85,15 @@ class BondBacktestParams:
     sell_fee: float = SELL_COST      # sell-side commission + tax (fraction)
     strategy: str = "zspread"        # "zspread" = mid-based mean-reversion (all-in);
                                      # "outlier" = grab mispriced individual OB orders
+    signal_price: str = "exec"       # z-spread signal basis:
+                                     # "exec" = decide on EXECUTABLE touch prices
+                                     #   (entry vs best ask, exit vs best bid) so a
+                                     #   trade only fires when the edge survives the
+                                     #   bid-ask spread you must cross — the realistic
+                                     #   default;
+                                     # "mid" = legacy: decide on the mid price (will
+                                     #   happily take trades whose edge is smaller than
+                                     #   the spread → structural losses).
     min_exit_profit_bps: float = -1.0  # signal-exit guard. <0 disables it (default,
                                      # bit-identical to legacy). ≥0 = only take a
                                      # *signal* exit when the realised round-trip
@@ -141,13 +150,21 @@ class _SeriesDay:
     the YTM is **cached** — recomputed only when the order-book mid actually
     changes (most OB updates touch only quantities, not best bid/ask), which
     is the single biggest intraday speed lever.
+
+    The fitted curve always uses the **mid** YTM (``_ytm``).  When
+    *signal_exec* is set the cursor ALSO tracks the executable touch prices and
+    caches their YTMs (``_ytm_ask`` = what a BUY would actually pay,
+    ``_ytm_bid`` = what a SELL would actually receive).  Trading on these
+    instead of the mid is what stops the engine entering/exiting trades whose
+    z-spread edge is smaller than the bid-ask spread it must cross.
     """
 
     __slots__ = ("symbol", "face_value", "dtm", "snaps", "_i", "cur",
-                 "x", "x2", "x3", "x4", "_ytm", "_price")
+                 "x", "x2", "x3", "x4", "_ytm", "_price",
+                 "_exec", "_bidp", "_askp", "_ytm_ask", "_ytm_bid")
 
     def __init__(self, symbol: str, face_value: float, dtm: int,
-                 snaps: list[dict]):
+                 snaps: list[dict], signal_exec: bool = False):
         self.symbol = symbol
         self.face_value = face_value
         self.dtm = dtm
@@ -163,6 +180,11 @@ class _SeriesDay:
         self.x4 = x ** 4
         self._ytm   = 0.0
         self._price = 0.0
+        self._exec  = bool(signal_exec)
+        self._bidp  = 0.0
+        self._askp  = 0.0
+        self._ytm_ask = 0.0
+        self._ytm_bid = 0.0
 
     def advance_to(self, t: int) -> bool:
         """Move cursor to latest snapshot ≤ t. Returns True if the YTM changed."""
@@ -178,13 +200,28 @@ class _SeriesDay:
         self._i = i
         self.cur = snaps[i]
         p = _mid(self.cur)
-        if p == self._price:
-            return False            # mid unchanged → YTM unchanged
-        self._price = p
-        if p > 0 and self.dtm > 0:
-            self._ytm = ytm_zero_coupon(p, self.face_value, self.dtm)
-        else:
-            self._ytm = 0.0
+        if not self._exec:
+            # ── Legacy mid-mode (bit-identical to the original engine) ──
+            if p == self._price:
+                return False        # mid unchanged → YTM unchanged
+            self._price = p
+            if p > 0 and self.dtm > 0:
+                self._ytm = ytm_zero_coupon(p, self.face_value, self.dtm)
+            else:
+                self._ytm = 0.0
+            return True
+        # ── Execution-aware mode: also react to touch-price moves ──
+        bids = _ladder(self.cur, "bid")
+        asks = _ladder(self.cur, "ask")
+        bp = bids[0][0] if bids else 0.0
+        ap = asks[0][0] if asks else 0.0
+        if p == self._price and bp == self._bidp and ap == self._askp:
+            return False            # nothing relevant moved
+        self._price, self._bidp, self._askp = p, bp, ap
+        fv, dtm = self.face_value, self.dtm
+        self._ytm     = ytm_zero_coupon(p,  fv, dtm) if (p  > 0 and dtm > 0) else 0.0
+        self._ytm_ask = ytm_zero_coupon(ap, fv, dtm) if (ap > 0 and dtm > 0) else 0.0
+        self._ytm_bid = ytm_zero_coupon(bp, fv, dtm) if (bp > 0 and dtm > 0) else 0.0
         return True
 
     def price(self) -> float:
@@ -466,6 +503,7 @@ def _simulate_bond_day(date_int: int,
     exit_bps  = p.exit_bps
     capital   = p.capital
     outlier   = (p.strategy == "outlier")
+    exec_mode = (p.signal_price == "exec")
 
     for t in timeline:
         # Advance cursors; track whether any series' YTM actually moved.
@@ -506,9 +544,17 @@ def _simulate_bond_day(date_int: int,
                               entry_bps, exit_bps, capital, _close, p, portfolio)
                 continue
 
-            z_bps = (y - curve_y) * 10_000.0
             if sym not in pos:
-                if z_bps >= entry_bps:
+                # Entry signal: in exec mode judge the price a BUY would actually
+                # pay (best ask); in mid mode the legacy mid z-spread.
+                if exec_mode:
+                    ya = sd._ytm_ask
+                    if ya <= 0.0:
+                        continue
+                    z_sig = (ya - curve_y) * 10_000.0
+                else:
+                    z_sig = (y - curve_y) * 10_000.0
+                if z_sig >= entry_bps:
                     asks = _ladder(sd.cur, "ask")
                     if not asks:
                         continue
@@ -523,17 +569,26 @@ def _simulate_bond_day(date_int: int,
                         pos[sym] = {
                             "units": units, "buy_notional": notional,
                             "entry_date": date_int, "entry_time": t,
-                            "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_bps,
+                            "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_sig,
                         }
             else:
-                if z_bps <= exit_bps:
+                # Exit signal: in exec mode judge the price a SELL would actually
+                # receive (best bid); in mid mode the legacy mid z-spread.
+                if exec_mode:
+                    yb = sd._ytm_bid
+                    if yb <= 0.0:
+                        continue
+                    z_sig = (yb - curve_y) * 10_000.0
+                else:
+                    z_sig = (y - curve_y) * 10_000.0
+                if z_sig <= exit_bps:
                     bids = _ladder(sd.cur, "bid")
                     if not bids:
                         continue
                     floor = bids[-1][0]
                     units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
                     if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
-                        _close(sym, units, notional, t, z_bps, "signal")
+                        _close(sym, units, notional, t, z_sig, "signal")
 
     # force_eod: close all positions at each series' last snapshot of the day.
     if p.force_eod:
@@ -801,7 +856,8 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
             skipped += 1
             # Positions carry over silently on skipped days (no curve → no action).
             continue
-        day_series = {sym: _SeriesDay(sym, face, dtm, snaps)
+        sig_exec = (p.signal_price == "exec")
+        day_series = {sym: _SeriesDay(sym, face, dtm, snaps, sig_exec)
                       for (sym, face, dtm, snaps) in rows}
         tested += 1
         new_trades, carry_pos = _simulate_bond_day(
@@ -907,7 +963,9 @@ def _day_events(date_int: int, day_series: dict, degree: int,
                 continue
             curve_y = a0 + a1 * sd.x + a2 * sd.x2
             z_bps = (y - curve_y) * 10_000.0
-            items.append((sym, z_bps, y, curve_y, sd.cur))
+            # Carry the executable touch YTMs so the replay can reproduce the
+            # exec-mode entry (vs best ask) / exit (vs best bid) decisions.
+            items.append((sym, z_bps, y, curve_y, sd.cur, sd._ytm_ask, sd._ytm_bid))
         if items:
             events.append((t, items))
     return events, eod_snaps
@@ -932,7 +990,8 @@ def _build_decision_stream(dates, cache, tmpl: BondBacktestParams):
             days.append({"date": date_int, "skipped": True})
             continue
         tested += 1
-        day_series = {sym: _SeriesDay(sym, face, dtm, snaps)
+        sig_exec = (tmpl.signal_price == "exec")
+        day_series = {sym: _SeriesDay(sym, face, dtm, snaps, sig_exec)
                       for (sym, face, dtm, snaps) in rows}
         events, eod_snaps = _day_events(date_int, day_series, degree, min_pts, step)
         days.append({"date": date_int, "skipped": False,
@@ -947,6 +1006,7 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
     pair.  Produces exactly the trades _simulate_cache would for the same p."""
     entry_bps, exit_bps, capital = p.entry_bps, p.exit_bps, p.capital
     force_eod = p.force_eod
+    exec_mode = (p.signal_price == "exec")
     trades: list[BondTrade] = []
     pos: dict[str, dict] = {}
     portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
@@ -962,9 +1022,16 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
             continue                       # positions carry silently
         date_int = day["date"]
         for t, items in day["events"]:
-            for sym, z_bps, y, curve_y, snap in items:
+            for sym, z_bps, y, curve_y, snap, ya, yb in items:
                 if sym not in pos:
-                    if z_bps >= entry_bps:
+                    # Entry on executable ask in exec mode, else mid z-spread.
+                    if exec_mode:
+                        if ya <= 0.0:
+                            continue
+                        z_sig = (ya - curve_y) * 10_000.0
+                    else:
+                        z_sig = z_bps
+                    if z_sig >= entry_bps:
                         asks = _ladder(snap, "ask")
                         if not asks:
                             continue
@@ -978,16 +1045,23 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                             pos[sym] = {
                                 "units": units, "buy_notional": notional,
                                 "entry_date": date_int, "entry_time": t,
-                                "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_bps,
+                                "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_sig,
                             }
                 else:
-                    if z_bps <= exit_bps:
+                    # Exit on executable bid in exec mode, else mid z-spread.
+                    if exec_mode:
+                        if yb <= 0.0:
+                            continue
+                        z_sig = (yb - curve_y) * 10_000.0
+                    else:
+                        z_sig = z_bps
+                    if z_sig <= exit_bps:
                         bids = _ladder(snap, "bid")
                         if not bids:
                             continue
                         units, notional = _sell_against_bids(bids, bids[-1][0], pos[sym]["units"])
                         if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
-                            _close(sym, pos[sym], units, notional, t, date_int, z_bps, "signal")
+                            _close(sym, pos[sym], units, notional, t, date_int, z_sig, "signal")
         if force_eod:
             for sym in list(pos.keys()):
                 snap = day["eod_snaps"].get(sym)
@@ -1174,7 +1248,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                 capital=base.capital, degree=int(degree),
                 min_curve_points=int(minpts), step_secs=int(step),
                 force_eod=base.force_eod, include_matured=base.include_matured,
-                buy_fee=base.buy_fee, sell_fee=base.sell_fee)
+                buy_fee=base.buy_fee, sell_fee=base.sell_fee,
+                signal_price=base.signal_price)
             st = _build_decision_stream(dates, cache, tmpl)
             stream_cache[key] = st
         return st
@@ -1189,7 +1264,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             strategy=base.strategy,
             min_exit_profit_bps=base.min_exit_profit_bps,
             total_capital=base.total_capital,
-            max_position_pct=base.max_position_pct)
+            max_position_pct=base.max_position_pct,
+            signal_price=base.signal_price)
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.
@@ -1325,7 +1401,11 @@ def _walk_forward(dates: list, cache: dict, params: dict,
             include_matured=base.include_matured,
             buy_fee=base.buy_fee,
             sell_fee=base.sell_fee,
-            strategy=base.strategy)
+            strategy=base.strategy,
+            min_exit_profit_bps=base.min_exit_profit_bps,
+            total_capital=base.total_capital,
+            max_position_pct=base.max_position_pct,
+            signal_price=base.signal_price)
 
     windows = []
     for i in range(n_windows):
