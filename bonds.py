@@ -638,3 +638,162 @@ def run_bond_scan(db, fetcher) -> list[BondSnapshot]:
 
     # ── 4. Fit curve and generate signals ───────────────────────────────
     return analyze_bonds(snapshots)
+
+
+# =========================================================================== #
+#  Historical data collection (daily + intraday tick + order book)             #
+# =========================================================================== #
+
+def _recent_trading_dates(n: int) -> list[int]:
+    """Return the last *n* non-weekend dates as YYYYMMDD ints (most recent first).
+
+    Iran's weekend is Thursday (weekday 3) and Friday (weekday 4).
+    """
+    from datetime import datetime, timedelta
+    out, d = [], datetime.now()
+    while len(out) < n:
+        if d.weekday() not in (3, 4):
+            out.append(int(d.strftime("%Y%m%d")))
+        d -= timedelta(days=1)
+    return out
+
+
+def collect_bond_history(db, fetcher, *,
+                         force_full: bool = False,
+                         daily_days: int = 365,
+                         intraday_days: int = 30,
+                         fetch_intraday: bool = True,
+                         fetch_ob: bool = True,
+                         workers: int = None) -> dict:
+    """Collect historical daily + intraday-tick + order-book data for every اخزا.
+
+    اخزا share the same symbol-keyed tables as funds (``daily_history``,
+    ``intraday_trades``, ``intraday_orderbook``), so the existing backtest
+    plumbing (``db.get_orderbook_history`` etc.) works on bond symbols too.
+
+    Fetching runs across a bounded thread pool; the fetcher's process-wide rate
+    limiter keeps the aggregate request rate ban-safe regardless of worker
+    count (see data_fetcher._RateLimiter).
+
+    Parameters
+    ----------
+    db            : Database
+    fetcher       : TSETMCFetcher (exposes get_historical_daily,
+                    get_intraday_trades, get_best_limits_history)
+    force_full    : re-download full daily window even if data exists
+    daily_days    : how many days of daily OHLCV to request
+    intraday_days : how many recent trading days of tick + OB to collect
+    fetch_intraday: also collect tick-by-tick trades
+    fetch_ob      : also reconstruct historical order-book snapshots
+    workers       : thread-pool size (defaults to config.FETCH_WORKERS)
+
+    Returns
+    -------
+    dict summary: {series, daily_new, intraday_new, ob_new, dates}
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    try:
+        from config import FETCH_WORKERS
+    except ImportError:
+        FETCH_WORKERS = 5
+
+    workers = max(1, workers or FETCH_WORKERS)
+
+    # Load registry; seed with built-ins if empty.
+    try:
+        series_list = db.get_bond_series(active_only=False)
+    except AttributeError:
+        series_list = []
+    if not series_list:
+        series_list = AKHZA_SERIES
+
+    today = _today_int()
+    # Only collect series that (a) have an ins_code and (b) aren't matured.
+    targets = []
+    for s in series_list:
+        ins = (s.get("ins_code") or "").strip()
+        mat = int(s.get("maturity_date", 0) or 0)
+        if not ins:
+            continue
+        if mat and days_to_maturity(mat, today) <= 0:
+            continue
+        targets.append(s)
+
+    recent_dates = (_recent_trading_dates(intraday_days)
+                    if (fetch_intraday or fetch_ob) else [])
+    today_int = today
+
+    totals = {"daily_new": 0, "intraday_new": 0, "ob_new": 0}
+    lock = threading.Lock()
+
+    def _collect_one(series: dict):
+        symbol = series.get("symbol", "")
+        ins    = (series.get("ins_code") or "").strip()
+        d_new = i_new = o_new = 0
+        try:
+            # ── Daily OHLCV ──────────────────────────────────────────────
+            last_date = None if force_full else db.get_last_daily_date(symbol)
+            days_n = daily_days if last_date is None else min(
+                _days_between(last_date, today_int) + 3, daily_days)
+            entries = fetcher.get_historical_daily(ins, days=days_n)
+            if entries:
+                if last_date:
+                    entries = [e for e in entries if e["date"] > last_date]
+                d_new = db.save_daily_history(symbol, ins, entries)
+
+            # ── Intraday ticks ───────────────────────────────────────────
+            if fetch_intraday:
+                have = {dd: len(db.get_intraday_trades(symbol, dd))
+                        for dd in db.get_intraday_dates(symbol)}
+                for date_int in recent_dates:
+                    if date_int > today_int:
+                        continue
+                    is_today = date_int == today_int
+                    if not is_today and have.get(date_int, 0) >= 10:
+                        continue
+                    trades = fetcher.get_intraday_trades(ins, date_int)
+                    if trades:
+                        i_new += db.save_intraday_trades(symbol, ins, date_int, trades)
+
+            # ── Order-book history ───────────────────────────────────────
+            if fetch_ob:
+                have_ob = set(db.get_ob_dates(symbol))
+                for date_int in recent_dates:
+                    if date_int >= today_int or date_int in have_ob:
+                        continue
+                    snaps = fetcher.get_best_limits_history(ins, date_int)
+                    if not snaps:
+                        continue
+                    for snap in snaps:
+                        if db.save_orderbook_snapshot(
+                            symbol, ins, date_int, snap.get("time", 0),
+                            {"bids": snap.get("bids", []),
+                             "asks": snap.get("asks", [])}, nav=0.0):
+                            o_new += 1
+        except Exception as exc:
+            logger.warning("collect_bond_history: %s (%s) failed: %s",
+                           symbol, ins, exc)
+
+        with lock:
+            totals["daily_new"]    += d_new
+            totals["intraday_new"] += i_new
+            totals["ob_new"]       += o_new
+        logger.info("  اخزا %s: daily+%d tick+%d ob+%d", symbol, d_new, i_new, o_new)
+
+    logger.info("collect_bond_history: %d series, %d workers", len(targets), workers)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(_collect_one, targets))
+
+    return {
+        "series":       len(targets),
+        "daily_new":    totals["daily_new"],
+        "intraday_new": totals["intraday_new"],
+        "ob_new":       totals["ob_new"],
+        "dates":        recent_dates,
+    }
+
+
+def _days_between(date_int_a: int, date_int_b: int) -> int:
+    """Calendar days between two YYYYMMDD ints (absolute)."""
+    return abs((_int_to_date(date_int_b) - _int_to_date(date_int_a)).days)

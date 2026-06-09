@@ -638,6 +638,10 @@ def main():
             "نرخ کل درخواست‌ها توسط rate limiter محدود می‌شود تا IP بن نشود."
         ),
     )
+    parser.add_argument(
+        "--no-bonds", action="store_true",
+        help="در bootstrap/update داده اخزا (اوراق) جمع‌آوری نشود",
+    )
 
     args = parser.parse_args()
     log_file = setup_logging(args.verbose)
@@ -693,6 +697,25 @@ def main():
             delay=args.delay,
             workers=args.workers,
         )
+        # Collect اخزا history too (unless disabled)
+        if not args.no_bonds:
+            print("\n📥 در حال جمع‌آوری داده تاریخی اخزا ...")
+            try:
+                from bonds import collect_bond_history
+                summary = collect_bond_history(
+                    db, aggregator.tsetmc,
+                    force_full=True,
+                    intraday_days=args.intraday_days,
+                    fetch_intraday=fetch_intraday,
+                    fetch_ob=fetch_ob,
+                    workers=args.workers,
+                )
+                print(f"✅ اخزا — {summary['series']} سری، "
+                      f"{summary['daily_new']} روزانه، "
+                      f"{summary['intraday_new']} تیک، "
+                      f"{summary['ob_new']} اردربوک")
+            except Exception as e:
+                print(f"⚠️  جمع‌آوری اخزا ناموفق: {e}")
         return
 
     # ── --discover (CLI only, exits after) ────────────────────────────────
@@ -758,6 +781,23 @@ def main():
                 delay=args.delay * 0.5,
                 workers=args.workers,
             )
+            # ── Collect اخزا (bond) history alongside funds ──────────────
+            # Only series with a discovered ins_code are collected; this fills
+            # the same symbol-keyed tables the bond backtest reads.
+            if not args.no_bonds:
+                try:
+                    from bonds import collect_bond_history
+                    summary = collect_bond_history(
+                        db, aggregator.tsetmc,
+                        force_full=False,
+                        intraday_days=args.intraday_days,
+                        fetch_intraday=fetch_intraday,
+                        fetch_ob=fetch_ob,
+                        workers=args.workers,
+                    )
+                    logger.info("Bond history collected: %s", summary)
+                except Exception:
+                    logger.exception("bond history collection failed")
         finally:
             bootstrap_done.set()
 

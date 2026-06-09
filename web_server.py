@@ -1068,6 +1068,134 @@ def create_app(db, scan_callback=None):
             "bulk_hits": len(bulk_map),
         })
 
+    # Guard against overlapping collection runs (it's network-heavy).
+    _bond_collect_state = {"running": False, "last": None}
+    _bond_collect_lock = threading.Lock()
+
+    @app.route("/api/bonds/collect")
+    def api_bonds_collect():
+        """Collect historical daily + intraday-tick + order-book data for اخزا.
+
+        Query params:
+          days      – recent trading days of tick/OB to collect (default 30)
+          daily     – days of daily OHLCV (default 365)
+          full      – "1" force full daily re-download (default 0)
+          no_ob     – "1" skip order-book history
+          no_intraday – "1" skip tick trades
+          workers   – thread-pool size (optional)
+          async     – "1" run in background, return immediately (default 0)
+
+        This is what makes اخزا tick-by-tick backtesting possible — it fills the
+        same symbol-keyed tables the backtest reads.
+        """
+        from bonds import collect_bond_history
+        from data_fetcher import TSETMCFetcher
+
+        def _int(name, default):
+            v = request.args.get(name, "")
+            try:
+                return int(v) if v != "" else default
+            except ValueError:
+                return default
+
+        kwargs = dict(
+            force_full=request.args.get("full", "0") == "1",
+            daily_days=_int("daily", 365),
+            intraday_days=_int("days", 30),
+            fetch_intraday=request.args.get("no_intraday", "0") != "1",
+            fetch_ob=request.args.get("no_ob", "0") != "1",
+            workers=_int("workers", 0) or None,
+        )
+
+        def _run():
+            with _bond_collect_lock:
+                _bond_collect_state["running"] = True
+            try:
+                fetcher = TSETMCFetcher()
+                summary = collect_bond_history(db, fetcher, **kwargs)
+                _bond_collect_state["last"] = summary
+                logger.info("Bond collection done: %s", summary)
+            except Exception:
+                logger.exception("bond collection failed")
+            finally:
+                with _bond_collect_lock:
+                    _bond_collect_state["running"] = False
+
+        if _bond_collect_state["running"]:
+            return jsonify({"status": "already running"}), 409
+
+        if request.args.get("async", "0") == "1":
+            threading.Thread(target=_run, daemon=True, name="bond-collect").start()
+            return jsonify({"status": "started", "params": kwargs})
+
+        # Synchronous: run and return the summary.
+        try:
+            fetcher = TSETMCFetcher()
+            summary = collect_bond_history(db, fetcher, **kwargs)
+            _bond_collect_state["last"] = summary
+            return jsonify({"status": "done", **summary})
+        except Exception as e:
+            logger.exception("bond collection failed")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/bonds/collect/status")
+    def api_bonds_collect_status():
+        return jsonify({"running": _bond_collect_state["running"],
+                        "last": _bond_collect_state["last"]})
+
+    @app.route("/api/bonds/backtest")
+    def api_bonds_backtest():
+        """Tick-by-tick cross-sectional z-spread backtest over اخزا history.
+
+        Query params:
+          symbols   – comma-separated اخزا symbols (optional; default all)
+          start     – YYYYMMDD inclusive (optional)
+          end       – YYYYMMDD inclusive (optional)
+          capital   – max Rials per position (default 1e9)
+          entry_bps – BUY when z-spread ≥ this (default 50)
+          exit_bps  – SELL when z-spread ≤ this (default 10)
+          degree    – curve polynomial degree (default 2)
+          min_pts   – min simultaneous series to fit a curve (default 3)
+          step      – grid downsample in seconds, 0 = every snapshot (default 0)
+          force_eod – "1"/"0" liquidate at day end (default 1)
+        """
+        from bond_backtest import run_bond_backtest, BondBacktestParams
+
+        def _int(name):
+            v = request.args.get(name, "")
+            return int(v) if v else None
+
+        def _float(name, default):
+            v = request.args.get(name, "")
+            try:
+                return float(v) if v != "" else default
+            except ValueError:
+                return default
+
+        syms_arg = request.args.get("symbols", "").strip()
+        symbols = [s.strip() for s in syms_arg.split(",") if s.strip()] or None
+
+        params = BondBacktestParams(
+            capital=_float("capital", 1_000_000_000),
+            entry_bps=_float("entry_bps", 50.0),
+            exit_bps=_float("exit_bps", 10.0),
+            degree=int(_float("degree", 2)) or 2,
+            min_curve_points=int(_float("min_pts", 3)) or 3,
+            step_secs=int(_float("step", 0)),
+            force_eod=request.args.get("force_eod", "1") != "0",
+        )
+
+        try:
+            result = run_bond_backtest(db, symbols, _int("start"), _int("end"), params)
+        except Exception as e:
+            logger.exception("bond backtest failed")
+            return jsonify({"error": str(e)}), 500
+
+        logger.info("[BondBacktest] %d days, %d trades, net=%s",
+                    result["days_tested"], result["summary"]["trade_count"],
+                    result["summary"]["total_net_pnl"])
+        return jsonify(result)
+
     @app.route("/api/stream")
     def api_stream():
         """Server-Sent Events endpoint for real-time scan updates."""

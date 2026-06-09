@@ -1074,6 +1074,29 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 #bh-header    { font-size: var(--fs-xs); font-weight: 700; color: var(--txt); }
 #bh-svg       { background: var(--surf); border: 1px solid var(--brd);
                 border-radius: 8px; overflow: visible; }
+/* Bond backtest */
+#bond-backtest { flex:1; display:flex; flex-direction:column; gap:10px; overflow:hidden; }
+#bbt-head { font-size: var(--fs-sm); font-weight:700; color:var(--txt);
+            display:flex; flex-direction:column; gap:2px; }
+#bbt-head .bbt-sub { font-size:10px; color:var(--muted); font-weight:400; }
+#bbt-params { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:flex-end;
+              background:var(--surf); border:1px solid var(--brd);
+              border-radius:8px; padding:10px 12px; flex-shrink:0; }
+.bbt-field { display:flex; flex-direction:column; gap:3px; }
+.bbt-field label { font-size:10px; color:var(--sub); }
+.bbt-field input { width:110px; padding:5px 7px; font-size:var(--fs-xs);
+                   background:var(--bg); color:var(--txt);
+                   border:1px solid var(--brd); border-radius:5px; outline:none; }
+#bbt-run { align-self:flex-end; }
+#bbt-cards { display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0; }
+#bbt-table-wrap { flex:1; overflow:auto; }
+#bbt-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); }
+#bbt-table th, #bbt-table td { padding:5px 8px; text-align:center; white-space:nowrap;
+              border-bottom:1px solid var(--brd); font-variant-numeric:tabular-nums; }
+#bbt-table th { color:var(--muted); font-weight:600; position:sticky; top:0;
+                background:var(--surf); }
+#bbt-table td.pos { color:var(--green); font-weight:700; }
+#bbt-table td.neg { color:var(--red);   font-weight:700; }
 </style>
 </head>
 <body>
@@ -1217,6 +1240,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div class="pill-group">
       <button class="pill on" id="bc-live" onclick="setBondView('live')">زنده</button>
       <button class="pill"    id="bc-history" onclick="setBondView('history')">سابقه</button>
+      <button class="pill"    id="bc-backtest" onclick="setBondView('backtest')">بک‌تست</button>
       <button class="pill"    id="bc-registry" onclick="setBondView('registry')">ثبت‌نام</button>
     </div>
     <div class="h-div"></div>
@@ -1225,6 +1249,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <label style="font-size:11px;color:var(--sub)">bps</label>
     <div class="h-div"></div>
     <button class="scan-btn" onclick="bondDiscover()" title="جستجوی نمادهای اخزا در TSETMC و افزودن خودکار آن‌ها">🔍 کشف نمادها</button>
+    <button class="scan-btn" onclick="bondCollect()" title="جمع‌آوری داده تاریخی تیک‌به‌تیک و اردربوک اخزا (لازم برای بک‌تست)">💾 جمع‌آوری داده</button>
     <button class="scan-btn" onclick="bondScan()">📡 اسکن اوراق</button>
   </div>
 
@@ -1448,6 +1473,44 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       </div>
       <svg id="bh-svg" width="100%" height="180" viewBox="0 0 760 180"
            preserveAspectRatio="none"></svg>
+    </div>
+
+    <!-- Bond backtest view -->
+    <div id="bond-backtest" style="display:none">
+      <div id="bbt-head">
+        <span>بک‌تست تیک‌به‌تیک — آربیتراژ Z-Spread روی منحنی بازده</span>
+        <span class="bbt-sub">ورود وقتی بازده اوراق ≥ آستانه بالای منحنی (ارزان) باشد، خروج هنگام بازگشت به منحنی</span>
+      </div>
+      <div id="bbt-params">
+        <div class="bbt-field"><label>سرمایه (ریال)</label>
+          <input id="bbt-capital" type="number" value="1000000000" step="100000000"></div>
+        <div class="bbt-field"><label>ورود ≥ (bps)</label>
+          <input id="bbt-entry" type="number" value="50" step="5"></div>
+        <div class="bbt-field"><label>خروج ≤ (bps)</label>
+          <input id="bbt-exit" type="number" value="10" step="5"></div>
+        <div class="bbt-field"><label>درجه منحنی</label>
+          <input id="bbt-degree" type="number" value="2" min="1" max="3"></div>
+        <div class="bbt-field"><label>حداقل اوراق همزمان</label>
+          <input id="bbt-minpts" type="number" value="3" min="2"></div>
+        <div class="bbt-field"><label>گام شبکه (ثانیه، ۰=هر تیک)</label>
+          <input id="bbt-step" type="number" value="0" min="0" step="30"></div>
+        <div class="bbt-field"><label>از تاریخ (YYYYMMDD)</label>
+          <input id="bbt-start" type="number" placeholder="اختیاری"></div>
+        <div class="bbt-field"><label>تا تاریخ (YYYYMMDD)</label>
+          <input id="bbt-end" type="number" placeholder="اختیاری"></div>
+        <button class="scan-btn" id="bbt-run" onclick="bondBacktest()">🧪 اجرای بک‌تست</button>
+      </div>
+      <div id="bbt-cards"></div>
+      <div id="bbt-table-wrap">
+        <table id="bbt-table">
+          <thead><tr>
+            <th>نماد</th><th>تاریخ</th><th>ورود</th><th>خروج</th><th>حجم</th>
+            <th>قیمت ورود</th><th>قیمت خروج</th><th>Z ورود</th><th>Z خروج</th>
+            <th>سود خالص</th><th>%</th><th>مدت</th><th>دلیل</th>
+          </tr></thead>
+          <tbody id="bbt-tbody"></tbody>
+        </table>
+      </div>
     </div>
 
   </div><!-- /#bond-main -->
@@ -3458,13 +3521,15 @@ let selBond    = null;
 
 function setBondView(v) {
   bondView = v;
-  ['live','history','registry'].forEach(w => {
-    document.getElementById('bc-' + w).classList.toggle('on', w === v);
+  ['live','history','backtest','registry'].forEach(w => {
+    const b = document.getElementById('bc-' + w);
+    if (b) b.classList.toggle('on', w === v);
   });
   document.getElementById('bond-table-wrap').style.display  = (v === 'live') ? '' : 'none';
   document.getElementById('yc-panel').style.display         = (v === 'live') ? '' : 'none';
   document.getElementById('yc-cards').style.display         = (v === 'live') ? '' : 'none';
   document.getElementById('bond-history').style.display     = (v === 'history') ? '' : 'none';
+  document.getElementById('bond-backtest').style.display    = (v === 'backtest') ? 'flex' : 'none';
   document.getElementById('bond-registry').style.display    = (v === 'registry') ? '' : 'none';
   if (v === 'registry') loadBondRegistry();
 }
@@ -3709,6 +3774,96 @@ async function bondDiscover() {
   showError(msg);
   await loadBondRegistry();
   if (updated + added > 0) await loadBonds();
+}
+
+// ── Bond historical data collection (for tick-by-tick backtest) ────────────
+
+async function bondCollect() {
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال جمع‌آوری ...'; }
+  // Async kick-off, then poll status so the UI stays responsive.
+  const r = await fetch('/api/bonds/collect?async=1&days=30').catch(()=>null);
+  if (!r?.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 جمع‌آوری داده'; }
+    showError('جمع‌آوری ناموفق — شبکه TSE در دسترس نیست'); return;
+  }
+  showError('⏳ جمع‌آوری داده تاریخی اخزا آغاز شد (در پس‌زمینه) ...');
+  const poll = setInterval(async () => {
+    const s = await fetch('/api/bonds/collect/status').catch(()=>null);
+    if (!s?.ok) return;
+    const j = await s.json();
+    if (!j.running) {
+      clearInterval(poll);
+      if (btn) { btn.disabled = false; btn.textContent = '💾 جمع‌آوری داده'; }
+      const L = j.last || {};
+      showError(`✅ جمع‌آوری شد — ${L.series||0} سری، ${L.daily_new||0} روزانه، `
+        + `${L.intraday_new||0} تیک، ${L.ob_new||0} اردربوک`);
+    }
+  }, 3000);
+}
+
+// ── Bond tick-by-tick z-spread backtest ────────────────────────────────────
+
+async function bondBacktest() {
+  const btn = document.getElementById('bbt-run');
+  const q = new URLSearchParams({
+    capital:   document.getElementById('bbt-capital').value || '1000000000',
+    entry_bps: document.getElementById('bbt-entry').value   || '50',
+    exit_bps:  document.getElementById('bbt-exit').value    || '10',
+    degree:    document.getElementById('bbt-degree').value  || '2',
+    min_pts:   document.getElementById('bbt-minpts').value  || '3',
+    step:      document.getElementById('bbt-step').value    || '0',
+  });
+  const start = document.getElementById('bbt-start').value;
+  const end   = document.getElementById('bbt-end').value;
+  if (start) q.set('start', start);
+  if (end)   q.set('end', end);
+
+  btn.disabled = true; btn.textContent = '⏳ در حال اجرا ...';
+  const r = await fetch('/api/bonds/backtest?' + q.toString()).catch(()=>null);
+  btn.disabled = false; btn.textContent = '🧪 اجرای بک‌تست';
+  if (!r?.ok) { showError('بک‌تست ناموفق'); return; }
+  const res = await r.json();
+  if (res.error) { showError('خطا: ' + res.error); return; }
+  renderBondBacktest(res);
+}
+
+function renderBondBacktest(res) {
+  const s = res.summary || {};
+  const card = (k, v, cls) =>
+    `<div class="yc-card"><div class="yck">${k}</div><div class="ycv ${cls||''}">${v}</div></div>`;
+  const fmt = n => (n||0).toLocaleString('en-US');
+  const pnlCls = (s.total_net_pnl||0) >= 0 ? 'pos' : 'neg';
+  document.getElementById('bbt-cards').innerHTML =
+      card('روزهای تست', `${res.days_tested||0}`)
+    + card('روزهای رد شده', `${res.days_skipped||0}`)
+    + card('تعداد معامله', `${s.trade_count||0}`)
+    + card('نرخ برد', `${s.win_rate||0}%`)
+    + card('سود خالص', fmt(s.total_net_pnl), pnlCls)
+    + card('بازده کل', `${s.total_return_pct||0}%`, pnlCls)
+    + card('میانگین Z ورود', `${s.avg_entry_z||0} bps`)
+    + card('بستن EOD', `${s.eod_count||0}`)
+    + card('میانگین مدت', `${s.avg_hold_min||0} دقیقه`)
+    + card('کارمزد کل', fmt(s.total_fees));
+
+  const tb = document.getElementById('bbt-tbody');
+  const trs = (res.trades||[]).map(t => {
+    const pc = (t.net_pnl||0) >= 0 ? 'pos' : 'neg';
+    const ht = (t.entry_time+'').padStart(6,'0').replace(/(\d\d)(\d\d)(\d\d)/,'$1:$2:$3');
+    const xt = (t.exit_time+'').padStart(6,'0').replace(/(\d\d)(\d\d)(\d\d)/,'$1:$2:$3');
+    const mins = Math.round((t.hold_secs||0)/60);
+    return `<tr>
+      <td>${t.symbol}</td><td>${t.date}</td><td>${ht}</td><td>${xt}</td>
+      <td>${(t.volume||0).toLocaleString('en-US')}</td>
+      <td>${(t.entry_price||0).toLocaleString('en-US')}</td>
+      <td>${(t.exit_price||0).toLocaleString('en-US')}</td>
+      <td>${t.entry_z_bps}</td><td>${t.exit_z_bps}</td>
+      <td class="${pc}">${(t.net_pnl||0).toLocaleString('en-US')}</td>
+      <td class="${pc}">${t.net_pct}%</td>
+      <td>${mins}m</td><td>${t.exit_reason}</td>
+    </tr>`;
+  }).join('');
+  tb.innerHTML = trs || '<tr><td colspan="13" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
 }
 </script>
 </body>
