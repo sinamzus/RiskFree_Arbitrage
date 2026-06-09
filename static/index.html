@@ -1071,8 +1071,39 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 }
 #yc-title   { font-size: var(--fs-sm); font-weight: 700; color: var(--txt); }
 #yc-subtitle{ font-size: 10px; color: var(--muted); margin-bottom: 6px; }
-#yc-wrap    { height: 200px; position: relative; }
-#yc-svg     { overflow: visible; }
+#yc-wrap    { height: 210px; position: relative; }
+#yc-svg     { overflow: visible; display: block; width: 100%; height: 100%; }
+
+/* Floating tooltip */
+#yc-tip {
+  position: absolute; pointer-events: none; z-index: 6; display: none;
+  background: var(--surf2); border: 1px solid var(--brd2); border-radius: 8px;
+  padding: 7px 10px; font-size: 11px; color: var(--txt);
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 14px));
+  transition: left .08s linear, top .08s linear;
+}
+#yc-tip .t-sym { font-weight: 700; margin-bottom: 4px; }
+#yc-tip .t-row { display: flex; justify-content: space-between; gap: 16px;
+                 color: var(--sub); line-height: 1.5; }
+#yc-tip .t-row b { color: var(--txt); font-variant-numeric: tabular-nums; }
+#yc-tip .t-sig  { margin-top: 4px; font-weight: 700; text-align: center;
+                  border-radius: 4px; padding: 1px 0; }
+#yc-tip .t-sig.BUY  { color: var(--green); background: rgba(38,166,154,.14); }
+#yc-tip .t-sig.SELL { color: var(--red);   background: rgba(239,83,80,.14); }
+#yc-tip .t-sig.HOLD { color: var(--muted); background: var(--surf); }
+
+/* Chart animations */
+@keyframes ycDraw { to { stroke-dashoffset: 0; } }
+@keyframes ycFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ycPop  { 0% { transform: scale(0); } 70% { transform: scale(1.28); }
+                    100% { transform: scale(1); } }
+.yc-area  { animation: ycFade .6s ease both; }
+.yc-curve { animation: ycDraw .9s ease-out both;
+            filter: drop-shadow(0 0 3px var(--blue)); }
+.yc-pt    { transform-box: fill-box; transform-origin: center;
+            animation: ycPop .5s cubic-bezier(.34,1.56,.5,1) both;
+            transition: r .12s ease; }
 #yc-legend  {
   font-size: 10px; color: var(--sub); display: flex; gap: 12px;
   align-items: center; margin-top: 4px;
@@ -1522,8 +1553,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div id="yc-title">منحنی بازده — اسناد خزانه اسلامی (اخزا)</div>
       <div id="yc-subtitle"></div>
       <div id="yc-wrap">
-        <svg id="yc-svg" width="100%" height="100%" viewBox="0 0 760 260"
+        <svg id="yc-svg" width="100%" height="100%" viewBox="0 0 760 210"
              preserveAspectRatio="none"></svg>
+        <div id="yc-tip"></div>
       </div>
       <div id="yc-legend">
         <span class="ycl-dot buy"></span>ارزان (BUY)&nbsp;
@@ -3724,15 +3756,45 @@ async function loadBondHistory(sym) {
 
 // ── Yield Curve SVG renderer ──────────────────────────────────────────────
 
-function drawYieldCurve(snaps, coeffs) {
-  const svg = document.getElementById('yc-svg');
-  const W = 760, H = 260;
-  const pad = { l: 48, r: 16, t: 14, b: 34 };
-  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+let _ycResizeBound = false;
+let _ycLast = null;
 
-  const valid = snaps.filter(s => s.ytm > 0 && s.days_to_mat > 0);
+function _sigColor(sig) {
+  return sig === 'BUY' ? 'var(--green)' : sig === 'SELL' ? 'var(--red)' : 'var(--muted)';
+}
+
+function drawYieldCurve(snaps, coeffs) {
+  const svg  = document.getElementById('yc-svg');
+  const wrap = document.getElementById('yc-wrap');
+  const tip  = document.getElementById('yc-tip');
+  _ycLast = { snaps, coeffs };
+
+  // Redraw on container resize so the chart is always crisp and full-width.
+  if (!_ycResizeBound && window.ResizeObserver) {
+    _ycResizeBound = true;
+    let rt;
+    new ResizeObserver(() => {
+      clearTimeout(rt);
+      rt = setTimeout(() => { if (_ycLast) drawYieldCurve(_ycLast.snaps, _ycLast.coeffs); }, 120);
+    }).observe(wrap);
+  }
+
+  // Size the viewBox to the real pixel box so circles stay round and the chart
+  // fills the width (no distortion from preserveAspectRatio=none stretching).
+  const W = Math.max(320, Math.round(wrap.clientWidth  || 760));
+  const H = Math.max(170, Math.round(wrap.clientHeight || 210));
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  // RTL layout: y-axis (YTM) on the RIGHT, maturity grows RIGHT→LEFT so the
+  // near-term bills sit where a Persian reader's eye starts.
+  const pad = { top: 16, bot: 28, left: 18, right: 50 };
+  const iW = W - pad.left - pad.right, iH = H - pad.top - pad.bot;
+
+  const valid = snaps.filter(s => s.ytm > 0 && s.days_to_mat > 0)
+                     .sort((a, b) => a.days_to_mat - b.days_to_mat);
   if (!valid.length) {
-    // Don't go silently blank — tell the user what to do next.
+    if (tip) tip.style.display = 'none';
+    svg.onmousemove = svg.onmouseleave = null;
     const hint = snaps.length
       ? 'قیمت معتبری دریافت نشد — «📡 اسکن اوراق» را دوباره بزنید'
       : 'هنوز اوراقی کشف نشده — ابتدا «🔍 کشف نمادها» سپس «📡 اسکن اوراق» را بزنید';
@@ -3743,73 +3805,140 @@ function drawYieldCurve(snaps, coeffs) {
 
   const xMin = 0;
   const xMax = Math.max(...valid.map(s => s.days_to_mat)) * 1.05;
-  const yMin = Math.max(0, Math.min(...valid.map(s => s.ytm)) * 0.95);
-  const yMax = Math.max(...valid.map(s => s.ytm)) * 1.05;
+  const ys   = valid.map(s => s.ytm).concat(valid.map(s => s.curve_ytm || s.ytm));
+  const yMin = Math.max(0, Math.min(...ys) * 0.96);
+  const yMax = Math.max(...ys) * 1.05;
 
-  const px = x => pad.l + ((x - xMin) / (xMax - xMin)) * iW;
-  const py = y => pad.t + iH - ((y - yMin) / (yMax - yMin || 1)) * iH;
+  const xR = W - pad.right;                       // right inner edge (days = 0)
+  const px = x => xR - ((x - xMin) / (xMax - xMin || 1)) * iW;   // RTL flip
+  const py = y => pad.top + iH - ((y - yMin) / (yMax - yMin || 1)) * iH;
+  const ycEval = x => (coeffs || []).reduce((a, c, k) => a + c * Math.pow(x, k), 0);
 
-  // Build SVG pieces
   let out = '';
+  out += `<defs>
+    <linearGradient id="ycGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="var(--blue)" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="var(--blue)" stop-opacity="0.02"/>
+    </linearGradient>
+  </defs>`;
 
-  // Grid lines
+  // ── Horizontal grid + YTM labels on the RIGHT ───────────────────────────
   const yTicks = 4;
   for (let i = 0; i <= yTicks; i++) {
-    const yv = yMin + (yMax - yMin) * i / yTicks;
-    const yp = py(yv);
-    out += `<line x1="${pad.l}" y1="${yp.toFixed(1)}" x2="${W-pad.r}" y2="${yp.toFixed(1)}"
-              stroke="var(--brd)" stroke-width="0.6"/>`;
-    out += `<text x="${pad.l-5}" y="${(yp+4).toFixed(1)}" text-anchor="end"
-              font-size="9" fill="var(--muted)">${(yv*100).toFixed(1)}</text>`;
+    const yv = yMin + (yMax - yMin) * i / yTicks, yp = py(yv);
+    out += `<line x1="${pad.left}" y1="${yp.toFixed(1)}" x2="${xR}" y2="${yp.toFixed(1)}"
+              stroke="var(--brd)" stroke-width="0.6" opacity="0.7"/>`;
+    out += `<text x="${(xR + 6)}" y="${(yp + 3).toFixed(1)}" text-anchor="start"
+              font-size="9" fill="var(--muted)">${(yv*100).toFixed(1)}%</text>`;
   }
-  // X-axis ticks
+  // ── Vertical grid + day labels (RTL) ────────────────────────────────────
   const xStep = xMax > 400 ? 90 : 60;
   for (let xv = xStep; xv < xMax; xv += xStep) {
     const xp = px(xv);
-    out += `<line x1="${xp.toFixed(1)}" y1="${pad.t}" x2="${xp.toFixed(1)}" y2="${H-pad.b}"
-              stroke="var(--brd)" stroke-width="0.6"/>`;
-    out += `<text x="${xp.toFixed(1)}" y="${H-pad.b+12}" text-anchor="middle"
-              font-size="9" fill="var(--muted)">${xv}d</text>`;
+    out += `<line x1="${xp.toFixed(1)}" y1="${pad.top}" x2="${xp.toFixed(1)}" y2="${H-pad.bot}"
+              stroke="var(--brd)" stroke-width="0.6" opacity="0.5"/>`;
+    out += `<text x="${xp.toFixed(1)}" y="${H-pad.bot+12}" text-anchor="middle"
+              font-size="9" fill="var(--muted)">${xv} روز</text>`;
   }
-  // Axis labels
-  out += `<text x="${pad.l-14}" y="${H/2}" transform="rotate(-90 ${pad.l-14} ${H/2})"
-            text-anchor="middle" font-size="9" fill="var(--sub)">YTM %</text>`;
 
-  // Fitted curve path
-  if (coeffs.length >= 2) {
-    const pts = [];
-    const steps = 80;
+  // ── Fitted curve: gradient area + animated line ─────────────────────────
+  if ((coeffs || []).length >= 2) {
+    const steps = 96, cx = [], cy = [];
     for (let i = 0; i <= steps; i++) {
       const xv = xMin + (xMax - xMin) * i / steps;
-      const yv = coeffs.reduce((acc, c, k) => acc + c * Math.pow(xv, k), 0);
-      if (yv > 0) pts.push(`${px(xv).toFixed(1)},${py(yv).toFixed(1)}`);
+      const yv = ycEval(xv);
+      if (yv > 0) { cx.push(px(xv)); cy.push(py(Math.max(yMin, Math.min(yMax, yv)))); }
     }
-    if (pts.length > 1)
-      out += `<polyline points="${pts.join(' ')}" fill="none"
-                stroke="var(--blue)" stroke-width="2" stroke-dasharray="4,2" opacity="0.8"/>`;
+    if (cx.length > 1) {
+      const base = py(yMin);
+      const area = `M ${cx[0].toFixed(1)} ${base.toFixed(1)} `
+        + cx.map((x, i) => `L ${x.toFixed(1)} ${cy[i].toFixed(1)}`).join(' ')
+        + ` L ${cx[cx.length-1].toFixed(1)} ${base.toFixed(1)} Z`;
+      out += `<path class="yc-area" d="${area}" fill="url(#ycGrad)"/>`;
+
+      let len = 0;
+      for (let i = 1; i < cx.length; i++)
+        len += Math.hypot(cx[i]-cx[i-1], cy[i]-cy[i-1]);
+      const line = cx.map((x, i) => `${x.toFixed(1)},${cy[i].toFixed(1)}`).join(' ');
+      out += `<polyline class="yc-curve" points="${line}" fill="none"
+                stroke="var(--blue)" stroke-width="2.2" stroke-linecap="round"
+                style="stroke-dasharray:${len.toFixed(0)};stroke-dashoffset:${len.toFixed(0)}"/>`;
+    }
   }
 
-  // Bond dots + Z-spread lines
-  for (const s of valid) {
-    const xp = px(s.days_to_mat);
-    const yp = py(s.ytm);
-    const col = s.signal === 'BUY' ? 'var(--green)' : s.signal === 'SELL' ? 'var(--red)' : 'var(--muted)';
-    // Vertical line from curve to dot
+  // ── Crosshair (hidden until hover) ──────────────────────────────────────
+  out += `<g id="yc-cross" style="display:none;pointer-events:none">
+            <line id="yc-cross-v" y1="${pad.top}" y2="${H-pad.bot}"
+                  stroke="var(--sub)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+          </g>`;
+
+  // ── Z-spread connectors + animated bond points ──────────────────────────
+  const ptXY = [];
+  valid.forEach((s, k) => {
+    const xp = px(s.days_to_mat), yp = py(s.ytm);
+    const col = _sigColor(s.signal);
+    ptXY.push({ x: xp, y: yp, col });
     if (s.curve_ytm > 0) {
       const yc = py(s.curve_ytm);
       out += `<line x1="${xp.toFixed(1)}" y1="${Math.min(yp,yc).toFixed(1)}"
                 x2="${xp.toFixed(1)}" y2="${Math.max(yp,yc).toFixed(1)}"
-                stroke="${col}" stroke-width="1" opacity="0.5"/>`;
+                stroke="${col}" stroke-width="1.2" opacity="0.45"/>`;
     }
-    out += `<circle cx="${xp.toFixed(1)}" cy="${yp.toFixed(1)}" r="6"
-              fill="${col}" opacity="0.85">
-              <title>${s.symbol}: YTM=${(s.ytm*100).toFixed(2)}%  Z=${(s.z_spread_bps||0).toFixed(0)}bps  ${s.signal}</title>
-            </circle>`;
-    out += `<text x="${(xp+8).toFixed(1)}" y="${(yp+4).toFixed(1)}"
-              font-size="9" fill="${col}">${s.symbol}</text>`;
-  }
+  });
+  valid.forEach((s, k) => {
+    const p = ptXY[k];
+    out += `<circle id="yc-pt-${k}" class="yc-pt" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}"
+              r="5.5" fill="${p.col}" stroke="var(--surf)" stroke-width="1.5"
+              style="animation-delay:${(k*45)}ms"/>`;
+  });
 
   svg.innerHTML = out;
+
+  // ── Interactivity: nearest-point crosshair + rich tooltip ───────────────
+  const cross = svg.querySelector('#yc-cross');
+  const vline = svg.querySelector('#yc-cross-v');
+  let activeK = -1;
+
+  const fmt = n => (n || 0).toLocaleString('en-US');
+  const setActive = (k) => {
+    if (k === activeK) return;
+    if (activeK >= 0) { const e = svg.querySelector('#yc-pt-'+activeK); if (e) e.setAttribute('r', '5.5'); }
+    activeK = k;
+    const e = svg.querySelector('#yc-pt-'+k); if (e) e.setAttribute('r', '8.5');
+  };
+
+  svg.onmousemove = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const ux = (ev.clientX - r.left) * (W / r.width);
+    let best = -1, bd = 1e9;
+    ptXY.forEach((p, k) => { const d = Math.abs(p.x - ux); if (d < bd) { bd = d; best = k; } });
+    if (best < 0) return;
+    setActive(best);
+    const p = ptXY[best], s = valid[best];
+    cross.style.display = '';
+    vline.setAttribute('x1', p.x.toFixed(1));
+    vline.setAttribute('x2', p.x.toFixed(1));
+    const z = s.z_spread_bps || 0;
+    const fair = s.curve_ytm > 0
+      ? Math.round((s.face_value || 1000000) / Math.pow(1 + s.curve_ytm, s.days_to_mat / 365)) : 0;
+    tip.style.display = 'block';
+    tip.style.left = (p.x / W * 100) + '%';
+    tip.style.top  = (p.y / H * 100) + '%';
+    tip.innerHTML =
+        `<div class="t-sym" style="color:${p.col}">${s.symbol}</div>`
+      + `<div class="t-row">سررسید<b>${s.days_to_mat} روز</b></div>`
+      + `<div class="t-row">بازده<b>${(s.ytm*100).toFixed(2)}%</b></div>`
+      + `<div class="t-row">منحنی<b>${s.curve_ytm ? (s.curve_ytm*100).toFixed(2)+'%' : '—'}</b></div>`
+      + `<div class="t-row">قیمت<b>${fmt(s.last_price || s.close_price)}</b></div>`
+      + (fair ? `<div class="t-row">منصفانه<b>${fmt(fair)}</b></div>` : '')
+      + `<div class="t-row">Z-Spread<b style="color:${z>=30?'var(--green)':z<=-30?'var(--red)':'var(--txt)'}">${z.toFixed(0)} bps</b></div>`
+      + `<div class="t-sig ${s.signal}">${s.signal}</div>`;
+  };
+  svg.onmouseleave = () => {
+    cross.style.display = 'none';
+    tip.style.display = 'none';
+    if (activeK >= 0) { const e = svg.querySelector('#yc-pt-'+activeK); if (e) e.setAttribute('r','5.5'); activeK = -1; }
+  };
 }
 
 // ── Bond yield history SVG ────────────────────────────────────────────────
