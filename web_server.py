@@ -1138,6 +1138,146 @@ def create_app(db, scan_callback=None):
                     result["summary"]["total_net_pnl"])
         return jsonify(result)
 
+    # ──────────────────────────────────────────────────────────────────────
+    #  Data coverage + on-demand collection (funds + اخزا)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _coverage_rows(kind: str, cov: dict) -> list[dict]:
+        """Build coverage rows for *kind* ("funds" | "bonds")."""
+        if kind == "bonds":
+            try:
+                series = db.get_bond_series(active_only=False)
+            except Exception:
+                series = []
+            entries = [{"symbol": s.get("symbol", ""),
+                        "name": s.get("name", s.get("symbol", "")),
+                        "ins_code": (s.get("ins_code") or "").strip(),
+                        "maturity_date": s.get("maturity_date", 0),
+                        "active": bool(s.get("active", 1))}
+                       for s in series]
+        else:
+            from config import FIXED_INCOME_ETFS
+            entries = [{"symbol": f.get("symbol", ""),
+                        "name": f.get("name", f.get("symbol", "")),
+                        "ins_code": (f.get("ins_code") or "").strip(),
+                        "maturity_date": 0, "active": True}
+                       for f in FIXED_INCOME_ETFS]
+
+        rows = []
+        for e in entries:
+            c = cov.get(e["symbol"], {})
+            rows.append({**e,
+                         "daily":     c.get("daily"),
+                         "ticks":     c.get("ticks"),
+                         "ob":        c.get("ob"),
+                         "snapshots": c.get("snapshots"),
+                         "client":    c.get("client")})
+        return rows
+
+    @app.route("/api/data_coverage")
+    def api_data_coverage():
+        """Per-symbol data completeness for funds and اخزا.
+
+        Returns {today, funds:[…], bonds:[…]} where each row carries the
+        symbol's coverage of every time-series table (daily/ticks/ob/snapshots).
+        """
+        cov = db.coverage_summary()
+        today_int = int(datetime.now().strftime("%Y%m%d"))
+        return jsonify({
+            "today": today_int,
+            "funds": _coverage_rows("funds", cov),
+            "bonds": _coverage_rows("bonds", cov),
+        })
+
+    # Guard + progress state for on-demand collection (network-heavy).
+    _collect_state = {"running": False, "progress": {}, "last": None}
+    _collect_lock = threading.Lock()
+
+    @app.route("/api/collect", methods=["POST"])
+    def api_collect():
+        """Collect history for selected symbols (funds or اخزا).
+
+        JSON body:
+          type      – "funds" | "bonds"  (default "funds")
+          symbols   – list of symbols to collect (required; [] = all of type)
+          days      – recent trading days of tick/OB (default 30)
+          daily     – days of daily OHLCV (default 365)
+          full      – force full daily re-download (default false)
+          no_ob / no_intraday – skip those passes
+          async     – run in background, return immediately (default true)
+        """
+        from collector import collect_history
+        from data_fetcher import TSETMCFetcher
+
+        body = request.get_json(silent=True) or {}
+        kind = body.get("type", "funds")
+        wanted = set(body.get("symbols") or [])
+
+        # Resolve targets (symbol + ins_code) for the requested type.
+        rows = _coverage_rows(kind, {})
+        targets = [{"symbol": r["symbol"], "ins_code": r["ins_code"]}
+                   for r in rows
+                   if r["ins_code"] and (not wanted or r["symbol"] in wanted)]
+
+        if not targets:
+            return jsonify({"error": "no collectable symbols "
+                            "(need a discovered ins_code)"}), 400
+
+        kwargs = dict(
+            force_full=bool(body.get("full", False)),
+            daily_days=int(body.get("daily", 365) or 365),
+            intraday_days=int(body.get("days", 30) or 30),
+            fetch_intraday=not body.get("no_intraday", False),
+            fetch_ob=not body.get("no_ob", False),
+            workers=int(body.get("workers", 0)) or None,
+        )
+
+        if _collect_state["running"]:
+            return jsonify({"status": "already running",
+                            "progress": _collect_state["progress"]}), 409
+
+        def _run():
+            with _collect_lock:
+                _collect_state["running"] = True
+                _collect_state["progress"] = {"done": 0, "total": len(targets),
+                                              "current": ""}
+            try:
+                fetcher = TSETMCFetcher()
+                summary = collect_history(
+                    db, fetcher, targets,
+                    progress=_collect_state["progress"],
+                    progress_lock=_collect_lock, **kwargs)
+                summary["type"] = kind
+                _collect_state["last"] = summary
+                logger.info("Collection done (%s): %s", kind, summary)
+            except Exception:
+                logger.exception("collection failed")
+            finally:
+                with _collect_lock:
+                    _collect_state["running"] = False
+
+        if body.get("async", True):
+            threading.Thread(target=_run, daemon=True, name="collect").start()
+            return jsonify({"status": "started", "type": kind,
+                            "count": len(targets)})
+
+        # Synchronous
+        try:
+            fetcher = TSETMCFetcher()
+            summary = collect_history(db, fetcher, targets, **kwargs)
+            summary["type"] = kind
+            _collect_state["last"] = summary
+            return jsonify({"status": "done", **summary})
+        except Exception as e:
+            logger.exception("collection failed")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/collect/status")
+    def api_collect_status():
+        return jsonify({"running": _collect_state["running"],
+                        "progress": _collect_state["progress"],
+                        "last": _collect_state["last"]})
+
     @app.route("/api/stream")
     def api_stream():
         """Server-Sent Events endpoint for real-time scan updates."""

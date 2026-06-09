@@ -993,6 +993,58 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
             ).fetchone()
         return dict(row) if row else None
 
+    def coverage_summary(self) -> dict[str, dict]:
+        """Return per-symbol data completeness across every time-series table.
+
+        One aggregate query per table (grouped by symbol) keeps this cheap even
+        with many symbols.  Shape:
+
+            {symbol: {
+                "daily":     {"count", "first", "last"},
+                "ticks":     {"days", "count", "last"},
+                "ob":        {"days", "count", "last"},
+                "snapshots": {"days", "last"},
+                "client":    {"days", "last"},
+            }}
+
+        Missing tables for a symbol simply omit that key.
+        """
+        out: dict[str, dict] = {}
+
+        def _ensure(sym: str) -> dict:
+            return out.setdefault(sym, {})
+
+        with self._conn() as conn:
+            for r in conn.execute(
+                "SELECT symbol, COUNT(*) c, MIN(date) f, MAX(date) l "
+                "FROM daily_history GROUP BY symbol"
+            ):
+                _ensure(r["symbol"])["daily"] = {
+                    "count": r["c"], "first": r["f"], "last": r["l"]}
+            for r in conn.execute(
+                "SELECT symbol, COUNT(DISTINCT date) d, COUNT(*) c, MAX(date) l "
+                "FROM intraday_trades GROUP BY symbol"
+            ):
+                _ensure(r["symbol"])["ticks"] = {
+                    "days": r["d"], "count": r["c"], "last": r["l"]}
+            for r in conn.execute(
+                "SELECT symbol, COUNT(DISTINCT date) d, COUNT(*) c, MAX(date) l "
+                "FROM intraday_orderbook GROUP BY symbol"
+            ):
+                _ensure(r["symbol"])["ob"] = {
+                    "days": r["d"], "count": r["c"], "last": r["l"]}
+            for r in conn.execute(
+                "SELECT symbol, COUNT(DISTINCT date) d, MAX(date) l "
+                "FROM intraday_price_history GROUP BY symbol"
+            ):
+                _ensure(r["symbol"])["snapshots"] = {"days": r["d"], "last": r["l"]}
+            for r in conn.execute(
+                "SELECT symbol, COUNT(DISTINCT date) d, MAX(date) l "
+                "FROM client_type_daily GROUP BY symbol"
+            ):
+                _ensure(r["symbol"])["client"] = {"days": r["d"], "last": r["l"]}
+        return out
+
     def get_ins_code(self, symbol: str) -> Optional[str]:
         """Return the most recent ins_code for *symbol* from daily_history, or None."""
         with self._conn() as conn:

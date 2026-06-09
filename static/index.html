@@ -963,6 +963,64 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             font-size: var(--fs-sm); }
 .bt-hint { font-size: var(--fs-xs); color: var(--muted); margin: 4px 0 12px; line-height: 1.6; }
 
+/* ─── Data coverage modal ────────────────────────────────────── */
+#dm-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.55); z-index: 100000;
+  align-items: center; justify-content: center; padding: 20px;
+}
+#dm-overlay.visible { display: flex; }
+#dm-modal {
+  background: var(--surf); border: 1px solid var(--brd2);
+  border-radius: 12px; width: min(1040px, 97vw); max-height: 92vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 12px 48px rgba(0,0,0,.5); overflow: hidden;
+}
+#dm-head {
+  display: flex; align-items: center; gap: 10px; padding: 13px 18px;
+  border-bottom: 1px solid var(--brd); background: var(--surf2);
+}
+#dm-head .dm-title { font-size: var(--fs-lg); font-weight: 700; color: var(--txt); }
+#dm-head .dm-sub   { font-size: var(--fs-xs); color: var(--muted); }
+#dm-close { margin-inline-start: auto; background: none; border: none;
+  color: var(--sub); font-size: 22px; cursor: pointer; line-height: 1; }
+#dm-close:hover { color: var(--red); }
+#dm-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 10px 18px; border-bottom: 1px solid var(--brd); background: var(--surf2);
+}
+#dm-toolbar label { font-size: var(--fs-xs); color: var(--sub); }
+#dm-toolbar input[type=number] {
+  width: 60px; background: var(--bg); color: var(--txt);
+  border: 1px solid var(--brd2); border-radius: 6px; padding: 5px 7px;
+  font-size: var(--fs-sm); font-family: var(--font);
+}
+#dm-collect {
+  margin-inline-start: auto; background: var(--blue); color: #fff;
+  border: none; border-radius: 6px; padding: 7px 16px;
+  font-size: var(--fs-sm); font-weight: 600; cursor: pointer; font-family: var(--font);
+}
+#dm-collect:hover { filter: brightness(1.1); }
+#dm-collect:disabled { opacity: .5; cursor: default; }
+#dm-progress { font-size: var(--fs-xs); color: var(--sub); }
+#dm-body { padding: 0; overflow-y: auto; }
+#dm-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+#dm-table th, #dm-table td {
+  padding: 7px 9px; text-align: center; white-space: nowrap;
+  border-bottom: 1px solid var(--brd); font-variant-numeric: tabular-nums;
+}
+#dm-table th { color: var(--muted); font-weight: 600; position: sticky; top: 0;
+  background: var(--surf); z-index: 1; }
+#dm-table td.sym { text-align: start; font-weight: 700; color: var(--txt); }
+#dm-table tr:hover td { background: var(--surf2); }
+.dm-cell { display: inline-flex; flex-direction: column; line-height: 1.25; }
+.dm-cell .dm-main { font-weight: 600; }
+.dm-cell .dm-sub  { font-size: 9px; color: var(--muted); }
+.dm-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-inline-end:5px; }
+.dm-ok   { color: var(--green); } .dm-dot.ok   { background: var(--green); }
+.dm-warn { color: var(--yellow); } .dm-dot.warn { background: var(--yellow); }
+.dm-none { color: var(--red); }    .dm-dot.none { background: var(--red); }
+
 /* ─── Mode tabs ─────────────────────────────────────────────── */
 #mode-tabs { display:flex; gap:2px; align-items:center; }
 .mode-tab {
@@ -1176,6 +1234,42 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   </div>
 </div>
 
+<!-- ═══════════════════════════════════ Data coverage modal ══════ -->
+<div id="dm-overlay" onclick="if(event.target===this)closeDataModal()">
+  <div id="dm-modal">
+    <div id="dm-head">
+      <span class="dm-title" id="dm-title">📊 وضعیت داده</span>
+      <span class="dm-sub" id="dm-sub"></span>
+      <button id="dm-close" onclick="closeDataModal()" title="بستن">×</button>
+    </div>
+    <div id="dm-toolbar">
+      <label><input type="checkbox" id="dm-all" onchange="dmToggleAll(this.checked)"> انتخاب همه</label>
+      <div class="h-div"></div>
+      <label>روزهای اخیر (تیک/اردربوک):</label>
+      <input type="number" id="dm-days" value="30" min="1" max="90">
+      <label>روزانه:</label>
+      <input type="number" id="dm-daily" value="365" min="30" max="3650">
+      <label><input type="checkbox" id="dm-full"> دانلود کامل مجدد</label>
+      <span id="dm-progress"></span>
+      <button id="dm-collect" onclick="dmCollect()">⬇ جمع‌آوری انتخاب‌شده‌ها</button>
+    </div>
+    <div id="dm-body">
+      <table id="dm-table">
+        <thead><tr>
+          <th style="width:28px"></th>
+          <th>نماد</th>
+          <th>روزانه</th>
+          <th>تیک درون‌روزی</th>
+          <th>اردربوک</th>
+          <th>اسنپ‌شات ثانیه</th>
+          <th>وضعیت</th>
+        </tr></thead>
+        <tbody id="dm-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════════════════ Header ═══════ -->
 <div id="header">
   <div id="status-dot"></div>
@@ -1230,6 +1324,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   <span id="sel-badge"></span>
   <span id="last-scan">—</span>
+  <button class="scan-btn" onclick="openDataModal('funds')" title="مشاهده کامل بودن داده هر نماد و فرمان جمع‌آوری">📊 وضعیت داده</button>
   <button class="scan-btn" id="bt-open-btn" onclick="openBacktest()" title="بک‌تست استراتژی روی اردربوک تاریخی">🧪 بک‌تست</button>
   <button class="scan-btn" id="scan-btn-main" onclick="triggerScan()">🔄 اسکن</button>
 
@@ -1249,7 +1344,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <label style="font-size:11px;color:var(--sub)">bps</label>
     <div class="h-div"></div>
     <button class="scan-btn" onclick="bondDiscover()" title="جستجوی نمادهای اخزا در TSETMC و افزودن خودکار آن‌ها">🔍 کشف نمادها</button>
-    <button class="scan-btn" onclick="bondCollect()" title="جمع‌آوری داده تاریخی تیک‌به‌تیک و اردربوک اخزا (لازم برای بک‌تست)">💾 جمع‌آوری داده</button>
+    <button class="scan-btn" onclick="openDataModal('bonds')" title="مشاهده کامل بودن داده هر اوراق و فرمان جمع‌آوری (لازم برای بک‌تست)">📊 وضعیت داده</button>
     <button class="scan-btn" onclick="bondScan()">📡 اسکن اوراق</button>
   </div>
 
@@ -3875,6 +3970,144 @@ function renderBondBacktest(res) {
     </tr>`;
   }).join('');
   tb.innerHTML = trs || '<tr><td colspan="13" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Data coverage modal — see per-symbol completeness & collect on demand
+// ══════════════════════════════════════════════════════════════════
+let dmKind = 'funds';
+let dmRows = [];
+let dmPollTimer = null;
+
+async function openDataModal(kind) {
+  dmKind = kind || 'funds';
+  document.getElementById('dm-title').textContent =
+    dmKind === 'bonds' ? '📊 وضعیت داده — اوراق (اخزا)' : '📊 وضعیت داده — صندوق‌ها';
+  document.getElementById('dm-overlay').classList.add('visible');
+  document.getElementById('dm-all').checked = false;
+  await dmRefresh();
+  dmPollStatus();           // reflect any in-flight collection
+}
+
+function closeDataModal() {
+  document.getElementById('dm-overlay').classList.remove('visible');
+  if (dmPollTimer) { clearInterval(dmPollTimer); dmPollTimer = null; }
+}
+
+async function dmRefresh() {
+  const r = await fetch('/api/data_coverage').catch(() => null);
+  if (!r?.ok) { showError('دریافت وضعیت داده ناموفق'); return; }
+  const j = await r.json();
+  dmRows = (dmKind === 'bonds' ? j.bonds : j.funds) || [];
+  renderCoverage(j.today);
+}
+
+// Classify a coverage cell: green if fresh, yellow if stale/partial, red if none.
+function dmCellHtml(c, today, kind) {
+  if (!c || !(c.count || c.days)) {
+    return `<span class="dm-none"><span class="dm-dot none"></span>—</span>`;
+  }
+  const last = c.last || 0;
+  const fresh = last >= today - 4;   // within ~last few calendar days
+  const cls = fresh ? 'dm-ok' : 'dm-warn';
+  const dot = fresh ? 'ok' : 'warn';
+  let main, sub;
+  if (kind === 'daily')      { main = `${c.count}`;            sub = `روز`; }
+  else if (kind === 'snap')  { main = `${c.days}`;             sub = `روز`; }
+  else                       { main = `${c.days} روز`;         sub = (c.count||0).toLocaleString('en-US') + ' ردیف'; }
+  const ld = last ? String(last) : '';
+  const lj = ld ? (()=>{ const a=gregorianToJalali(+ld.slice(0,4),+ld.slice(4,6),+ld.slice(6,8));
+    return `${a[1]}/${String(a[2]).padStart(2,'0')}`; })() : '';
+  return `<span class="dm-cell ${cls}"><span class="dm-main"><span class="dm-dot ${dot}"></span>${main}</span>`
+       + `<span class="dm-sub">${sub}${lj?(' · '+lj):''}</span></span>`;
+}
+
+function renderCoverage(today) {
+  const tb = document.getElementById('dm-tbody');
+  if (!dmRows.length) {
+    const hint = dmKind === 'bonds'
+      ? 'هیچ اوراقی ثبت نشده — ابتدا «🔍 کشف نمادها» را بزنید'
+      : 'هیچ نمادی پیکربندی نشده';
+    tb.innerHTML = `<tr><td colspan="7" style="color:var(--muted);padding:24px">${hint}</td></tr>`;
+    document.getElementById('dm-sub').textContent = '';
+    return;
+  }
+  let nDaily=0, nTicks=0, nOb=0;
+  tb.innerHTML = dmRows.map(r => {
+    if (r.daily?.count) nDaily++;
+    if (r.ticks?.days)  nTicks++;
+    if (r.ob?.days)     nOb++;
+    const has = !!r.ins_code;
+    const overall = !has ? 'dm-none'
+      : (r.daily?.count && r.ticks?.days && r.ob?.days) ? 'dm-ok'
+      : (r.daily?.count || r.ticks?.days || r.ob?.days) ? 'dm-warn' : 'dm-none';
+    const oTxt = !has ? 'بدون ins_code'
+      : overall==='dm-ok' ? 'کامل' : overall==='dm-warn' ? 'ناقص' : 'خالی';
+    return `<tr>
+      <td>${has ? `<input type="checkbox" class="dm-chk" value="${r.symbol}">`
+                : `<input type="checkbox" disabled title="بدون ins_code">`}</td>
+      <td class="sym" title="${r.name||''}">${r.symbol}</td>
+      <td>${dmCellHtml(r.daily, today, 'daily')}</td>
+      <td>${dmCellHtml(r.ticks, today, 'ticks')}</td>
+      <td>${dmCellHtml(r.ob,    today, 'ob')}</td>
+      <td>${dmCellHtml(r.snapshots, today, 'snap')}</td>
+      <td class="${overall}">${oTxt}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('dm-sub').textContent =
+    `${dmRows.length} نماد · روزانه ${nDaily} · تیک ${nTicks} · اردربوک ${nOb}`;
+}
+
+function dmToggleAll(on) {
+  document.querySelectorAll('.dm-chk').forEach(c => { c.checked = on; });
+}
+
+async function dmCollect() {
+  const syms = [...document.querySelectorAll('.dm-chk:checked')].map(c => c.value);
+  if (!syms.length) { showError('حداقل یک نماد را انتخاب کنید'); return; }
+  const btn = document.getElementById('dm-collect');
+  btn.disabled = true;
+  const body = {
+    type: dmKind, symbols: syms, async: true,
+    days:  +document.getElementById('dm-days').value  || 30,
+    daily: +document.getElementById('dm-daily').value || 365,
+    full:  document.getElementById('dm-full').checked,
+  };
+  const r = await fetch('/api/collect', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  }).catch(() => null);
+  if (!r?.ok) {
+    btn.disabled = false;
+    const j = await r?.json().catch(()=>({}));
+    showError('جمع‌آوری ناموفق' + (j?.error ? ': '+j.error : '')); return;
+  }
+  showError(`⏳ جمع‌آوری ${syms.length} نماد آغاز شد (پس‌زمینه) ...`);
+  dmPollStatus();
+}
+
+function dmPollStatus() {
+  if (dmPollTimer) clearInterval(dmPollTimer);
+  const tick = async () => {
+    const s = await fetch('/api/collect/status').catch(() => null);
+    if (!s?.ok) return;
+    const j = await s.json();
+    const prog = j.progress || {};
+    const pe = document.getElementById('dm-progress');
+    if (j.running) {
+      document.getElementById('dm-collect').disabled = true;
+      pe.textContent = `⏳ ${prog.done||0}/${prog.total||0} ${prog.current||''}`;
+    } else {
+      document.getElementById('dm-collect').disabled = false;
+      if (dmPollTimer) { clearInterval(dmPollTimer); dmPollTimer = null; }
+      const L = j.last;
+      if (L) pe.textContent = `✅ ${L.daily_new||0} روزانه · ${L.intraday_new||0} تیک · ${L.ob_new||0} اردربوک`;
+      else   pe.textContent = '';
+      await dmRefresh();    // refresh the table with freshly collected data
+    }
+  };
+  dmPollTimer = setInterval(tick, 2500);
+  tick();
 }
 </script>
 </body>
