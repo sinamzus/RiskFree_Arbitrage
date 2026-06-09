@@ -1790,6 +1790,11 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <input id="bbt-matured" type="checkbox" checked>
           شامل اخزاهای سررسیدشده
         </label>
+        <label class="chk" style="align-self:flex-end;margin-bottom:6px"
+               title="اگر خاموش باشد موقعیت‌های باز می‌توانند شب بمانند و روزهای بعد فروخته شوند">
+          <input id="bbt-forceeod" type="checkbox">
+          بستن اجباری پایان روز
+        </label>
         <div class="bbt-field" style="align-self:flex-end;margin-bottom:6px">
           <label>معیار بهینه</label>
           <select id="bbt-opt-metric" title="معیار هدف بهینه‌ساز">
@@ -1810,7 +1815,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div id="bbt-table-wrap">
         <table id="bbt-table">
           <thead><tr>
-            <th>نماد</th><th>تاریخ</th><th>ورود</th><th>خروج</th><th>حجم</th>
+            <th>نماد</th><th>تاریخ ورود</th><th>تاریخ خروج</th><th>ورود</th><th>خروج</th><th>حجم</th>
             <th>قیمت ورود</th><th>قیمت خروج</th><th>Z ورود</th><th>Z خروج</th>
             <th>سود خالص</th><th>%</th><th>مدت</th><th>دلیل</th>
           </tr></thead>
@@ -4410,6 +4415,7 @@ async function bondBacktest() {
     min_pts:   document.getElementById('bbt-minpts').value  || '3',
     step:      document.getElementById('bbt-step').value    || '0',
     include_matured: document.getElementById('bbt-matured').checked ? '1' : '0',
+    force_eod:       document.getElementById('bbt-forceeod').checked ? '1' : '0',
     buy_fee:   ((+document.getElementById('bbt-buyfee').value  || 0) / 100).toString(),
     sell_fee:  ((+document.getElementById('bbt-sellfee').value || 0) / 100).toString(),
   });
@@ -4437,7 +4443,7 @@ async function bondOptimize() {
   const body = {
     capital:      +document.getElementById('bbt-capital').value || 1e9,
     step:         +document.getElementById('bbt-step').value || 0,
-    force_eod:    '1',
+    force_eod:    document.getElementById('bbt-forceeod').checked ? '1' : '0',
     min_trades:   3,
     include_matured: document.getElementById('bbt-matured').checked ? '1' : '0',
     buy_fee:      ((+document.getElementById('bbt-buyfee').value  || 0) / 100).toString(),
@@ -4620,7 +4626,8 @@ function renderBondBacktest(res) {
     + card('سود خالص', fmt(s.total_net_pnl), pnlCls)
     + card('بازده کل', `${s.total_return_pct||0}%`, pnlCls)
     + card('میانگین Z ورود', `${s.avg_entry_z||0} bps`)
-    + card('بستن EOD', `${s.eod_count||0}`)
+    + card('بستن EOD/نهایی', `${s.eod_count||0}`)
+    + card('چندروزه', `${s.overnight_count||0}`)
     + card('میانگین مدت', `${s.avg_hold_min||0} دقیقه`)
     + card('کارمزد کل', fmt(s.total_fees));
 
@@ -4630,22 +4637,29 @@ function renderBondBacktest(res) {
     const pc = (t.net_pnl||0) >= 0 ? 'pos' : 'neg';
     const ht = (t.entry_time+'').padStart(6,'0').replace(/(\d\d)(\d\d)(\d\d)/,'$1:$2:$3');
     const xt = (t.exit_time+'').padStart(6,'0').replace(/(\d\d)(\d\d)(\d\d)/,'$1:$2:$3');
-    const mins = Math.round((t.hold_secs||0)/60);
-    // Entry/exit price cells are hover-able: they pop the OB at that instant.
-    const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}" data-time="${t.entry_time}" data-side="buy`;
-    const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}" data-time="${t.exit_time}" data-side="sell`;
+    const holdSecs = t.hold_secs || 0;
+    const holdStr  = holdSecs >= 86400
+      ? `${Math.floor(holdSecs/86400)}ر ${Math.round((holdSecs%86400)/60)}م`
+      : `${Math.round(holdSecs/60)}م`;
+    const multiDay = t.exit_date && t.exit_date !== t.date;
+    const exitDateTd = multiDay
+      ? `<td style="color:var(--accent)">${t.exit_date}</td>`
+      : `<td style="color:var(--muted)">—</td>`;
+    // Entry/exit price cells are hover-able: pop the OB at that instant.
+    const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}"      data-time="${t.entry_time}" data-side="buy`;
+    const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.exit_date||t.date}" data-time="${t.exit_time}"  data-side="sell`;
     return `<tr>
-      <td>${t.symbol}</td><td>${t.date}</td><td>${ht}</td><td>${xt}</td>
+      <td>${t.symbol}</td><td>${t.date}</td>${exitDateTd}<td>${ht}</td><td>${xt}</td>
       <td>${(t.volume||0).toLocaleString('en-US')}</td>
       <td class="${ec}">${(t.entry_price||0).toLocaleString('en-US')}</td>
       <td class="${xc}">${(t.exit_price||0).toLocaleString('en-US')}</td>
       <td>${t.entry_z_bps}</td><td>${t.exit_z_bps}</td>
       <td class="${pc}">${(t.net_pnl||0).toLocaleString('en-US')}</td>
       <td class="${pc}">${t.net_pct}%</td>
-      <td>${mins}m</td><td>${t.exit_reason}</td>
+      <td>${holdStr}</td><td>${t.exit_reason}</td>
     </tr>`;
   }).join('');
-  tb.innerHTML = trs || '<tr><td colspan="13" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
+  tb.innerHTML = trs || '<tr><td colspan="14" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
   attachSort('bbt-table');
   attachBtObHover();
 }

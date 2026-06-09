@@ -77,7 +77,7 @@ class BondBacktestParams:
     degree: int = 2                  # yield-curve polynomial degree
     min_curve_points: int = 3        # min series needed to fit a curve at an instant
     step_secs: int = 0               # 0 = every snapshot time; >0 = downsample grid
-    force_eod: bool = True           # liquidate any open position at day end
+    force_eod: bool = False          # True = liquidate at day end; False = carry overnight
     include_matured: bool = True     # include اخزا already matured (as of today)
                                      # — on each date they only trade while alive
     buy_fee: float = BUY_COST        # buy-side commission (fraction, e.g. 0.00145)
@@ -87,7 +87,8 @@ class BondBacktestParams:
 @dataclass
 class BondTrade:
     symbol: str
-    date: int
+    date: int          # entry date (YYYYMMDD)
+    exit_date: int     # exit date (YYYYMMDD) — same as date for intraday
     entry_time: int
     exit_time: int
     volume: int
@@ -103,7 +104,7 @@ class BondTrade:
     net_pnl: float
     net_pct: float
     hold_secs: int
-    exit_reason: str          # "signal" | "eod"
+    exit_reason: str          # "signal" | "eod" | "final"
 
 
 # --------------------------------------------------------------------------- #
@@ -144,28 +145,84 @@ class _SeriesDay:
 
 
 # --------------------------------------------------------------------------- #
+#  Shared close helpers                                                         #
+# --------------------------------------------------------------------------- #
+
+def _calc_hold_secs(entry_date: int, entry_time: int,
+                    exit_date: int, exit_time: int) -> int:
+    """Calendar seconds from entry to exit (cross-day aware)."""
+    if entry_date == exit_date:
+        return max(0, _secs(exit_time) - _secs(entry_time))
+    from datetime import date as _date
+    d1 = _date(entry_date // 10000, (entry_date % 10000) // 100, entry_date % 100)
+    d2 = _date(exit_date  // 10000, (exit_date  % 10000) // 100, exit_date  % 100)
+    return (d2 - d1).days * 86400 + _secs(exit_time)
+
+
+def _record_close(sym: str, st: dict,
+                  exit_units: int, sell_notional: float,
+                  t_exit: int, exit_date: int,
+                  exit_z: float, reason: str,
+                  p: "BondBacktestParams",
+                  trades_out: list) -> None:
+    """Build a BondTrade and mutate the position state dict in-place."""
+    frac = exit_units / st["units"] if st["units"] else 0
+    cost_part = st["buy_notional"] * frac
+    buy_fee  = cost_part * p.buy_fee
+    sell_fee = sell_notional * p.sell_fee
+    invested = cost_part + buy_fee
+    net = (sell_notional - sell_fee) - invested
+    hold_secs = _calc_hold_secs(st["entry_date"], st["entry_time"], exit_date, t_exit)
+    trades_out.append(BondTrade(
+        symbol=sym,
+        date=st["entry_date"],
+        exit_date=exit_date,
+        entry_time=st["entry_time"],
+        exit_time=t_exit,
+        volume=int(exit_units),
+        entry_price=round(cost_part / exit_units, 2) if exit_units else 0,
+        exit_price=round(sell_notional / exit_units, 2) if exit_units else 0,
+        entry_ytm=round(st["entry_ytm"], 6),
+        entry_curve_ytm=round(st["entry_curve"], 6),
+        entry_z_bps=round(st["entry_z"], 1),
+        exit_z_bps=round(exit_z, 1),
+        buy_notional=round(cost_part, 0),
+        sell_notional=round(sell_notional, 0),
+        fees=round(buy_fee + sell_fee, 0),
+        net_pnl=round(net, 0),
+        net_pct=round(net / invested * 100, 4) if invested else 0,
+        hold_secs=hold_secs,
+        exit_reason=reason,
+    ))
+    st["units"] -= exit_units
+    st["buy_notional"] -= cost_part
+
+
+# --------------------------------------------------------------------------- #
 #  Per-date simulation                                                          #
 # --------------------------------------------------------------------------- #
 
 def _simulate_bond_day(date_int: int,
                        day_series: dict[str, _SeriesDay],
-                       p: BondBacktestParams) -> list[BondTrade]:
+                       p: BondBacktestParams,
+                       carry_pos: dict | None = None,
+                       ) -> tuple[list[BondTrade], dict]:
     """Cross-sectional z-spread state machine for one trading date.
 
-    *day_series* maps symbol → _SeriesDay (each with that series' OB snapshots
-    for *date_int* and its days-to-maturity).
+    *carry_pos* maps symbol → position dict carried forward from a prior day.
+    Returns (trades_closed_today, positions_still_open_after_today).
+    Positions still open are passed as carry_pos into the next day's call.
     """
-    # Build the merged, de-duplicated, sorted timeline of all snapshot times.
     times: set[int] = set()
     for sd in day_series.values():
         for s in sd.snaps:
             times.add(int(s.get("time", 0)))
     timeline = sorted(t for t in times if t > 0)
     if not timeline:
-        return []
+        # No usable data today — carry all positions unchanged.
+        return [], dict(carry_pos) if carry_pos else {}
 
     if p.step_secs > 0:
-        # Downsample: keep one time per step_secs bucket.
         kept, last_bucket = [], -1
         for t in timeline:
             b = _secs(t) // p.step_secs
@@ -175,47 +232,24 @@ def _simulate_bond_day(date_int: int,
         timeline = kept
 
     trades: list[BondTrade] = []
-    # Per-symbol open position state.
-    pos: dict[str, dict] = {}   # symbol → {units, buy_notional, entry_time, entry_ytm, entry_curve, entry_z}
+    # Initialise from yesterday's carry (shallow copy so mutations stay local).
+    pos: dict[str, dict] = {}
+    if carry_pos:
+        for sym, st in carry_pos.items():
+            pos[sym] = dict(st)
 
-    def _close(sym: str, sd: _SeriesDay, exit_units: int, sell_notional: float,
-               t_exit: int, exit_z: float, reason: str):
+    def _close(sym: str, exit_units: int, sell_notional: float,
+               t_exit: int, exit_z: float, reason: str) -> None:
         st = pos[sym]
-        frac = exit_units / st["units"] if st["units"] else 0
-        cost_part = st["buy_notional"] * frac
-        buy_fee  = cost_part * p.buy_fee
-        sell_fee = sell_notional * p.sell_fee
-        invested = cost_part + buy_fee
-        net = (sell_notional - sell_fee) - invested
-        trades.append(BondTrade(
-            symbol=sym, date=date_int,
-            entry_time=st["entry_time"], exit_time=t_exit,
-            volume=int(exit_units),
-            entry_price=round(cost_part / exit_units, 2) if exit_units else 0,
-            exit_price=round(sell_notional / exit_units, 2) if exit_units else 0,
-            entry_ytm=round(st["entry_ytm"], 6),
-            entry_curve_ytm=round(st["entry_curve"], 6),
-            entry_z_bps=round(st["entry_z"], 1),
-            exit_z_bps=round(exit_z, 1),
-            buy_notional=round(cost_part, 0),
-            sell_notional=round(sell_notional, 0),
-            fees=round(buy_fee + sell_fee, 0),
-            net_pnl=round(net, 0),
-            net_pct=round(net / invested * 100, 4) if invested else 0,
-            hold_secs=max(0, _secs(t_exit) - _secs(st["entry_time"])),
-            exit_reason=reason,
-        ))
-        st["units"] -= exit_units
-        st["buy_notional"] -= cost_part
+        _record_close(sym, st, exit_units, sell_notional,
+                      t_exit, date_int, exit_z, reason, p, trades)
         if st["units"] <= 0:
             pos.pop(sym, None)
 
     for t in timeline:
-        # Advance every series' cursor to time t.
         for sd in day_series.values():
             sd.advance_to(t)
 
-        # Fit the curve across all series that currently have a valid YTM.
         pts: list[tuple[float, float]] = []
         for sd in day_series.values():
             y = sd.ytm()
@@ -227,7 +261,6 @@ def _simulate_bond_day(date_int: int,
         if not coeffs:
             continue
 
-        # Evaluate each series' z-spread and act.
         for sym, sd in day_series.items():
             y = sd.ytm()
             if y <= 0 or sd.dtm <= 0 or sd.cur is None:
@@ -236,24 +269,19 @@ def _simulate_bond_day(date_int: int,
             z_bps = (y - curve_y) * 10_000.0
 
             if sym not in pos:
-                # Entry: cheap bond (yields above the curve by entry_bps).
                 if z_bps >= p.entry_bps:
                     asks = _ladder(sd.cur, "ask")
                     if not asks:
                         continue
-                    # Buy any offer at-or-below the current price level; the
-                    # signal already says the whole series is cheap, so accept
-                    # the visible ask ladder up to capital.
                     ceiling = asks[-1][0]
                     units, notional = _buy_against_asks(asks, ceiling, p.capital)
                     if units > 0:
                         pos[sym] = {
                             "units": units, "buy_notional": notional,
-                            "entry_time": t, "entry_ytm": y,
-                            "entry_curve": curve_y, "entry_z": z_bps,
+                            "entry_date": date_int, "entry_time": t,
+                            "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_bps,
                         }
             else:
-                # Exit: z-spread has reverted to/below exit threshold.
                 if z_bps <= p.exit_bps:
                     bids = _ladder(sd.cur, "bid")
                     if not bids:
@@ -261,13 +289,13 @@ def _simulate_bond_day(date_int: int,
                     floor = bids[-1][0]
                     units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
                     if units > 0:
-                        _close(sym, sd, units, notional, t, z_bps, "signal")
+                        _close(sym, units, notional, t, z_bps, "signal")
 
-    # ── Force-close any still-open positions at each series' last snapshot ──
+    # force_eod: close all positions at each series' last snapshot of the day.
     if p.force_eod:
         for sym in list(pos.keys()):
-            sd = day_series[sym]
-            if not sd.snaps:
+            sd = day_series.get(sym)
+            if sd is None or not sd.snaps:
                 continue
             last = sd.snaps[-1]
             bids = _ladder(last, "bid")
@@ -279,10 +307,10 @@ def _simulate_bond_day(date_int: int,
             if units < held:
                 notional += (held - units) * bids[-1][0]
                 units = held
-            # exit z unknown at eod — report 0
-            _close(sym, sd, units, notional, t, 0.0, "eod")
+            _close(sym, units, notional, t, 0.0, "eod")
 
-    return trades
+    # Return (closed trades today, positions that survive into tomorrow)
+    return trades, pos
 
 
 # --------------------------------------------------------------------------- #
@@ -294,7 +322,7 @@ def _summarize(trades: list[BondTrade], buy_fee: float = BUY_COST) -> dict:
         return {"trade_count": 0, "win_count": 0, "loss_count": 0, "win_rate": 0,
                 "total_net_pnl": 0, "total_invested": 0, "total_return_pct": 0,
                 "avg_net_pct": 0, "best_pct": 0, "worst_pct": 0, "eod_count": 0,
-                "avg_hold_min": 0, "total_fees": 0, "avg_entry_z": 0}
+                "overnight_count": 0, "avg_hold_min": 0, "total_fees": 0, "avg_entry_z": 0}
     invested = sum(t.buy_notional * (1 + buy_fee) for t in trades)
     net = sum(t.net_pnl for t in trades)
     wins = [t for t in trades if t.net_pnl > 0]
@@ -309,7 +337,8 @@ def _summarize(trades: list[BondTrade], buy_fee: float = BUY_COST) -> dict:
         "avg_net_pct": round(sum(t.net_pct for t in trades) / len(trades), 4),
         "best_pct": round(max(t.net_pct for t in trades), 4),
         "worst_pct": round(min(t.net_pct for t in trades), 4),
-        "eod_count": sum(1 for t in trades if t.exit_reason == "eod"),
+        "eod_count": sum(1 for t in trades if t.exit_reason in ("eod", "final")),
+        "overnight_count": sum(1 for t in trades if t.exit_date != t.date),
         "avg_hold_min": round(sum(t.hold_secs for t in trades) / len(trades) / 60, 1),
         "total_fees": round(sum(t.fees for t in trades), 0),
         "avg_entry_z": round(sum(t.entry_z_bps for t in trades) / len(trades), 1),
@@ -396,20 +425,53 @@ def _load_day_cache(db, universe, meta,
 
 
 def _simulate_cache(dates, cache, p: BondBacktestParams):
-    """Run the simulation over a pre-loaded day cache. Returns (trades, tested, skipped)."""
+    """Run the simulation over a pre-loaded day cache. Returns (trades, tested, skipped).
+
+    When force_eod=False positions are carried overnight: carry_pos threads
+    through every date.  Any position still open after the last date is
+    force-closed at its last available OB snapshot (exit_reason='final').
+    """
     trades: list[BondTrade] = []
     tested = skipped = 0
+    carry_pos: dict = {}        # positions held across nights
+    last_snap: dict = {}        # {sym: (face, dtm, snap)} for end-of-run forced close
+
     for date_int in dates:
         rows = cache.get(date_int)
         if not rows:
             continue
+        # Update last known snapshot for every symbol seen today.
+        for sym, face, dtm, snaps in rows:
+            if snaps:
+                last_snap[sym] = (face, dtm, snaps[-1])
         if len(rows) < p.min_curve_points:
             skipped += 1
+            # Positions carry over silently on skipped days (no curve → no action).
             continue
         day_series = {sym: _SeriesDay(sym, face, dtm, snaps)
                       for (sym, face, dtm, snaps) in rows}
         tested += 1
-        trades.extend(_simulate_bond_day(date_int, day_series, p))
+        new_trades, carry_pos = _simulate_bond_day(date_int, day_series, p, carry_pos)
+        trades.extend(new_trades)
+
+    # End-of-backtest: force-close any remaining open positions.
+    if carry_pos:
+        final_date = dates[-1] if dates else 0
+        for sym, st in list(carry_pos.items()):
+            if sym not in last_snap:
+                continue
+            _face, _dtm, snap = last_snap[sym]
+            bids = _ladder(snap, "bid")
+            if not bids:
+                continue
+            t = int(snap.get("time", 0))
+            held = st["units"]
+            units, notional = _sell_against_bids(bids, 0, held)
+            if units < held:
+                notional += (held - units) * bids[-1][0]
+                units = held
+            _record_close(sym, st, units, notional, t, final_date, 0.0, "final", p, trades)
+
     return trades, tested, skipped
 
 
@@ -470,7 +532,7 @@ def _risk_metrics(trades: list[BondTrade], buy_fee: float = BUY_COST) -> dict:
     gross_w = sum(t.net_pnl for t in trades if t.net_pnl > 0)
     gross_l = abs(sum(t.net_pnl for t in trades if t.net_pnl < 0))
     pf = gross_w / gross_l if gross_l > 0 else (99.0 if gross_w > 0 else 0.0)
-    ordered = sorted(trades, key=lambda x: (x.date, x.exit_time))
+    ordered = sorted(trades, key=lambda x: (x.exit_date, x.exit_time))
     cum = peak = max_dd = 0.0
     for t in ordered:
         cum += t.net_pnl
