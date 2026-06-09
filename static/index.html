@@ -4669,12 +4669,11 @@ function renderBondBacktest(res) {
     const multiDay = t.exit_date && t.exit_date !== t.date;
     const entryJ = gregIntToJalaliStr(t.date);
     const exitJ  = gregIntToJalaliStr(t.exit_date || t.date);
-    const exitDateTd = multiDay
-      ? `<td style="color:var(--accent)">${exitJ}</td>`
-      : `<td style="color:var(--muted)">—</td>`;
-    // Entry/exit price cells are hover-able: pop the OB at that instant.
-    const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}"      data-time="${t.entry_time}" data-side="buy`;
-    const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.exit_date||t.date}" data-time="${t.exit_time}"  data-side="sell`;
+    const exitDateTd = `<td style="color:${multiDay ? 'var(--accent)' : 'var(--sub)'}">${exitJ}</td>`;
+    // Entry/exit price cells are hover-able: pop the OB at that instant; the
+    // executed price is carried in data-price so the popup can mark it.
+    const ec = `bt-pc" data-sym="${t.symbol}" data-date="${t.date}"      data-time="${t.entry_time}" data-side="buy"  data-price="${t.entry_price||0}`;
+    const xc = `bt-pc" data-sym="${t.symbol}" data-date="${t.exit_date||t.date}" data-time="${t.exit_time}"  data-side="sell" data-price="${t.exit_price||0}`;
     const ic = insCodes[t.symbol];
     const tseTd = ic
       ? `<td><a class="tse-link" href="https://www.tsetmc.com/instInfo/${ic}" target="_blank" rel="noopener" title="مشاهده در TSETMC">↗</a></td>`
@@ -4715,6 +4714,7 @@ async function showBtOb(cell, ev) {
   _btObCell = cell;
   const sym = cell.dataset.sym, date = cell.dataset.date;
   const time = +cell.dataset.time, side = cell.dataset.side;
+  const execPrice = +cell.dataset.price || 0;
   const pop = document.getElementById('bt-ob-pop');
   pop.style.display = 'block';
   pop.innerHTML = '<div class="bt-pop-h">در حال بارگذاری اردربوک ...</div>';
@@ -4739,7 +4739,7 @@ async function showBtOb(cell, ev) {
   const sideLbl = side === 'buy' ? 'خرید ← از صف فروش' : 'فروش ← از صف خرید';
   const col = side === 'buy' ? 'var(--green)' : 'var(--red)';
   pop.innerHTML = snap
-    ? `<div class="bt-pop-h" style="color:${col}">${sym} · ${sideLbl}</div>` + bondOBTableHtml(snap, side)
+    ? `<div class="bt-pop-h" style="color:${col}">${sym} · ${sideLbl}</div>` + bondOBTableHtml(snap, side, execPrice)
     : `<div class="bt-pop-h">${sym} — اردربوکی برای این لحظه ثبت نشده</div>`;
   moveBtOb(ev);
 }
@@ -5030,26 +5030,53 @@ async function loadBondOBDate(date) {
 // Build the bid/ask ladder HTML for one OB snapshot.
 // *highlight* = 'buy' emphasises the ask side (where a buy executes),
 //              'sell' emphasises the bid side; null = no emphasis.
-function bondOBTableHtml(snap, highlight) {
+// Index of the ladder level whose price is nearest to `price` (or -1).
+function _nearestLvl(arr, price) {
+  let bi = -1, bd = Infinity;
+  for (let i = 0; i < arr.length; i++) {
+    const d = Math.abs(arr[i].p - price);
+    if (d < bd) { bd = d; bi = i; }
+  }
+  return bi;
+}
+
+function bondOBTableHtml(snap, highlight, execPrice) {
   const fmt = n => (n || 0).toLocaleString('en-US');
-  const bidHL = highlight === 'sell' ? ' bd-hl' : '';
-  const askHL = highlight === 'buy'  ? ' bd-hl' : '';
-  let rows = '';
+  // Compact each side: drop empty levels so best bid/ask sit at the top row
+  // (اخزا books are often thin and leave higher levels zero in storage).
+  const bids = [], asks = [];
   for (let i = 1; i <= 5; i++) {
     const bp = snap[`b${i}p`] || 0, bv = snap[`b${i}v`] || 0;
     const ap = snap[`a${i}p`] || 0, av = snap[`a${i}v`] || 0;
-    if (!bp && !ap) continue;
-    const spread = (ap > 0 && bp > 0) ? ((ap - bp) / bp * 100).toFixed(2) + '%' : '—';
+    if (bp > 0) bids.push({ p: bp, v: bv });
+    if (ap > 0) asks.push({ p: ap, v: av });
+  }
+  // Mark the level matching the backtest's executed price on the traded side.
+  const ep = +execPrice || 0;
+  let hlBid = -1, hlAsk = -1;
+  if (ep > 0 && highlight === 'sell') hlBid = _nearestLvl(bids, ep);
+  if (ep > 0 && highlight === 'buy')  hlAsk = _nearestLvl(asks, ep);
+
+  const nrows = Math.max(bids.length, asks.length);
+  let rows = '';
+  for (let i = 0; i < nrows; i++) {
+    const b = bids[i], a = asks[i];
+    const spread = (i === 0 && a && b) ? ((a.p - b.p) / b.p * 100).toFixed(2) + '%' : '';
+    const bcls = 'bd-bid' + (i === hlBid ? ' bd-hl' : '');
+    const acls = 'bd-ask' + (i === hlAsk ? ' bd-hl' : '');
     rows += `<tr>
-      <td class="bd-bid${bidHL}">${fmt(bv)}</td>
-      <td class="bd-bid${bidHL}"><b>${fmt(bp)}</b></td>
-      <td style="color:var(--muted);font-size:9px">${i === 1 ? spread : ''}</td>
-      <td class="bd-ask${askHL}"><b>${fmt(ap)}</b></td>
-      <td class="bd-ask${askHL}">${fmt(av)}</td>
+      <td class="${bcls}">${b ? fmt(b.v) : ''}</td>
+      <td class="${bcls}">${b ? '<b>' + fmt(b.p) + '</b>' : ''}</td>
+      <td style="color:var(--muted);font-size:9px">${spread}</td>
+      <td class="${acls}">${a ? '<b>' + fmt(a.p) + '</b>' : ''}</td>
+      <td class="${acls}">${a ? fmt(a.v) : ''}</td>
     </tr>`;
   }
   const t = snap.time ? String(snap.time).padStart(6, '0').replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2:$3') : '';
-  return `<div style="font-size:9px;color:var(--muted);margin-bottom:4px">زمان: ${t}</div>
+  const execLine = ep > 0
+    ? `<div style="font-size:10px;margin-bottom:3px">قیمت اجرای بک‌تست: <b>${fmt(ep)}</b></div>`
+    : '';
+  return `<div style="font-size:9px;color:var(--muted);margin-bottom:4px">زمان: ${t}</div>${execLine}
      <table class="bd-ob-table">
        <thead><tr>
          <th>حجم خرید</th><th>قیمت خرید</th><th>اسپرد</th><th>قیمت فروش</th><th>حجم فروش</th>
