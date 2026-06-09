@@ -1230,6 +1230,27 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .yc-card .ycv.pos { color: var(--green); }
 .yc-card .ycv.neg { color: var(--red); }
 
+/* Whole-period capital report */
+#bbt-capital {
+  background: linear-gradient(180deg, var(--surf2), var(--surf));
+  border: 1px solid var(--brd2); border-radius: 10px;
+  padding: 12px 14px; margin: 10px 0;
+}
+.cap-title { font-size: var(--fs-md); font-weight: 700; margin-bottom: 10px; color: var(--txt); }
+.cap-grid  { display: flex; gap: 10px; flex-wrap: wrap; }
+.cap-card  {
+  flex: 1 1 150px; min-width: 150px; background: var(--bg);
+  border: 1px solid var(--brd); border-radius: 8px; padding: 9px 12px;
+}
+.cap-card .cap-k   { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+.cap-card .cap-v   { font-size: var(--fs-lg); font-weight: 700;
+                     font-variant-numeric: tabular-nums; }
+.cap-card .cap-v.pos { color: var(--green); }
+.cap-card .cap-v.neg { color: var(--red); }
+.cap-card .cap-sub { font-size: 10px; color: var(--sub); margin-top: 2px;
+                     font-variant-numeric: tabular-nums; }
+.cap-note { font-size: 10px; color: var(--yellow); margin-top: 8px; }
+
 /* Bond table */
 #bond-table-wrap { flex: 1; overflow: auto; }
 #bond-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
@@ -1772,8 +1793,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             <option value="zspread">z-spread (بازگشت به منحنی)</option>
             <option value="outlier">سفارش پرت (Outlier)</option>
           </select></div>
-        <div class="bbt-field"><label>سرمایه (ریال)</label>
-          <input id="bbt-capital" type="number" value="1000000000" step="100000000"></div>
+        <div class="bbt-field"><label>سقف هر پوزیشن (ریال)</label>
+          <input id="bbt-capital" type="number" value="1000000000" step="100000000"
+                 title="حداکثر مبلغ قابل تخصیص به یک پوزیشن (سقف مطلق هر نماد)"></div>
+        <div class="bbt-field"><label>کل سرمایه پرتفوی (ریال)</label>
+          <input id="bbt-totalcap" type="number" value="0" step="1000000000" min="0"
+                 title="مدیریت سرمایه: یک استخر نقدینگی مشترک. ۰ = خاموش (هر پوزیشن مستقل با سقف بالا). >۰ = خریدها از این استخر برداشت و فروش‌ها به آن بازگردانده می‌شوند و موتور بیش از موجودی نمی‌تواند خرید کند."></div>
+        <div class="bbt-field"><label>حداکثر سهم هر پوزیشن (٪ کل)</label>
+          <input id="bbt-maxpos" type="number" value="100" min="1" max="100" step="5"
+                 title="مدیریت سرمایه: حداکثر درصدی از کل سرمایه که به یک پوزیشن تخصیص می‌یابد. فقط وقتی «کل سرمایه پرتفوی» بزرگ‌تر از صفر باشد اعمال می‌شود."></div>
         <div class="bbt-field"><label>ورود ≥ (bps)</label>
           <input id="bbt-entry" type="number" value="50" step="5"></div>
         <div class="bbt-field"><label>خروج ≤ (bps)</label>
@@ -1830,6 +1858,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <button class="scan-btn" id="bbt-run" onclick="bondBacktest()">🧪 اجرای بک‌تست</button>
       </div>
       <div id="bbt-opt" style="display:none"></div>
+      <div id="bbt-capital" style="display:none"></div>
       <div id="bbt-cards"></div>
       <div id="bbt-table-wrap">
         <table id="bbt-table">
@@ -4452,6 +4481,9 @@ async function bondBacktest() {
     // Signal-exit guard: -1 disables it; otherwise the min net return (bps).
     min_exit_profit_bps: document.getElementById('bbt-noloss').checked
       ? (document.getElementById('bbt-minexit').value || '0') : '-1',
+    // Capital management: shared cash pool (0 = off) + per-position cap (% → fraction).
+    total_capital:    document.getElementById('bbt-totalcap').value || '0',
+    max_position_pct: ((+document.getElementById('bbt-maxpos').value || 100) / 100).toString(),
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4474,6 +4506,7 @@ let bondOptTimer = null;
 
 async function bondOptimize() {
   const btn = document.getElementById('bbt-opt-btn');
+  document.getElementById('bbt-capital').style.display = 'none';  // backtest-only panel
   const body = {
     strategy:     document.getElementById('bbt-strategy').value || 'zspread',
     capital:      +document.getElementById('bbt-capital').value || 1e9,
@@ -4487,6 +4520,8 @@ async function bondOptimize() {
     walk_forward: '1',
     min_exit_profit_bps: document.getElementById('bbt-noloss').checked
       ? (document.getElementById('bbt-minexit').value || '0') : '-1',
+    total_capital:    +document.getElementById('bbt-totalcap').value || 0,
+    max_position_pct: (+document.getElementById('bbt-maxpos').value || 100) / 100,
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
@@ -4668,6 +4703,8 @@ function renderBondBacktest(res) {
     + card('میانگین مدت', `${s.avg_hold_min||0} دقیقه`)
     + card('کارمزد کل', fmt(s.total_fees));
 
+  renderBondCapital(res.capital || {});
+
   btObCache = {};   // results changed — drop any cached OB snapshots
   const insCodes = res.ins_codes || {};
   const tb = document.getElementById('bbt-tbody');
@@ -4709,6 +4746,40 @@ function renderBondBacktest(res) {
   tb.innerHTML = trs || '<tr><td colspan="15" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
   attachSort('bbt-table');
   attachBtObHover();
+}
+
+// ── Whole-period capital view: start → end, MWRR, peak deployed ─────────────
+function renderBondCapital(c) {
+  const wrap = document.getElementById('bbt-capital');
+  if (!c || !c.period_days) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  const fmt  = n => Math.round(n||0).toLocaleString('en-US');
+  const sign = n => (n||0) >= 0 ? 'pos' : 'neg';
+  const chgCls = sign(c.capital_change);
+  const card = (k, v, cls, sub) =>
+    `<div class="cap-card"><div class="cap-k">${k}</div>`
+    + `<div class="cap-v ${cls||''}">${v}</div>`
+    + (sub ? `<div class="cap-sub">${sub}</div>` : '') + `</div>`;
+  const base = c.capital_managed
+    ? 'کل سرمایه پرتفوی'
+    : 'اوج سرمایه درگیر (مدیریت سرمایه خاموش)';
+  // Per-period (non-annualised) money-weighted return for context.
+  const periodPct = c.capital_change_pct;
+  wrap.innerHTML =
+    `<div class="cap-title">📊 تغییر سرمایه در کل بازه (${c.period_days} روز)</div>`
+  + `<div class="cap-grid">`
+  +   card(base, fmt(c.total_capital) + ' ﷼')
+  +   card('سرمایه پایان دوره', fmt(c.ending_capital) + ' ﷼', chgCls)
+  +   card('تغییر سرمایه', (c.capital_change>=0?'+':'') + fmt(c.capital_change) + ' ﷼', chgCls,
+           (c.capital_change_pct>=0?'+':'') + c.capital_change_pct + '٪')
+  +   card('بازده روی کل سرمایه', (periodPct>=0?'+':'') + periodPct + '٪', sign(periodPct))
+  +   card('MWRR (سالانه)', (c.mwrr_annual_pct>=0?'+':'') + c.mwrr_annual_pct + '٪', sign(c.mwrr_annual_pct),
+           'بازده پول‌وزنی (XIRR)')
+  +   card('اوج سرمایه درگیر', fmt(c.peak_deployed) + ' ﷼')
+  + `</div>`
+  + (c.mwrr_annual_pct === 0 && c.period_days <= 1
+       ? `<div class="cap-note">MWRR سالانه برای معاملات تک‌روزه تعریف‌نشده است؛ برای محاسبه‌ی معنادار، بازه‌ی چندروزه انتخاب کنید.</div>`
+       : '');
 }
 
 // ── Backtest hover OB popup: show the order-book at a trade's exact moment ──

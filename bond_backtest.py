@@ -92,6 +92,15 @@ class BondBacktestParams:
                                      # bps; otherwise HOLD for a better price.
                                      # 0 = break-even (never sell a signal at a loss).
                                      # Forced exits (eod/final) are never guarded.
+    total_capital: float = 0.0       # portfolio cash management. 0 = OFF (legacy:
+                                     # every position independently capped by
+                                     # `capital`, unlimited concurrent, bit-exact).
+                                     # >0 = one shared cash pool of this size: buys
+                                     # consume cash, sells return it, and the engine
+                                     # can't deploy more than it holds.
+    max_position_pct: float = 1.0    # money-management: max fraction of total_capital
+                                     # a single position may deploy (0..1). Only used
+                                     # when total_capital > 0.
 
 
 @dataclass
@@ -115,6 +124,8 @@ class BondTrade:
     net_pct: float
     hold_secs: int
     exit_reason: str          # "signal" | "eod" | "final"
+    cash_out: float = 0.0     # cash actually spent at entry (notional + buy fee)
+    cash_in: float = 0.0      # cash actually received at exit (notional − sell fee)
 
 
 # --------------------------------------------------------------------------- #
@@ -230,14 +241,20 @@ def _record_close(sym: str, st: dict,
                   t_exit: int, exit_date: int,
                   exit_z: float, reason: str,
                   p: "BondBacktestParams",
-                  trades_out: list) -> None:
-    """Build a BondTrade and mutate the position state dict in-place."""
+                  trades_out: list,
+                  portfolio: dict | None = None) -> None:
+    """Build a BondTrade and mutate the position state dict in-place.
+
+    *portfolio* (when given) is the shared cash ledger: this close credits it
+    with the realised proceeds (sell notional − sell fee).
+    """
     frac = exit_units / st["units"] if st["units"] else 0
     cost_part = st["buy_notional"] * frac
     buy_fee  = cost_part * p.buy_fee
     sell_fee = sell_notional * p.sell_fee
     invested = cost_part + buy_fee
-    net = (sell_notional - sell_fee) - invested
+    cash_in  = sell_notional - sell_fee
+    net = cash_in - invested
     hold_secs = _calc_hold_secs(st["entry_date"], st["entry_time"], exit_date, t_exit)
     trades_out.append(BondTrade(
         symbol=sym,
@@ -259,9 +276,13 @@ def _record_close(sym: str, st: dict,
         net_pct=round(net / invested * 100, 4) if invested else 0,
         hold_secs=hold_secs,
         exit_reason=reason,
+        cash_out=round(invested, 0),
+        cash_in=round(cash_in, 0),
     ))
     st["units"] -= exit_units
     st["buy_notional"] -= cost_part
+    if portfolio is not None:
+        portfolio["cash"] += cash_in
 
 
 def _exit_clears_min(st: dict, exit_units: int, sell_notional: float,
@@ -288,6 +309,27 @@ def _exit_clears_min(st: dict, exit_units: int, sell_notional: float,
     return (net / invested) * 10_000.0 >= thr
 
 
+def _buy_budget(p: "BondBacktestParams", portfolio: dict | None,
+                sym: str, pos: dict) -> float:
+    """Max *notional* (principal, excl. buy fee) this buy may spend.
+
+    Legacy (portfolio is None): the per-position cap ``capital`` minus whatever
+    is already deployed in this symbol — exactly the old behaviour, so results
+    stay bit-identical when capital management is off.
+
+    Portfolio mode: the per-position cap is the tighter of ``capital`` and
+    ``total_capital × max_position_pct``; on top of that, the buy is bounded by
+    the cash actually on hand (reserving the buy fee so cash never goes
+    negative).
+    """
+    cur = pos[sym]["buy_notional"] if sym in pos else 0.0
+    if portfolio is None:
+        return p.capital - cur
+    cap = min(p.capital, p.total_capital * p.max_position_pct) - cur
+    cash_cap = portfolio["cash"] / (1.0 + p.buy_fee)   # leave room for the fee
+    return min(cap, cash_cap)
+
+
 # --------------------------------------------------------------------------- #
 #  Outlier-order strategy                                                       #
 # --------------------------------------------------------------------------- #
@@ -303,7 +345,7 @@ def _exit_clears_min(st: dict, exit_units: int, sell_notional: float,
 # still subject to force_eod / end-of-range final close.
 
 def _outlier_step(sym, sd, curve_y, t, date_int, pos,
-                  entry_bps, exit_bps, capital, close_fn, p):
+                  entry_bps, exit_bps, capital, close_fn, p, portfolio=None):
     face, dtm, snap = sd.face_value, sd.dtm, sd.cur
 
     # ── SELL first: realise rich-bid opportunities on an existing holding ──
@@ -329,12 +371,11 @@ def _outlier_step(sym, sd, curve_y, t, date_int, pos,
                 ez = (ytm_zero_coupon(ep, face, dtm) - curve_y) * 10_000.0
                 close_fn(sym, su, sn, t, ez, "outlier")
 
-    # ── BUY: grab cheap-ask outliers, sized by what's offered (≤ capital) ──
+    # ── BUY: grab cheap-ask outliers, sized by what's offered (≤ budget) ──
     asks = _ladder(snap, "ask")
     if not asks:
         return
-    cur_notional = pos[sym]["buy_notional"] if sym in pos else 0.0
-    budget = capital - cur_notional
+    budget = _buy_budget(p, portfolio, sym, pos)
     if budget <= 0:
         return
     bu = 0
@@ -350,6 +391,8 @@ def _outlier_step(sym, sd, curve_y, t, date_int, pos,
         else:
             break                          # deeper asks are even less cheap
     if bu > 0:
+        if portfolio is not None:
+            portfolio["cash"] -= bn * (1.0 + p.buy_fee)
         if sym in pos:
             pos[sym]["units"] += bu
             pos[sym]["buy_notional"] += bn
@@ -372,10 +415,12 @@ def _simulate_bond_day(date_int: int,
                        day_series: dict[str, _SeriesDay],
                        p: BondBacktestParams,
                        carry_pos: dict | None = None,
+                       portfolio: dict | None = None,
                        ) -> tuple[list[BondTrade], dict]:
     """Cross-sectional z-spread state machine for one trading date.
 
     *carry_pos* maps symbol → position dict carried forward from a prior day.
+    *portfolio* (when given) is the shared cash ledger threaded across days.
     Returns (trades_closed_today, positions_still_open_after_today).
     Positions still open are passed as carry_pos into the next day's call.
     """
@@ -408,7 +453,7 @@ def _simulate_bond_day(date_int: int,
                t_exit: int, exit_z: float, reason: str) -> None:
         st = pos[sym]
         _record_close(sym, st, exit_units, sell_notional,
-                      t_exit, date_int, exit_z, reason, p, trades)
+                      t_exit, date_int, exit_z, reason, p, trades, portfolio)
         if st["units"] <= 0:
             pos.pop(sym, None)
 
@@ -458,7 +503,7 @@ def _simulate_bond_day(date_int: int,
 
             if outlier:
                 _outlier_step(sym, sd, curve_y, t, date_int, pos,
-                              entry_bps, exit_bps, capital, _close, p)
+                              entry_bps, exit_bps, capital, _close, p, portfolio)
                 continue
 
             z_bps = (y - curve_y) * 10_000.0
@@ -468,8 +513,13 @@ def _simulate_bond_day(date_int: int,
                     if not asks:
                         continue
                     ceiling = asks[-1][0]
-                    units, notional = _buy_against_asks(asks, ceiling, capital)
+                    budget = _buy_budget(p, portfolio, sym, pos)
+                    if budget <= 0:
+                        continue
+                    units, notional = _buy_against_asks(asks, ceiling, budget)
                     if units > 0:
+                        if portfolio is not None:
+                            portfolio["cash"] -= notional * (1.0 + p.buy_fee)
                         pos[sym] = {
                             "units": units, "buy_notional": notional,
                             "entry_date": date_int, "entry_time": t,
@@ -505,6 +555,112 @@ def _simulate_bond_day(date_int: int,
 
     # Return (closed trades today, positions that survive into tomorrow)
     return trades, pos
+
+
+# --------------------------------------------------------------------------- #
+#  Capital management & money-weighted return                                  #
+# --------------------------------------------------------------------------- #
+
+def _days_between(d0: int, d1: int) -> int:
+    """Calendar days between two YYYYMMDD ints (d1 − d0)."""
+    from datetime import date
+    a = date(d0 // 10000, (d0 % 10000) // 100, d0 % 100)
+    b = date(d1 // 10000, (d1 % 10000) // 100, d1 % 100)
+    return (b - a).days
+
+
+def _xirr(flows: list[tuple[int, float]]) -> float:
+    """Money-weighted annualised return (XIRR) for dated cash flows.
+
+    *flows* = list of (YYYYMMDD, amount); sign convention is investor-cash:
+    money leaving the pocket is negative (a buy), money coming back positive
+    (a sell).  Returns the annual rate r solving  Σ aᵢ·(1+r)^(−daysᵢ/365) = 0,
+    found by robust bisection.  Returns 0.0 when there is no sign change (no
+    well-defined IRR).
+    """
+    if len(flows) < 2:
+        return 0.0
+    base = min(d for d, _ in flows)
+    ts = [(_days_between(base, d) / 365.0, a) for d, a in flows]
+
+    def npv(r: float) -> float:
+        return sum(a / ((1.0 + r) ** y) for y, a in ts)
+
+    lo, hi = -0.9999, 10.0
+    flo, fhi = npv(lo), npv(hi)
+    if flo * fhi > 0:
+        hi = 1_000.0
+        fhi = npv(hi)
+        if flo * fhi > 0:
+            return 0.0
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        fm = npv(mid)
+        if abs(fm) < 1e-7:
+            return mid
+        if flo * fm < 0:
+            hi, fhi = mid, fm
+        else:
+            lo, flo = mid, fm
+    return (lo + hi) / 2.0
+
+
+def _capital_report(trades: list[BondTrade], p: "BondBacktestParams") -> dict:
+    """Whole-period capital view: starting → ending capital, MWRR, peak deployed.
+
+    *MWRR* (money-weighted) is the XIRR of every buy (cash out at entry date)
+    and sell (cash in at exit date) — the dollar- and time-weighted return on
+    capital actually put to work.  *Return on total capital* is the period P&L
+    over the configured ``total_capital`` (or, if capital management is off, over
+    the peak simultaneous deployment, which is the most cash ever at risk).
+    """
+    empty = {
+        "total_capital": round(p.total_capital, 0),
+        "peak_deployed": 0.0, "ending_capital": round(p.total_capital, 0),
+        "capital_change": 0.0, "capital_change_pct": 0.0,
+        "mwrr_annual_pct": 0.0, "return_on_capital_pct": 0.0,
+        "period_days": 0, "capital_managed": p.total_capital > 0,
+    }
+    if not trades:
+        return empty
+
+    net = sum(t.net_pnl for t in trades)
+
+    # Peak simultaneous *deployment* (principal at risk) from the cash-out/-in
+    # timeline.  Release the same principal (cash_out) the position consumed.
+    evts: list[tuple[int, int, float]] = []
+    for t in trades:
+        evts.append((t.date,      t.entry_time, t.cash_out))
+        evts.append((t.exit_date, t.exit_time, -t.cash_out))
+    evts.sort(key=lambda e: (e[0], e[1]))
+    deployed = peak = 0.0
+    for _d, _t, amt in evts:
+        deployed += amt
+        if deployed > peak:
+            peak = deployed
+
+    base = p.total_capital if p.total_capital > 0 else peak
+    flows = []
+    for t in trades:
+        flows.append((t.date,      -t.cash_out))
+        flows.append((t.exit_date,  t.cash_in))
+    mwrr = _xirr(flows)
+
+    d0 = min(t.date for t in trades)
+    d1 = max(t.exit_date for t in trades)
+    period_days = max(_days_between(d0, d1), 1)
+
+    return {
+        "total_capital":         round(base, 0),
+        "peak_deployed":         round(peak, 0),
+        "ending_capital":        round(base + net, 0),
+        "capital_change":        round(net, 0),
+        "capital_change_pct":    round(net / base * 100, 4) if base else 0.0,
+        "return_on_capital_pct": round(net / base * 100, 4) if base else 0.0,
+        "mwrr_annual_pct":       round(mwrr * 100, 4),
+        "period_days":           period_days,
+        "capital_managed":       p.total_capital > 0,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -629,6 +785,9 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
     tested = skipped = 0
     carry_pos: dict = {}        # positions held across nights
     last_snap: dict = {}        # {sym: (face, dtm, snap)} for end-of-run forced close
+    # Shared cash ledger — only active when capital management is on (>0); else
+    # None preserves the legacy per-position-cap behaviour bit-for-bit.
+    portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
 
     for date_int in dates:
         rows = cache.get(date_int)
@@ -645,7 +804,8 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
         day_series = {sym: _SeriesDay(sym, face, dtm, snaps)
                       for (sym, face, dtm, snaps) in rows}
         tested += 1
-        new_trades, carry_pos = _simulate_bond_day(date_int, day_series, p, carry_pos)
+        new_trades, carry_pos = _simulate_bond_day(
+            date_int, day_series, p, carry_pos, portfolio)
         trades.extend(new_trades)
 
     # End-of-backtest: force-close any remaining open positions.
@@ -669,7 +829,8 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
             if units < held:
                 notional += (held - units) * bids[-1][0]
                 units = held
-            _record_close(sym, st, units, notional, t, exit_d, 0.0, "final", p, trades)
+            _record_close(sym, st, units, notional, t, exit_d, 0.0, "final",
+                          p, trades, portfolio)
 
     return trades, tested, skipped
 
@@ -788,9 +949,11 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
     force_eod = p.force_eod
     trades: list[BondTrade] = []
     pos: dict[str, dict] = {}
+    portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
 
     def _close(sym, st, units, notional, t, exit_date, z, reason):
-        _record_close(sym, st, units, notional, t, exit_date, z, reason, p, trades)
+        _record_close(sym, st, units, notional, t, exit_date, z, reason,
+                      p, trades, portfolio)
         if st["units"] <= 0:
             pos.pop(sym, None)
 
@@ -805,8 +968,13 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                         asks = _ladder(snap, "ask")
                         if not asks:
                             continue
-                        units, notional = _buy_against_asks(asks, asks[-1][0], capital)
+                        budget = _buy_budget(p, portfolio, sym, pos)
+                        if budget <= 0:
+                            continue
+                        units, notional = _buy_against_asks(asks, asks[-1][0], budget)
                         if units > 0:
+                            if portfolio is not None:
+                                portfolio["cash"] -= notional * (1.0 + p.buy_fee)
                             pos[sym] = {
                                 "units": units, "buy_notional": notional,
                                 "entry_date": date_int, "entry_time": t,
@@ -856,7 +1024,8 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
             if units < held:
                 notional += (held - units) * bids[-1][0]
                 units = held
-            _record_close(sym, st, units, notional, t, exit_d, 0.0, "final", p, trades)
+            _record_close(sym, st, units, notional, t, exit_d, 0.0, "final",
+                          p, trades, portfolio)
 
     return trades
 
@@ -891,6 +1060,7 @@ def run_bond_backtest(db, symbols: list[str] | None = None,
         "days_skipped": days_skipped,
         "trades": [asdict(t) for t in all_trades],
         "summary": _summarize(all_trades, p.buy_fee),
+        "capital": _capital_report(all_trades, p),
     }
 
 
@@ -1017,7 +1187,9 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             include_matured=base.include_matured,
             buy_fee=base.buy_fee, sell_fee=base.sell_fee,
             strategy=base.strategy,
-            min_exit_profit_bps=base.min_exit_profit_bps)
+            min_exit_profit_bps=base.min_exit_profit_bps,
+            total_capital=base.total_capital,
+            max_position_pct=base.max_position_pct)
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.
