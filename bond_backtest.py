@@ -113,6 +113,16 @@ class BondBacktestParams:
     max_position_pct: float = 0.5    # money-management: max fraction of total_capital
                                      # a single position may deploy (0..1). Only used
                                      # when total_capital > 0.
+    entry_max_bps: float = 150.0     # signal sanity band: only ENTER when the entry
+                                     # z-spread is in [entry_bps, entry_max_bps]. A
+                                     # z far above the curve is not "cheap", it is a
+                                     # mispriced/garbage input (bad maturity date,
+                                     # stale quote, curve misfit) that never reverts
+                                     # → it is rejected instead of bought. 0/neg = off.
+    curve_trim_bps: float = 150.0    # robust curve fit: drop any series further than
+                                     # this off the first-pass curve, then re-fit, so
+                                     # one broken series can't distort the curve for
+                                     # everyone. 0/neg = legacy single-pass fit.
 
 
 @dataclass
@@ -259,6 +269,56 @@ def _fit_from_sums(n, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree):
         return ((sy * sx2 - sxy * sx) / denom,
                 (n * sxy - sx * sy) / denom, 0.0)
     return (c[0], c[1], c[2])
+
+
+def _fit_curve_from_series(series_list, degree: int, min_pts: int,
+                           trim_bps: float = 0.0):
+    """Fit the yield curve across a tick's series (returns (a0,a1,a2) or None).
+
+    With *trim_bps* > 0 the fit is made ROBUST: an initial least-squares curve is
+    fit over all priced series, then any series sitting further than *trim_bps*
+    off that curve is treated as an outlier and dropped, and the curve is re-fit
+    on the survivors.  This stops a single broken series (e.g. one with a wrong
+    maturity_date, so its YTM is systematically off) from dragging the whole
+    curve toward itself and manufacturing false signals for everyone else.
+
+    trim_bps == 0 is bit-identical to the original single least-squares fit, so
+    leaving it off preserves legacy results exactly.
+    """
+    n = 0
+    sx = sx2 = sx3 = sx4 = sy = sxy = sx2y = 0.0
+    for sd in series_list:
+        y = sd._ytm
+        if y > 0.0:
+            x, x2 = sd.x, sd.x2
+            n += 1
+            sx += x; sx2 += x2; sx3 += sd.x3; sx4 += sd.x4
+            sy += y; sxy += x * y; sx2y += x2 * y
+    if n < min_pts:
+        return None
+    coeffs = _fit_from_sums(n, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree)
+    if coeffs is None or not (trim_bps and trim_bps > 0.0):
+        return coeffs
+
+    # ── Robust second pass: drop |residual| > trim_bps and re-fit ──
+    a0, a1, a2 = coeffs
+    trim = trim_bps / 10_000.0
+    n2 = 0
+    sx = sx2 = sx3 = sx4 = sy = sxy = sx2y = 0.0
+    for sd in series_list:
+        y = sd._ytm
+        if y > 0.0:
+            cy = a0 + a1 * sd.x + a2 * sd.x2
+            if abs(y - cy) <= trim:
+                x, x2 = sd.x, sd.x2
+                n2 += 1
+                sx += x; sx2 += x2; sx3 += sd.x3; sx4 += sd.x4
+                sy += y; sxy += x * y; sx2y += x2 * y
+    if n2 >= min_pts and n2 < n:
+        c2 = _fit_from_sums(n2, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree)
+        if c2 is not None:
+            return c2
+    return coeffs
 
 
 # --------------------------------------------------------------------------- #
@@ -419,8 +479,11 @@ def _outlier_step(sym, sd, curve_y, t, date_int, pos,
         return
     bu = 0
     bn = 0.0
+    emax = p.entry_max_bps
     for price, vol in asks:                # best-first = ascending price
         z = (ytm_zero_coupon(price, face, dtm) - curve_y) * 10_000.0
+        if emax > 0.0 and z > emax:        # implausibly cheap → mispriced, skip
+            continue                       # this level; deeper asks are less cheap
         if z >= entry_bps:                 # ask is cheap vs fair → lift it
             affordable = int((budget - bn) // price)
             take = vol if vol < affordable else affordable
@@ -506,6 +569,8 @@ def _simulate_bond_day(date_int: int,
     capital   = p.capital
     outlier   = (p.strategy == "outlier")
     exec_mode = (p.signal_price == "exec")
+    trim_bps  = p.curve_trim_bps
+    entry_max = p.entry_max_bps
 
     for t in timeline:
         # Advance cursors; track whether any series' YTM actually moved.
@@ -518,19 +583,8 @@ def _simulate_bond_day(date_int: int,
         if not changed:
             continue
 
-        # Build sufficient statistics in one pass (no pow / ** in the loop).
-        n = 0
-        sx = sx2 = sx3 = sx4 = sy = sxy = sx2y = 0.0
-        for sd in series_list:
-            y = sd._ytm
-            if y > 0.0:
-                x, x2 = sd.x, sd.x2
-                n += 1
-                sx += x; sx2 += x2; sx3 += sd.x3; sx4 += sd.x4
-                sy += y; sxy += x * y; sx2y += x2 * y
-        if n < min_pts:
-            continue
-        coeffs = _fit_from_sums(n, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree)
+        # Fit the (optionally robust) yield curve across all priced series.
+        coeffs = _fit_curve_from_series(series_list, degree, min_pts, trim_bps)
         if coeffs is None:
             continue
         a0, a1, a2 = coeffs
@@ -556,6 +610,10 @@ def _simulate_bond_day(date_int: int,
                     z_sig = (ya - curve_y) * 10_000.0
                 else:
                     z_sig = (y - curve_y) * 10_000.0
+                # Sanity band: a z far above the curve is a mispriced input, not
+                # an opportunity — reject it instead of buying a guaranteed loser.
+                if entry_max > 0.0 and z_sig > entry_max:
+                    continue
                 if z_sig >= entry_bps:
                     asks = _ladder(sd.cur, "ask")
                     if not asks:
@@ -919,7 +977,7 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
 # dominant work from O(combos × ticks × series) to O(groups × ticks × series).
 
 def _day_events(date_int: int, day_series: dict, degree: int,
-                min_pts: int, step: int):
+                min_pts: int, step: int, trim_bps: float = 0.0):
     """Emit the per-tick z-spread decision stream for one day (no buy/sell).
 
     Returns (events, eod_snaps) where events is a list of
@@ -956,18 +1014,7 @@ def _day_events(date_int: int, day_series: dict, degree: int,
                 changed = True
         if not changed:
             continue
-        n = 0
-        sx = sx2 = sx3 = sx4 = sy = sxy = sx2y = 0.0
-        for sd in series_list:
-            y = sd._ytm
-            if y > 0.0:
-                x, x2 = sd.x, sd.x2
-                n += 1
-                sx += x; sx2 += x2; sx3 += sd.x3; sx4 += sd.x4
-                sy += y; sxy += x * y; sx2y += x2 * y
-        if n < min_pts:
-            continue
-        coeffs = _fit_from_sums(n, sx, sx2, sx3, sx4, sy, sxy, sx2y, degree)
+        coeffs = _fit_curve_from_series(series_list, degree, min_pts, trim_bps)
         if coeffs is None:
             continue
         a0, a1, a2 = coeffs
@@ -992,6 +1039,7 @@ def _build_decision_stream(dates, cache, tmpl: BondBacktestParams):
     """Precompute the day-by-day decision stream for one (degree, min_pts, step)
     group.  Reused across every (entry, exit) combo in that group."""
     degree, min_pts, step = tmpl.degree, tmpl.min_curve_points, tmpl.step_secs
+    trim_bps = tmpl.curve_trim_bps
     days = []
     last_snap: dict = {}
     tested = skipped = 0
@@ -1010,7 +1058,8 @@ def _build_decision_stream(dates, cache, tmpl: BondBacktestParams):
         sig_exec = (tmpl.signal_price == "exec")
         day_series = {sym: _SeriesDay(sym, face, dtm, snaps, sig_exec)
                       for (sym, face, dtm, snaps) in rows}
-        events, eod_snaps = _day_events(date_int, day_series, degree, min_pts, step)
+        events, eod_snaps = _day_events(date_int, day_series, degree, min_pts,
+                                        step, trim_bps)
         days.append({"date": date_int, "skipped": False,
                      "events": events, "eod_snaps": eod_snaps})
     return {"days": days, "last_snap": last_snap,
@@ -1024,6 +1073,7 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
     entry_bps, exit_bps, capital = p.entry_bps, p.exit_bps, p.capital
     force_eod = p.force_eod
     exec_mode = (p.signal_price == "exec")
+    entry_max = p.entry_max_bps
     trades: list[BondTrade] = []
     pos: dict[str, dict] = {}
     portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
@@ -1048,6 +1098,9 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                         z_sig = (ya - curve_y) * 10_000.0
                     else:
                         z_sig = z_bps
+                    # Sanity band: reject implausibly-cheap (mispriced) signals.
+                    if entry_max > 0.0 and z_sig > entry_max:
+                        continue
                     if z_sig >= entry_bps:
                         asks = _ladder(snap, "ask")
                         if not asks:
@@ -1274,7 +1327,7 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                 min_curve_points=int(minpts), step_secs=int(step),
                 force_eod=base.force_eod, include_matured=base.include_matured,
                 buy_fee=base.buy_fee, sell_fee=base.sell_fee,
-                signal_price=base.signal_price)
+                signal_price=base.signal_price, curve_trim_bps=base.curve_trim_bps)
             st = _build_decision_stream(dates, cache, tmpl)
             stream_cache[key] = st
         return st
@@ -1290,7 +1343,9 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             min_exit_profit_bps=base.min_exit_profit_bps,
             total_capital=base.total_capital,
             max_position_pct=base.max_position_pct,
-            signal_price=base.signal_price)
+            signal_price=base.signal_price,
+            entry_max_bps=base.entry_max_bps,
+            curve_trim_bps=base.curve_trim_bps)
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.

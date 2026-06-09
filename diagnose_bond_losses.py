@@ -56,6 +56,8 @@ def diagnose_real() -> int:
     print("=" * 72)
     print("اخزا Z-SPREAD BACKTEST — LOSS DIAGNOSIS  (signal_price=exec)")
     print("=" * 72)
+    print(f"guards              : entry_max={p.entry_max_bps:g}bps  "
+          f"curve_trim={p.curve_trim_bps:g}bps  (0=off)")
     print(f"days tested/skipped : {res['days_tested']}/{res['days_skipped']}")
     print(f"symbols             : {len(res['symbols'])}  {res['symbols']}")
     print(f"trades              : {s['trade_count']}   win-rate {s['win_rate']}%")
