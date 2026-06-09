@@ -123,6 +123,13 @@ class BondBacktestParams:
                                      # this off the first-pass curve, then re-fit, so
                                      # one broken series can't distort the curve for
                                      # everyone. 0/neg = legacy single-pass fit.
+    min_dtm: int = 30                # exclude اخزا with fewer than this many days to
+                                     # maturity from BOTH the curve fit and trading.
+                                     # Near maturity the YTM = (fv/p)^(365/dtm)-1 math
+                                     # explodes (a 7-day bill has exponent 52), so a
+                                     # tiny price wiggle becomes a huge yield swing that
+                                     # is pure noise and distorts the whole curve.
+                                     # 0 = off (include everything down to 1 day).
 
 
 @dataclass
@@ -917,10 +924,17 @@ def _simulate_cache(dates, cache, p: BondBacktestParams):
     # None preserves the legacy per-position-cap behaviour bit-for-bit.
     portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
 
+    min_dtm = p.min_dtm
     for date_int in dates:
         rows = cache.get(date_int)
         if not rows:
             continue
+        # Drop numerically-explosive near-maturity series from the day entirely
+        # (excluded from both the curve fit and trading). r = (sym, face, dtm, snaps).
+        if min_dtm > 0:
+            rows = [r for r in rows if r[2] >= min_dtm]
+            if not rows:
+                continue
         # Update last known snapshot for every symbol seen today.
         for sym, face, dtm, snaps in rows:
             if snaps:
@@ -1040,6 +1054,7 @@ def _build_decision_stream(dates, cache, tmpl: BondBacktestParams):
     group.  Reused across every (entry, exit) combo in that group."""
     degree, min_pts, step = tmpl.degree, tmpl.min_curve_points, tmpl.step_secs
     trim_bps = tmpl.curve_trim_bps
+    min_dtm = tmpl.min_dtm
     days = []
     last_snap: dict = {}
     tested = skipped = 0
@@ -1047,6 +1062,10 @@ def _build_decision_stream(dates, cache, tmpl: BondBacktestParams):
         rows = cache.get(date_int)
         if not rows:
             continue
+        if min_dtm > 0:
+            rows = [r for r in rows if r[2] >= min_dtm]
+            if not rows:
+                continue
         for sym, face, dtm, snaps in rows:
             if snaps:
                 last_snap[sym] = (face, dtm, snaps[-1])
@@ -1327,7 +1346,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                 min_curve_points=int(minpts), step_secs=int(step),
                 force_eod=base.force_eod, include_matured=base.include_matured,
                 buy_fee=base.buy_fee, sell_fee=base.sell_fee,
-                signal_price=base.signal_price, curve_trim_bps=base.curve_trim_bps)
+                signal_price=base.signal_price, curve_trim_bps=base.curve_trim_bps,
+                min_dtm=base.min_dtm)
             st = _build_decision_stream(dates, cache, tmpl)
             stream_cache[key] = st
         return st
@@ -1345,7 +1365,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             max_position_pct=base.max_position_pct,
             signal_price=base.signal_price,
             entry_max_bps=base.entry_max_bps,
-            curve_trim_bps=base.curve_trim_bps)
+            curve_trim_bps=base.curve_trim_bps,
+            min_dtm=base.min_dtm)
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.

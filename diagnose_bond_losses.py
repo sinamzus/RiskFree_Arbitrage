@@ -27,7 +27,17 @@ def default_params() -> BondBacktestParams:
         step_secs=0, force_eod=False, include_matured=True,
         signal_price="exec", min_exit_profit_bps=-1.0,
         total_capital=10_000_000_000.0, max_position_pct=0.5,
+        entry_max_bps=150.0, curve_trim_bps=150.0, min_dtm=30,
     )
+
+
+def _entry_dtm(t: dict, meta: dict) -> int:
+    """Days to maturity at the trade's ENTRY date (0 if unknown)."""
+    from bonds import days_to_maturity
+    m = meta.get(t["symbol"])
+    if not m or not m.get("maturity_date"):
+        return 0
+    return days_to_maturity(m["maturity_date"], t["date"])
 
 
 def _fill_entry_z(t: dict, meta: dict) -> float | None:
@@ -57,7 +67,7 @@ def diagnose_real() -> int:
     print("اخزا Z-SPREAD BACKTEST — LOSS DIAGNOSIS  (signal_price=exec)")
     print("=" * 72)
     print(f"guards              : entry_max={p.entry_max_bps:g}bps  "
-          f"curve_trim={p.curve_trim_bps:g}bps  (0=off)")
+          f"curve_trim={p.curve_trim_bps:g}bps  min_dtm={p.min_dtm}d  (0=off)")
     print(f"days tested/skipped : {res['days_tested']}/{res['days_skipped']}")
     print(f"symbols             : {len(res['symbols'])}  {res['symbols']}")
     print(f"trades              : {s['trade_count']}   win-rate {s['win_rate']}%")
@@ -188,6 +198,15 @@ def diagnose_real() -> int:
     combo = [t for t in trades if t["entry_z_bps"] <= 150 and t["exit_date"] == t["date"]]
     print(f"{'intraday AND entry z ≤ 150 bps':40s} "
           f"{sum(t['net_pnl'] for t in combo):>18,.0f}  ({len(combo)} trades)")
+    for md in (30, 60, 90):
+        kept = [t for t in trades if _entry_dtm(t, meta) >= md]
+        print(f"{'only dtm ≥ ' + str(md) + ' days at entry':40s} "
+              f"{sum(t['net_pnl'] for t in kept):>18,.0f}  ({len(kept)} trades)")
+    # Drop the handful of worst symbols (shows the loss concentration ceiling).
+    worst3 = [s for s, _ in sorted(bysym.items(), key=lambda kv: kv[1]["net"])[:3]]
+    keep = [t for t in trades if t["symbol"] not in worst3]
+    print(f"{'exclude worst 3 series ' + ','.join(worst3):40s}"[:40]
+          + f" {sum(t['net_pnl'] for t in keep):>18,.0f}  ({len(keep)} trades)")
 
     _data_sanity(db, p)
     return 0
@@ -232,23 +251,34 @@ def _data_sanity(db, p) -> None:
         dtm = days_to_maturity(mat, last) if mat else 0
         rows.append((sym, n, mean, std, mat, dtm))
 
-    rows.sort(key=lambda r: abs(r[2]), reverse=True)
+    # Sort by the noisier of {bias, noise} so the worst inputs surface first.
+    rows.sort(key=lambda r: max(abs(r[2]), r[3] / 3.0), reverse=True)
     print("\n" + "-" * 72)
-    print("DATA SANITY — per-series curve bias  (|mean z| large ⇒ off-curve / bad data)")
+    print("DATA SANITY — per-series curve bias & noise")
+    print("  |mean z| large ⇒ persistent off-curve (bad maturity/face_value)")
+    print("  std z large    ⇒ noisy/unstable yield (untradeable signal)")
     print("-" * 72)
     print(f"{'symbol':10s} {'ticks':>7s} {'mean z':>9s} {'std z':>8s} "
           f"{'maturity':>10s} {'dtm':>6s}  flag")
     for sym, n, mean, std, mat, dtm in rows[:20]:
-        flag = ""
+        flags = []
         if abs(mean) > 150:
-            flag = "<<< BROKEN (persistent off-curve — check maturity/face_value)"
+            flags.append("BIASED (check maturity/face_value)")
         elif abs(mean) > 60:
-            flag = "<< suspect"
-        bad_dtm = "  ⚠dtm≤0" if dtm <= 0 else ""
+            flags.append("bias?")
+        if std > 500:
+            flags.append("NOISY (untradeable)")
+        elif std > 250:
+            flags.append("noisy?")
+        if dtm <= 0:
+            flags.append("⚠dtm≤0")
         print(f"{sym:10s} {n:>7d} {mean:>9.1f} {std:>8.1f} "
-              f"{mat:>10d} {dtm:>6d}{bad_dtm}  {flag}")
-    print("\nHealthy series have mean z within ±~30 bps. Anything persistently")
-    print("> ±150 bps is almost certainly a registry data error, not a real edge.")
+              f"{mat:>10d} {dtm:>6d}  {'; '.join(flags)}")
+    print("\nHealthy series: |mean z| < ~30 and std z < ~250 bps. Real اخزا yields")
+    print("barely move intraday — std z of 500-2000 bps means the input price (or the")
+    print("curve, polluted by near-maturity/broken series) is noise, not a tradeable")
+    print("edge. Fix maturity/face_value for BIASED series; raise min_dtm to drop the")
+    print("explosive short end; investigate raw order books for NOISY series.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

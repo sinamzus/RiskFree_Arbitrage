@@ -1851,6 +1851,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             <div class="bbt-field"><label>حذف پرت منحنی (bps)</label>
               <input id="bbt-curvetrim" type="number" value="150" step="10" min="0"
                      title="برازش مقاوم منحنی: هر سری که بیش از این مقدار از منحنیِ پاس اول فاصله دارد به‌عنوان داده پرت کنار گذاشته و منحنی دوباره برازش می‌شود تا یک سری خراب کل منحنی را منحرف نکند. ۰ = برازش تک‌مرحله‌ای قدیمی."></div>
+            <div class="bbt-field"><label>حداقل روز تا سررسید</label>
+              <input id="bbt-mindtm" type="number" value="30" step="5" min="0"
+                     title="اخزا با روزمانده کمتر از این مقدار از برازش منحنی و معامله حذف می‌شود. نزدیک سررسید فرمول بازده (fv/p)^(365/dtm)-1 منفجر می‌شود (اوراق ۷ روزه توان ۵۲ دارد!)، پس یک نوسان قیمتی کوچک به جهش بزرگ بازده تبدیل می‌شود که نویز محض است و کل منحنی را منحرف می‌کند. ۰ = خاموش."></div>
             <div class="bbt-field"><label>درجه منحنی (۱ یا ۲)</label>
               <input id="bbt-degree" type="number" value="2" min="1" max="2"></div>
             <div class="bbt-field"><label>حداقل اوراق هم‌زمان</label>
@@ -4538,9 +4541,10 @@ async function bondBacktest() {
     max_position_pct: ((+document.getElementById('bbt-maxpos').value || 100) / 100).toString(),
     // Signal basis: exec (executable bid/ask, correct) vs mid (legacy).
     signal_price:     document.getElementById('bbt-signalprice').value || 'exec',
-    // Robustness guards: entry sanity band + outlier-trimmed curve fit.
+    // Robustness guards: entry sanity band + outlier-trimmed curve fit + min-dtm.
     entry_max_bps:    document.getElementById('bbt-entrymax').value  || '0',
     curve_trim_bps:   document.getElementById('bbt-curvetrim').value || '0',
+    min_dtm:          document.getElementById('bbt-mindtm').value    || '0',
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4581,6 +4585,7 @@ async function bondOptimize() {
     signal_price:     document.getElementById('bbt-signalprice').value || 'exec',
     entry_max_bps:    +document.getElementById('bbt-entrymax').value  || 0,
     curve_trim_bps:   +document.getElementById('bbt-curvetrim').value || 0,
+    min_dtm:          +document.getElementById('bbt-mindtm').value    || 0,
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
