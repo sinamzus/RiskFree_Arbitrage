@@ -122,6 +122,70 @@ def diagnose_real() -> int:
               f"{(f'{fz:.0f}' if fz is not None else '?'):>6s} "
               f"{t['entry_price']:>10,.0f} {t['exit_price']:>10,.0f} "
               f"{t['net_pct']:>7.3f} {t['net_pnl']:>14,.0f}")
+
+    # ── P&L by ENTRY z-spread bucket ────────────────────────────────────────
+    # If the catastrophic losses concentrate in the extreme-z buckets, the
+    # cause is GARBAGE SIGNALS (bad data / curve misfit), not the strategy.
+    print("\n" + "-" * 72)
+    print("P&L BY ENTRY Z-SPREAD BUCKET  (is the strategy trading garbage outliers?)")
+    print("-" * 72)
+    buckets = [(-1e9, 0), (0, 50), (50, 100), (100, 200), (200, 500), (500, 1e9)]
+    blab = ["z<0", "0–50", "50–100", "100–200", "200–500", "500+"]
+    print(f"{'z bucket':>10s} {'#':>5s} {'win%':>6s} {'net P&L':>18s} {'avg/trade':>14s}")
+    for (lo, hi), lab in zip(buckets, blab):
+        g = [t for t in trades if lo <= t["entry_z_bps"] < hi]
+        if not g:
+            continue
+        gnet = sum(t["net_pnl"] for t in g)
+        gwin = sum(1 for t in g if t["net_pnl"] > 0)
+        print(f"{lab:>10s} {len(g):>5d} {100*gwin/len(g):>5.0f}% "
+              f"{gnet:>18,.0f} {gnet/len(g):>14,.0f}")
+
+    # ── P&L by SYMBOL (worst offenders) ─────────────────────────────────────
+    print("\n" + "-" * 72)
+    print("WORST 12 SYMBOLS BY NET P&L  (is the loss concentrated in a few bad series?)")
+    print("-" * 72)
+    bysym = {}
+    for t in trades:
+        d = bysym.setdefault(t["symbol"], {"n": 0, "net": 0.0, "win": 0})
+        d["n"] += 1
+        d["net"] += t["net_pnl"]
+        d["win"] += 1 if t["net_pnl"] > 0 else 0
+    print(f"{'symbol':10s} {'#':>5s} {'win%':>6s} {'net P&L':>18s}")
+    for sym, d in sorted(bysym.items(), key=lambda kv: kv[1]["net"])[:12]:
+        print(f"{sym:10s} {d['n']:>5d} {100*d['win']/d['n']:>5.0f}% {d['net']:>18,.0f}")
+
+    # ── Intraday vs overnight (curve / duration risk) ───────────────────────
+    print("\n" + "-" * 72)
+    print("INTRADAY vs OVERNIGHT  (does holding overnight bleed to curve shifts?)")
+    print("-" * 72)
+    intra = [t for t in trades if t["exit_date"] == t["date"]]
+    over = [t for t in trades if t["exit_date"] != t["date"]]
+    for lab, g in [("intraday", intra), ("overnight", over)]:
+        if not g:
+            continue
+        gnet = sum(t["net_pnl"] for t in g)
+        gwin = sum(1 for t in g if t["net_pnl"] > 0)
+        print(f"{lab:10s} {len(g):>5d} trades  win {100*gwin/len(g):>4.0f}%  "
+              f"net {gnet:>18,.0f}  avg {gnet/len(g):>12,.0f}")
+
+    # ── WHAT-IF filters (approximate: ignores capital reallocation) ─────────
+    # Recompute total net P&L if we had REJECTED implausible/extreme trades.
+    print("\n" + "-" * 72)
+    print("WHAT-IF  (approx total net if these trades had NOT been taken)")
+    print("-" * 72)
+    base = sum(t["net_pnl"] for t in trades)
+    print(f"{'as-is (all trades)':40s} {base:>18,.0f}")
+    for cap in (300, 200, 150, 100):
+        kept = [t for t in trades if t["entry_z_bps"] <= cap]
+        print(f"{'only entry z ≤ ' + str(cap) + ' bps':40s} "
+              f"{sum(t['net_pnl'] for t in kept):>18,.0f}  "
+              f"({len(kept)} trades)")
+    print(f"{'intraday only (no overnight holds)':40s} "
+          f"{sum(t['net_pnl'] for t in intra):>18,.0f}  ({len(intra)} trades)")
+    combo = [t for t in trades if t["entry_z_bps"] <= 150 and t["exit_date"] == t["date"]]
+    print(f"{'intraday AND entry z ≤ 150 bps':40s} "
+          f"{sum(t['net_pnl'] for t in combo):>18,.0f}  ({len(combo)} trades)")
     return 0
 
 
