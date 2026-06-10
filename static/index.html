@@ -4828,6 +4828,7 @@ function renderBondOptimize(res) {
       · حداقل نگه‌داری <b>${bp.min_hold_days} روز</b>
       ${bp.entry_confirm_ticks > 0 ? `· تأیید تکانه <b>${bp.entry_confirm_ticks} تیک</b>` : ''}
       ${bp.entry_best_first ? '· <b>بهترین فرصت اول</b>' : ''}
+      ${bp.min_exit_profit_bps >= 0 ? `· فقط خروج سودده <b>≥${bp.min_exit_profit_bps} bps</b>` : ''}
       · ${bs.trade_count} معامله · نرخ برد <b>${bs.win_rate}%</b>
       · سود خالص <b>${fmt(bs.total_net_pnl)}</b> ریال
       · بازده <b>${bs.total_return_pct}%</b> · EOD <b>${bs.eod_count}</b>
@@ -4841,7 +4842,8 @@ function renderBondOptimize(res) {
     const s = r.summary, p = r.params, m = r.metrics || {};
     const rc = s.total_return_pct >= 0 ? 'pos' : 'neg';
     const feodMark  = p.force_eod             ? '✓' : '—';
-    const noloss    = p.min_exit_profit_bps >= 0 ? '✓' : '—';
+    const noloss    = p.min_exit_profit_bps >= 0
+      ? (p.min_exit_profit_bps > 0 ? `≥${p.min_exit_profit_bps}` : '✓') : '—';
     const needrepl  = p.exit_needs_replacement  ? '✓' : '—';
     const confMark  = p.entry_confirm_ticks > 0 ? p.entry_confirm_ticks : '—';
     const bfMark    = p.entry_best_first        ? '✓' : '—';

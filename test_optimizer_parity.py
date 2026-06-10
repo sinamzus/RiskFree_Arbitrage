@@ -231,7 +231,7 @@ def check_worker_and_pool(seed: int, base: BondBacktestParams) -> None:
         "entry_bps": [30, 65, 110], "exit_bps": [-10, 10],
         "step_secs": [0], "entry_max_bps": [120, 150],
         "min_dtm": [15, 30], "min_hold_days": [0, 1],
-        "force_eod": [False, True], "min_exit_profit_bps": [-1.0],
+        "force_eod": [False, True], "min_exit_profit_bps": [-1.0, 10.0],
         "exit_needs_replacement": [False, True],
         "entry_confirm_ticks": [0, 2], "entry_best_first": [False, True],
     }

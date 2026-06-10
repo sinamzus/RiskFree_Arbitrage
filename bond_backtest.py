@@ -1700,7 +1700,8 @@ COARSE_GRID = {
     "min_hold_days":        [0, 1, 2, 3],    # minimum calendar hold before signal exit
     # All below are replay-time only → no extra stream-build cost
     "force_eod":            [False, True],   # بستن اجباری پایان روز
-    "min_exit_profit_bps":  [-1.0, 0.0],    # فقط خروج سودده (-1=off, 0=break-even)
+    "min_exit_profit_bps":  [-1.0, 0.0, 10.0],  # فقط خروج سودده: -1=off,
+                                             # 0=سر-به-سر, 10=حداقل +۱۰bps خالص
     "exit_needs_replacement":[False, True],  # خروج فقط با جایگزین (نقد نمان)
     "entry_confirm_ticks":  [0, 2],          # تأیید تکانه z پیش از ورود (0=off)
     "entry_best_first":     [False, True],   # بهترین فرصت (بیشترین z) اول
@@ -1712,7 +1713,7 @@ _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
 # ── Optimizer fast path: trigger-compressed batch replay + fork parallelism ──
 #
 # _replay_stream walks EVERY (tick × series) event for EVERY combo.  With the
-# full COARSE_GRID that is ~1.07M replays over the whole stream — hours of
+# full COARSE_GRID that is ~1.6M replays over the whole stream — hours of
 # pure-Python iteration.  Two observations collapse this:
 #
 #   1. A combo only ACTS where a signal threshold is crossed.  One pass per
@@ -2554,7 +2555,7 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
 
     Phases
     ------
-    1. **Coarse** — evaluate every COARSE_GRID combo (~1.07M after validity
+    1. **Coarse** — evaluate every COARSE_GRID combo (~1.6M after validity
        filter) via trigger-compressed batch replay, parallel across cores
        (``n_jobs``: 0 = auto, 1 = sequential).
     2. **Fine** — zoom into top-5 coarse winners with ±8 bps / ±4 bps steps.
