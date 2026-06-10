@@ -40,6 +40,7 @@ from __future__ import annotations
 import itertools
 import logging
 import math
+import os
 from dataclasses import dataclass, asdict
 
 from bonds import (ytm_zero_coupon, price_zero_coupon, fit_yield_curve,
@@ -1470,92 +1471,495 @@ COARSE_GRID = {
 _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
 
 
+# ── Optimizer fast path: trigger-compressed batch replay + fork parallelism ──
+#
+# _replay_stream walks EVERY (tick × series) event for EVERY combo.  With the
+# full COARSE_GRID that is ~75k replays over the whole stream — hours of
+# pure-Python iteration.  Two observations collapse this:
+#
+#   1. A combo only ACTS where a signal threshold is crossed.  One pass per
+#      group extracts, for each distinct entry gate (entry_bps, entry_max_bps)
+#      and each distinct exit_bps, the sparse list of trigger points; replaying
+#      a combo then costs O(its triggers) instead of O(all events).  Skipping
+#      non-trigger items is lossless: entry and exit triggers are mutually
+#      exclusive per (tick, sym) — exit_bps < entry_bps and ytm_bid ≥ ytm_ask —
+#      and a non-trigger item can never change _replay_stream's state.
+#
+#   2. Groups (stream build + their replays) are independent → fork()ed
+#      workers inherit the heavy day-cache copy-on-write (no pickling) and
+#      spread the groups across CPU cores.
+#
+# Parity contract: _replay_triggers must produce BIT-IDENTICAL trades to
+# _replay_stream for the same params — enforced by test_optimizer_parity.py.
+
+def _combo_params(base: BondBacktestParams, c: tuple) -> BondBacktestParams:
+    """Materialise an 11-dim optimizer combo tuple into full params.
+
+    Combo layout: 0:degree 1:minpts 2:entry 3:exit 4:step 5:entry_max
+    6:min_dtm 7:min_hold 8:force_eod 9:min_exit_profit 10:exit_needs_repl.
+    """
+    return BondBacktestParams(
+        capital=base.capital, entry_bps=float(c[2]), exit_bps=float(c[3]),
+        degree=int(c[0]), min_curve_points=int(c[1]),
+        step_secs=int(c[4]), force_eod=bool(c[8]),
+        include_matured=base.include_matured,
+        buy_fee=base.buy_fee, sell_fee=base.sell_fee,
+        strategy=base.strategy,
+        min_exit_profit_bps=float(c[9]),
+        total_capital=base.total_capital,
+        max_position_pct=base.max_position_pct,
+        signal_price=base.signal_price,
+        entry_max_bps=float(c[5]),
+        curve_trim_bps=base.curve_trim_bps,
+        min_dtm=int(c[6]),
+        exit_needs_replacement=bool(c[10]),
+        min_hold_days=int(c[7]))
+
+
+def _combo_result(p: BondBacktestParams, trades, tested: int,
+                  min_trades: int, opt_metric: str, buy_fee: float) -> dict:
+    summary = _summarize(trades, buy_fee)
+    metrics = _risk_metrics(trades, buy_fee)
+    return {
+        "params":      asdict(p),
+        "summary":     summary,
+        "metrics":     metrics,
+        "score":       round(_objective_v2(summary, metrics, min_trades, opt_metric), 4),
+        "days_tested": tested,
+    }
+
+
+def _result_sort_key(r: dict):
+    """Deterministic ranking: score desc, then params asc — so the unordered
+    parallel collection always sorts identically to a sequential run."""
+    p = r["params"]
+    return (-r["score"], p["degree"], p["min_curve_points"], p["entry_bps"],
+            p["exit_bps"], p["step_secs"], p["entry_max_bps"], p["min_dtm"],
+            p["min_hold_days"], p["force_eod"], p["min_exit_profit_bps"],
+            p["exit_needs_replacement"])
+
+
+def _date_ordinal(d: int) -> int:
+    """YYYYMMDD → proleptic ordinal; diff equals _yyyymmdd_diff exactly."""
+    import datetime as _dt
+    return _dt.date(d // 10000, (d // 100) % 100, d % 100).toordinal()
+
+
+def _index_stream_triggers(stream: dict, gates, exits, exec_mode: bool) -> list:
+    """One pass over a group's decision stream → per-day sparse trigger lists.
+
+    *gates* is the set of (entry_bps, entry_max_bps) pairs and *exits* the set
+    of exit_bps values used by this group's combos.  Returns one element per
+    stream day: None for skipped days, else a dict with
+      ent : gate → ([(ord, t, sym, z_sig, curve_y, y, asks), …], [ceiling, …])
+      cand: gate → {t: [sym, …]}      (entry-trigger syms per tick, for the
+                                       exit_needs_replacement gate)
+      exi : exit_bps → ([(ord, t, sym, z_sig, bids), …], [floor, …])
+    ``ord`` is the item's global ordinal in the day so a per-combo merge of its
+    two lists reproduces _replay_stream's exact iteration order.
+
+    Everything a replay would recompute per combo is hoisted here, paid once
+    per (gate, trigger) instead of once per (combo, trigger):
+      - the OB ladder is resolved (memoised per snapshot identity) and embedded;
+        triggers whose needed ladder is empty are pure no-ops in _replay_stream
+        ("if not asks/bids: continue") and are dropped outright — except that an
+        empty-ask item must still register as a replacement CANDIDATE, because
+        has_candidate never looks at the ladder;
+      - the edge price (price_zero_coupon → pow) is precomputed per distinct
+        entry/exit threshold into a parallel array.
+    Trigger tuples are shared by reference across overlapping gates.
+    """
+    gates = sorted(set(gates))
+    exits = sorted(set(exits))
+    min_entry = min((g[0] for g in gates), default=math.inf)
+    max_exit = max(exits, default=-math.inf)
+    out = []
+    lad_ask_memo: dict = {}
+    lad_bid_memo: dict = {}
+    for day in stream["days"]:
+        if day["skipped"]:
+            out.append(None)
+            continue
+        ent = {g: ([], []) for g in gates}
+        cand = {g: {} for g in gates}
+        exi = {x: ([], []) for x in exits}
+        ordn = 0
+        for t, items in day["events"]:
+            for it in items:
+                if exec_mode:
+                    curve_y = it[3]
+                    ya = it[5]
+                    ze = (ya - curve_y) * 10_000.0 if ya > 0.0 else None
+                    yb = it[6]
+                    zx = (yb - curve_y) * 10_000.0 if yb > 0.0 else None
+                else:
+                    ze = zx = it[1]
+                if ze is not None and ze >= min_entry:
+                    trig = None
+                    no_asks = False
+                    ceil_by_e: dict = {}
+                    for g in gates:
+                        if ze >= g[0] and (g[1] <= 0.0 or ze <= g[1]):
+                            # Candidate registration is ladder-independent.
+                            cg = cand[g]
+                            lst = cg.get(t)
+                            if lst is None:
+                                cg[t] = [it[0]]
+                            else:
+                                lst.append(it[0])
+                            if no_asks:
+                                continue
+                            if trig is None:
+                                snap = it[4]
+                                sid = id(snap)
+                                asks = lad_ask_memo.get(sid)
+                                if asks is None:
+                                    asks = _ladder(snap, "ask")
+                                    lad_ask_memo[sid] = asks
+                                if not asks:
+                                    no_asks = True
+                                    continue
+                                trig = (ordn, t, it[0], ze, it[3], it[2], asks)
+                            e = g[0]
+                            c = ceil_by_e.get(e)
+                            if c is None:
+                                c = price_zero_coupon(
+                                    it[3] + e / 10_000.0, it[7], it[8])
+                                ceil_by_e[e] = c
+                            tl, cl = ent[g]
+                            tl.append(trig)
+                            cl.append(c)
+                if zx is not None and zx <= max_exit:
+                    snap = it[4]
+                    sid = id(snap)
+                    bids = lad_bid_memo.get(sid)
+                    if bids is None:
+                        bids = _ladder(snap, "bid")
+                        lad_bid_memo[sid] = bids
+                    if bids:
+                        trig = (ordn, t, it[0], zx, bids)
+                        for x in exits:
+                            if zx <= x:
+                                f = price_zero_coupon(
+                                    it[3] + x / 10_000.0, it[7], it[8])
+                                tl, fl = exi[x]
+                                tl.append(trig)
+                                fl.append(f)
+                ordn += 1
+        out.append({"date": day["date"], "eod_snaps": day["eod_snaps"],
+                    "ent": ent, "cand": cand, "exi": exi})
+    return out
+
+
+def _replay_triggers(tdays: list, stream: dict, p: BondBacktestParams,
+                     dord: dict) -> list[BondTrade]:
+    """Sparse replay over this combo's trigger points only.
+
+    Bit-identical to _replay_stream for the same params (parity-tested).
+    Ladders and edge prices come pre-resolved from _index_stream_triggers;
+    *dord* maps date→ordinal for the min_hold_days calendar check.
+    """
+    entry_bps, exit_bps = p.entry_bps, p.exit_bps
+    force_eod = p.force_eod
+    needs_repl = p.exit_needs_replacement
+    min_hold = p.min_hold_days
+    gate = (entry_bps, p.entry_max_bps)
+    trades: list[BondTrade] = []
+    pos: dict[str, dict] = {}
+    use_pf = p.total_capital > 0
+    portfolio = {"cash": p.total_capital} if use_pf else None
+    # Inlined _buy_budget for the sym-not-in-pos case (cur == 0.0):
+    #   portfolio: min(total×maxpos − 0, cash/(1+fee));  legacy: capital − 0.
+    fee1 = 1.0 + p.buy_fee
+    cap0 = p.total_capital * p.max_position_pct - 0.0
+    legacy_budget = p.capital - 0.0
+
+    def _close(sym, st, units, notional, t, exit_date, z, reason):
+        _record_close(sym, st, units, notional, t, exit_date, z, reason,
+                      p, trades, portfolio)
+        if st["units"] <= 0:
+            pos.pop(sym, None)
+
+    for td in tdays:
+        if td is None:
+            continue                        # skipped day: positions carry
+        date_int = td["date"]
+        eb = td["ent"].get(gate)
+        elist, eceil = eb if eb is not None else ((), ())
+        xb = td["exi"].get(exit_bps)
+        xlist, xfloor = xb if xb is not None else ((), ())
+        cand_by_t = td["cand"].get(gate, {})
+        i, j, ne, nx = 0, 0, len(elist), len(xlist)
+        cur_t = None
+        # has_candidate must see the TICK-START position set (the original
+        # computes it before the item loop).  pos only changes when THIS combo
+        # trades, so the copy is deferred until a trade actually fires in the
+        # tick; until then live pos membership IS the tick-start membership.
+        tick_pos = None
+        while i < ne or j < nx:
+            # Exit triggers are dense (any bond at/below curve+exit_bps emits
+            # one every tick) but are all no-ops while flat — bulk-skip them
+            # up to the next entry trigger whenever no position is open.
+            if not pos and j < nx:
+                if i >= ne:
+                    break
+                nxt = elist[i][0]
+                while j < nx and xlist[j][0] < nxt:
+                    j += 1
+            if j >= nx or (i < ne and elist[i][0] < xlist[j][0]):
+                trg = elist[i]
+                aux = eceil[i]
+                i += 1
+                is_entry = True
+            else:
+                trg = xlist[j]
+                aux = xfloor[j]
+                j += 1
+                is_entry = False
+            t = trg[1]
+            if t != cur_t:
+                cur_t = t
+                tick_pos = None
+            if is_entry:
+                sym = trg[2]
+                if sym in pos:
+                    continue        # original runs the exit branch here: no-op
+                if use_pf:
+                    cash_cap = portfolio["cash"] / fee1
+                    budget = cap0 if cap0 < cash_cap else cash_cap
+                else:
+                    budget = legacy_budget
+                if budget <= 0:
+                    continue
+                asks = trg[6]
+                # budget < best-ask price ⟺ _buy_against_asks would return
+                # (0, 0) on its first level — skip the call (exact equivalent).
+                if budget < asks[0][0]:
+                    continue
+                units, notional = _buy_against_asks(asks, aux, budget)
+                if units > 0:
+                    if needs_repl and tick_pos is None:
+                        tick_pos = set(pos)
+                    if use_pf:
+                        portfolio["cash"] -= notional * (1.0 + p.buy_fee)
+                    pos[sym] = {
+                        "units": units, "buy_notional": notional,
+                        "entry_date": date_int, "entry_time": t,
+                        "entry_ytm": trg[5], "entry_curve": trg[4],
+                        "entry_z": trg[3],
+                    }
+            else:
+                sym = trg[2]
+                if sym not in pos:
+                    continue        # original runs the entry branch here: no-op
+                if needs_repl:
+                    ref = pos if tick_pos is None else tick_pos
+                    has_candidate = False
+                    for cs in cand_by_t.get(t, ()):
+                        if cs not in ref:
+                            has_candidate = True
+                            break
+                    if not has_candidate:
+                        continue
+                if min_hold > 0:
+                    if dord[date_int] - dord[pos[sym]["entry_date"]] < min_hold:
+                        continue
+                units, notional = _sell_against_bids(trg[4], aux, pos[sym]["units"])
+                if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
+                    if needs_repl and tick_pos is None:
+                        tick_pos = set(pos)
+                    _close(sym, pos[sym], units, notional, t, date_int,
+                           trg[3], "signal")
+        if force_eod:
+            for sym in list(pos.keys()):
+                snap = td["eod_snaps"].get(sym)
+                if snap is None:
+                    continue
+                bids = _ladder(snap, "bid")
+                if not bids:
+                    continue
+                t = int(snap.get("time", 0))
+                held = pos[sym]["units"]
+                units, notional = _sell_against_bids(bids, 0, held)
+                if units < held:
+                    notional += (held - units) * bids[-1][0]
+                    units = held
+                _close(sym, pos[sym], units, notional, t, date_int, 0.0, "eod")
+
+    # End-of-backtest forced close (matches _replay_stream).
+    if pos:
+        final_date = stream["final_date"]
+        for sym, st in list(pos.items()):
+            ls = stream["last_snap"].get(sym)
+            if ls is None:
+                continue
+            snap = ls[2]
+            bids = _ladder(snap, "bid")
+            if not bids:
+                continue
+            t = int(snap.get("time", 0))
+            exit_d = int(snap.get("date", 0)) or final_date
+            held = st["units"]
+            units, notional = _sell_against_bids(bids, 0, held)
+            if units < held:
+                notional += (held - units) * bids[-1][0]
+                units = held
+            _record_close(sym, st, units, notional, t, exit_d, 0.0, "final",
+                          p, trades, portfolio)
+
+    return trades
+
+
+# Inputs for _opt_group_worker.  Populated by _c2f_optimize before any worker
+# runs (and before fork, so child processes inherit the heavy day-cache
+# copy-on-write instead of pickling it).  The web layer serialises optimizer
+# runs, so a single shared slot is safe.
+_OPT_SHARED: dict = {}
+
+
+def _opt_group_worker(task):
+    """Evaluate one stream-group's combos: build the group's decision stream,
+    index its triggers, then sparse-replay every combo.  Runs inside worker
+    processes — must not log or touch the DB."""
+    gkey, combos = task
+    sh = _OPT_SHARED
+    dates, cache, base = sh["dates"], sh["cache"], sh["base"]
+    opt_metric, min_trades = sh["opt_metric"], sh["min_trades"]
+    counter = sh.get("counter")
+    progress, lock = sh.get("progress"), sh.get("lock")
+    buy_fee = base.buy_fee
+
+    def _tick():
+        if counter is not None:
+            with counter.get_lock():
+                counter.value += 1
+        elif progress is not None:
+            with lock:
+                progress["done"] += 1
+
+    results = []
+    if base.strategy == "outlier":
+        # Per-order outlier z depends on the OB ladders, not just the mid,
+        # so the decision-stream shortcut doesn't apply — simulate per combo.
+        for c in combos:
+            p = _combo_params(base, c)
+            trades, tested, _ = _simulate_cache(dates, cache, p)
+            results.append(_combo_result(p, trades, tested, min_trades,
+                                         opt_metric, buy_fee))
+            _tick()
+        return results
+
+    degree, minpts, step, mdtm = gkey
+    tmpl = BondBacktestParams(
+        capital=base.capital, degree=int(degree),
+        min_curve_points=int(minpts), step_secs=int(step),
+        force_eod=base.force_eod, include_matured=base.include_matured,
+        buy_fee=base.buy_fee, sell_fee=base.sell_fee,
+        signal_price=base.signal_price, curve_trim_bps=base.curve_trim_bps,
+        min_dtm=int(mdtm))
+    stream = _build_decision_stream(dates, cache, tmpl)
+    exec_mode = (base.signal_price == "exec")
+    gates = {(float(c[2]), float(c[5])) for c in combos}
+    exits = {float(c[3]) for c in combos}
+    tdays = _index_stream_triggers(stream, gates, exits, exec_mode)
+    dord = {td["date"]: _date_ordinal(td["date"]) for td in tdays if td is not None}
+    tested = stream["tested"]
+    for c in combos:
+        p = _combo_params(base, c)
+        trades = _replay_triggers(tdays, stream, p, dord)
+        results.append(_combo_result(p, trades, tested, min_trades,
+                                     opt_metric, buy_fee))
+        _tick()
+    return results
+
+
+def _run_combo_tasks(combos: list, progress: dict | None, lock,
+                     n_jobs: int) -> list[dict]:
+    """Group combos by stream key (0,1,4,6) and evaluate the groups — in
+    parallel via fork when available, else sequentially in-process.  Returns
+    the flat, unsorted result list."""
+    groups: dict = {}
+    for c in combos:
+        groups.setdefault((c[0], c[1], c[4], c[6]), []).append(c)
+    tasks = sorted(groups.items())
+    if not tasks:
+        return []
+
+    jobs = n_jobs if n_jobs > 0 else max(1, (os.cpu_count() or 2) - 1)
+    jobs = min(jobs, len(tasks))
+    out: list = []
+
+    if jobs > 1:
+        import multiprocessing as _mp
+        import threading as _th
+        if "fork" in _mp.get_all_start_methods():
+            done0 = progress.get("done", 0) if progress is not None else 0
+            counter = _mp.Value("q", done0)
+            _OPT_SHARED["counter"] = counter
+            stop = _th.Event()
+
+            def _poll():
+                while not stop.wait(0.4):
+                    if progress is not None:
+                        with lock:
+                            progress["done"] = counter.value
+
+            poller = _th.Thread(target=_poll, daemon=True)
+            poller.start()
+            try:
+                ctx = _mp.get_context("fork")
+                with ctx.Pool(jobs) as pool:
+                    for res in pool.imap_unordered(_opt_group_worker, tasks,
+                                                   chunksize=1):
+                        out.extend(res)
+                if progress is not None:
+                    with lock:
+                        progress["done"] = counter.value
+                return out
+            except Exception:
+                logger.exception(
+                    "parallel bond optimize failed — sequential fallback")
+                out = []
+                if progress is not None:
+                    with lock:
+                        progress["done"] = done0
+            finally:
+                stop.set()
+                poller.join(timeout=1)
+                _OPT_SHARED["counter"] = None
+
+    for task in tasks:
+        out.extend(_opt_group_worker(task))
+    return out
+
+
 def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                   opt_metric: str, min_trades: int,
                   top_k: int = 5,
                   progress: dict | None = None,
-                  lock=None) -> list[dict]:
+                  lock=None, n_jobs: int = 0) -> list[dict]:
     """Two-phase coarse-to-fine search. Returns all evaluated combos sorted by score.
 
-    Combos are grouped by (degree, min_curve_points, step_secs, min_dtm); the
-    expensive z-spread decision stream is built once per group (and cached across
-    phases), then each (entry, exit, entry_max, min_hold) combo is replayed
-    cheaply on top of it.  entry_max_bps and min_hold_days are replay-time
-    parameters and add zero stream-rebuild cost.
+    Combos are grouped by (degree, min_curve_points, step_secs, min_dtm) — the
+    only stream-shaping dims.  Each group builds its decision stream once,
+    compresses it into per-threshold trigger lists, and sparse-replays every
+    combo (see the fast-path section above).  Groups run in parallel across
+    CPU cores via fork.  ``n_jobs``: 0 = auto (cores − 1), 1 = sequential.
     """
     import threading
     _lock = lock or threading.Lock()
-    # Stream key includes min_dtm: different exclusion thresholds yield different
-    # curve fits and z-spread time-series, so streams cannot be shared across them.
-    stream_cache: dict = {}   # (degree, minpts, step, min_dtm) → decision stream
 
-    def _get_stream(degree, minpts, step, min_dtm_val):
-        key = (degree, minpts, step, min_dtm_val)
-        st = stream_cache.get(key)
-        if st is None:
-            tmpl = BondBacktestParams(
-                capital=base.capital, degree=int(degree),
-                min_curve_points=int(minpts), step_secs=int(step),
-                force_eod=base.force_eod, include_matured=base.include_matured,
-                buy_fee=base.buy_fee, sell_fee=base.sell_fee,
-                signal_price=base.signal_price, curve_trim_bps=base.curve_trim_bps,
-                min_dtm=int(min_dtm_val))
-            st = _build_decision_stream(dates, cache, tmpl)
-            stream_cache[key] = st
-        return st
-
-    def _eval(degree, minpts, entry, exit_, step, entry_max, min_dtm_val, min_hold,
-              feod, min_exit_prof, needs_repl):
-        p = BondBacktestParams(
-            capital=base.capital, entry_bps=float(entry), exit_bps=float(exit_),
-            degree=int(degree), min_curve_points=int(minpts),
-            step_secs=int(step), force_eod=bool(feod),
-            include_matured=base.include_matured,
-            buy_fee=base.buy_fee, sell_fee=base.sell_fee,
-            strategy=base.strategy,
-            min_exit_profit_bps=float(min_exit_prof),
-            total_capital=base.total_capital,
-            max_position_pct=base.max_position_pct,
-            signal_price=base.signal_price,
-            entry_max_bps=float(entry_max),
-            curve_trim_bps=base.curve_trim_bps,
-            min_dtm=int(min_dtm_val),
-            exit_needs_replacement=bool(needs_repl),
-            min_hold_days=int(min_hold))
-        if base.strategy == "outlier":
-            # Per-order outlier z depends on the OB ladders, not just the mid,
-            # so the mid-based decision-stream cache doesn't apply — simulate.
-            trades, tested, _ = _simulate_cache(dates, cache, p)
-        else:
-            st = _get_stream(degree, minpts, step, min_dtm_val)
-            trades = _replay_stream(st, p)
-            tested = st["tested"]
-        summary = _summarize(trades, base.buy_fee)
-        metrics = _risk_metrics(trades, base.buy_fee)
-        return {
-            "params":      asdict(p),
-            "summary":     summary,
-            "metrics":     metrics,
-            "score":       round(_objective_v2(summary, metrics, min_trades, opt_metric), 4),
-            "days_tested": tested,
-        }
+    # Stage worker inputs BEFORE any fork so children inherit the day-cache
+    # copy-on-write.  The web layer serialises optimizer runs → safe to share.
+    _OPT_SHARED.clear()
+    _OPT_SHARED.update({
+        "dates": dates, "cache": cache, "base": base,
+        "opt_metric": opt_metric, "min_trades": min_trades,
+        "progress": progress, "lock": _lock, "counter": None,
+    })
 
     def _run_combos(combos):
-        """Evaluate combos, building each group's stream once (grouped first).
-
-        Group key = (degree, minpts, step, min_dtm) — indices (0,1,4,6).
-        All other dimensions (entry, exit, entry_max, min_hold, force_eod,
-        min_exit_profit, exit_needs_replacement) are replay-time only and
-        require no stream rebuild.
-        """
-        combos = sorted(combos, key=lambda c: (c[0], c[1], c[4], c[6]))
-        out = []
-        for combo in combos:
-            out.append(_eval(*combo))
-            if progress is not None:
-                with _lock:
-                    progress["done"] += 1
-        return out
+        return _run_combo_tasks(combos, progress, _lock, n_jobs)
 
     # Phase 1 — coarse grid
     # Combo tuple (11 elements):
@@ -1580,7 +1984,7 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
 
     seen: set = set(coarse)
     results: list[dict] = _run_combos(coarse)
-    results.sort(key=lambda r: r["score"], reverse=True)
+    results.sort(key=_result_sort_key)
 
     # Phase 2 — fine-grid zoom around top-K coarse winners.
     # Only entry_bps/exit_bps are perturbed; entry_max/min_dtm/min_hold stay
@@ -1609,7 +2013,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
     if fine_new:
         results.extend(_run_combos(fine_new))
 
-    results.sort(key=lambda r: r["score"], reverse=True)
+    _OPT_SHARED.clear()      # release the day-cache reference
+    results.sort(key=_result_sort_key)
     return results
 
 
@@ -1673,6 +2078,8 @@ def _walk_forward(dates: list, cache: dict, params: dict,
         return {"valid": False, "windows": []}
 
     def _make_params(p_dict):
+        # Carry every optimised dimension from the best combo — walk-forward
+        # must validate the actual best point, not the base UI defaults.
         return BondBacktestParams(
             capital=base.capital,
             entry_bps=float(p_dict["entry_bps"]),
@@ -1680,15 +2087,22 @@ def _walk_forward(dates: list, cache: dict, params: dict,
             degree=int(p_dict["degree"]),
             min_curve_points=int(p_dict["min_curve_points"]),
             step_secs=int(p_dict.get("step_secs", 0)),
-            force_eod=base.force_eod,
+            force_eod=bool(p_dict.get("force_eod", base.force_eod)),
             include_matured=base.include_matured,
             buy_fee=base.buy_fee,
             sell_fee=base.sell_fee,
             strategy=base.strategy,
-            min_exit_profit_bps=base.min_exit_profit_bps,
+            min_exit_profit_bps=float(p_dict.get("min_exit_profit_bps",
+                                                 base.min_exit_profit_bps)),
             total_capital=base.total_capital,
             max_position_pct=base.max_position_pct,
-            signal_price=base.signal_price)
+            signal_price=base.signal_price,
+            entry_max_bps=float(p_dict.get("entry_max_bps", base.entry_max_bps)),
+            curve_trim_bps=base.curve_trim_bps,
+            min_dtm=int(p_dict.get("min_dtm", base.min_dtm)),
+            exit_needs_replacement=bool(p_dict.get("exit_needs_replacement",
+                                                   base.exit_needs_replacement)),
+            min_hold_days=int(p_dict.get("min_hold_days", base.min_hold_days)))
 
     windows = []
     for i in range(n_windows):
@@ -1742,13 +2156,15 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
                            opt_metric: str = "sharpe",
                            walk_forward: bool = True,
                            progress: dict | None = None,
-                           progress_lock=None) -> dict:
+                           progress_lock=None,
+                           n_jobs: int = 0) -> dict:
     """Advanced coarse-to-fine اخزا parameter optimizer.
 
     Phases
     ------
-    1. **Coarse** — evaluate all combos in COARSE_GRID (~270–350 combos after
-       validity filter).
+    1. **Coarse** — evaluate every COARSE_GRID combo (~75k after validity
+       filter) via trigger-compressed batch replay, parallel across cores
+       (``n_jobs``: 0 = auto, 1 = sequential).
     2. **Fine** — zoom into top-5 coarse winners with ±8 bps / ±4 bps steps.
     3. **Stability** — evaluate 8 neighbours of the best combo; compute a
        0–1 robustness score.
@@ -1764,7 +2180,7 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
     all_results = _c2f_optimize(
         dates, cache, base,
         opt_metric=opt_metric, min_trades=min_trades,
-        top_k=5, progress=progress, lock=progress_lock)
+        top_k=5, progress=progress, lock=progress_lock, n_jobs=n_jobs)
 
     best = all_results[0] if all_results else None
 

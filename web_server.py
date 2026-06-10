@@ -1233,6 +1233,7 @@ def create_app(db, scan_callback=None):
         min_trades   = int(_float("min_trades", 3))
         opt_metric   = str(_get("opt_metric",   "sharpe"))
         walk_forward = str(_get("walk_forward", "1")) != "0"
+        n_jobs       = int(_float("n_jobs", 0))   # 0 = auto (cores − 1)
         start, end   = _int("start"), _int("end")
 
         if _bond_opt_state["running"]:
@@ -1249,7 +1250,8 @@ def create_app(db, scan_callback=None):
                     db, symbols, start, end, base=base, min_trades=min_trades,
                     opt_metric=opt_metric, walk_forward=walk_forward,
                     progress=_bond_opt_state["progress"],
-                    progress_lock=_bond_opt_lock)
+                    progress_lock=_bond_opt_lock,
+                    n_jobs=n_jobs)
                 _bond_opt_state["result"] = res
                 logger.info("[BondOptimize] %d combos, best score=%s metric=%s",
                             res["tested_combos"],
