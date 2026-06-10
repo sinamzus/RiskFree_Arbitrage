@@ -27,7 +27,7 @@ from dataclasses import asdict
 
 from bond_backtest import (
     BondBacktestParams, COARSE_GRID, _OPT_SHARED,
-    _build_decision_stream, _replay_stream,
+    _build_decision_stream, _replay_stream, _simulate_cache,
     _index_stream_triggers, _replay_triggers, _date_ordinal,
     _combo_params, _opt_group_worker, _c2f_optimize, _result_sort_key,
 )
@@ -104,15 +104,16 @@ def build_cache(seed: int):
 
 def coarse_combos() -> list[tuple]:
     return [
-        (deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr)
-        for deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr
+        (deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr, cft, bff)
+        for deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr, cft, bff
         in itertools.product(
             COARSE_GRID["degree"], COARSE_GRID["min_curve_points"],
             COARSE_GRID["entry_bps"], COARSE_GRID["exit_bps"],
             COARSE_GRID["step_secs"], COARSE_GRID["entry_max_bps"],
             COARSE_GRID["min_dtm"], COARSE_GRID["min_hold_days"],
             COARSE_GRID["force_eod"], COARSE_GRID["min_exit_profit_bps"],
-            COARSE_GRID["exit_needs_replacement"])
+            COARSE_GRID["exit_needs_replacement"],
+            COARSE_GRID["entry_confirm_ticks"], COARSE_GRID["entry_best_first"])
         if ex < ent and ent <= emax     # mirrors _c2f_optimize validity filter
     ]
 
@@ -127,11 +128,13 @@ def pick_combos(rng: random.Random, full: bool) -> list[tuple]:
     for ent in (ents[0], ents[-1]):
         for ex in (exs[0], exs[-1]):
             if ex < ent:
-                sample.append((1, 3, ent, ex, 0,
-                               COARSE_GRID["entry_max_bps"][-1],
-                               COARSE_GRID["min_dtm"][0],
-                               COARSE_GRID["min_hold_days"][-1],
-                               True, 0.0, True))
+                for cft in (0, COARSE_GRID["entry_confirm_ticks"][-1]):
+                    for bff in (False, True):
+                        sample.append((1, 3, ent, ex, 0,
+                                       COARSE_GRID["entry_max_bps"][-1],
+                                       COARSE_GRID["min_dtm"][0],
+                                       COARSE_GRID["min_hold_days"][-1],
+                                       True, 0.0, True, cft, bff))
     return list(dict.fromkeys(sample))
 
 
@@ -204,6 +207,17 @@ def check_seed(seed: int, base: BondBacktestParams, full: bool) -> tuple[int, in
                         break
                 if len(old[c]) != len(new[c]):
                     print(f"    trade count: old={len(old[c])} new={len(new[c])}")
+    # Third engine: _simulate_cache (the real-backtest path) vs _replay_stream
+    # on a subsample — guards the hand-mirrored confirm / best-first blocks in
+    # _simulate_bond_day against drift from the stream engines.
+    sim_sample = combos[::max(1, len(combos) // 48)]
+    for c in sim_sample:
+        p = _combo_params(base, c)
+        sim = [asdict(t) for t in _simulate_cache(dates, cache, p)[0]]
+        if sim != old[c]:
+            mismatches += 1
+            print(f"  ✗ SIM-vs-STREAM MISMATCH combo={c} "
+                  f"(sim {len(sim)} vs stream {len(old[c])} trades)")
     return len(combos), n_trades, mismatches
 
 
@@ -219,6 +233,7 @@ def check_worker_and_pool(seed: int, base: BondBacktestParams) -> None:
         "min_dtm": [15, 30], "min_hold_days": [0, 1],
         "force_eod": [False, True], "min_exit_profit_bps": [-1.0],
         "exit_needs_replacement": [False, True],
+        "entry_confirm_ticks": [0, 2], "entry_best_first": [False, True],
     }
     try:
         r1 = _c2f_optimize(dates, cache, base, "sharpe", 3, top_k=5, n_jobs=1)

@@ -146,6 +146,18 @@ class BondBacktestParams:
                                      # intraday curve-shift noise even when the
                                      # z-spread has reverted.  Forced exits (eod/
                                      # final/maturity) are never blocked.  0 = off.
+    entry_confirm_ticks: int = 0     # momentum confirm: only ENTER after the
+                                     # entry-side z has been non-increasing for at
+                                     # least this many consecutive processed ticks
+                                     # (z stopped widening — the bond is reverting,
+                                     # not in free fall).  Resets each day.  Also
+                                     # gates exit_needs_replacement candidates.
+                                     # 0 = off (enter on first threshold cross).
+    entry_best_first: bool = False   # when several entry signals fire on the same
+                                     # tick, fund the HIGHEST-z one first (and run
+                                     # all exits before entries so freed cash can
+                                     # rotate into the best opportunity).  False =
+                                     # legacy symbol-order interleaving.
 
 
 @dataclass
@@ -604,6 +616,13 @@ def _simulate_bond_day(date_int: int,
     entry_max = p.entry_max_bps
     needs_repl = p.exit_needs_replacement
     min_hold  = p.min_hold_days
+    confirm   = p.entry_confirm_ticks
+    best_first = p.entry_best_first and not outlier
+    # Momentum-confirm state: per symbol, the previous entry-side z and how
+    # many consecutive processed ticks it has been non-increasing.  Tracked
+    # for EVERY priced series (held or not) so the run is position-independent.
+    z_prev: dict[str, float] = {}
+    z_run: dict[str, int] = {}
 
     for t in timeline:
         # Advance cursors; track whether any series' YTM actually moved.
@@ -621,6 +640,26 @@ def _simulate_bond_day(date_int: int,
         if coeffs is None:
             continue
         a0, a1, a2 = coeffs
+
+        # Momentum bookkeeping (tick-start semantics: runs include this tick's
+        # observation before any entry decision below reads them).
+        if confirm > 0:
+            for sym, sd in series_items:
+                y = sd._ytm
+                if y <= 0.0 or sd.cur is None:
+                    continue
+                cy = a0 + a1 * sd.x + a2 * sd.x2
+                if exec_mode:
+                    ya = sd._ytm_ask
+                    if ya <= 0.0:
+                        continue
+                    zh = (ya - cy) * 10_000.0
+                else:
+                    zh = (y - cy) * 10_000.0
+                pz = z_prev.get(sym)
+                if pz is not None:
+                    z_run[sym] = z_run.get(sym, 0) + 1 if zh <= pz else 0
+                z_prev[sym] = zh
 
         # "Cash = loss" exit gate: is there a fresh buy candidate this tick whose
         # freed capital could be redeployed?  Computed from the tick-start state so
@@ -642,10 +681,16 @@ def _simulate_bond_day(date_int: int,
                 else:
                     zc = (y2 - cy2) * 10_000.0
                 if zc >= entry_bps and (entry_max <= 0.0 or zc <= entry_max):
+                    # A momentum-blocked signal is not a valid rotation target.
+                    if confirm > 0 and z_run.get(s2, 0) < confirm:
+                        continue
                     has_candidate = True
                     break
 
-        for sym, sd in series_items:
+        # Legacy interleaved pass (entry/exit decided per symbol in item
+        # order).  Skipped entirely in best-first mode — see the two-phase
+        # block below the loop.
+        for sym, sd in (() if best_first else series_items):
             y = sd._ytm
             if y <= 0.0 or sd.cur is None:
                 continue
@@ -671,6 +716,10 @@ def _simulate_bond_day(date_int: int,
                 if entry_max > 0.0 and z_sig > entry_max:
                     continue
                 if z_sig >= entry_bps:
+                    # Momentum confirm: don't catch a falling knife — require
+                    # the z to have stopped widening for `confirm` ticks.
+                    if confirm > 0 and z_run.get(sym, 0) < confirm:
+                        continue
                     asks = _ladder(sd.cur, "ask")
                     if not asks:
                         continue
@@ -733,6 +782,83 @@ def _simulate_bond_day(date_int: int,
                     units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
                     if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
                         _close(sym, units, notional, t, z_sig, "signal")
+
+        # Two-phase tick (entry_best_first): run ALL exits first so freed cash
+        # is available, then fund entries strongest-signal (highest z) first.
+        # Membership is judged against the tick-start set so each symbol still
+        # gets exactly one action per tick (an exited symbol cannot re-enter).
+        if best_first:
+            held0 = set(pos)
+            for sym, sd in series_items:
+                if sym not in held0 or sym not in pos:
+                    continue
+                y = sd._ytm
+                if y <= 0.0 or sd.cur is None:
+                    continue
+                curve_y = a0 + a1 * sd.x + a2 * sd.x2
+                if exec_mode:
+                    yb = sd._ytm_bid
+                    if yb <= 0.0:
+                        continue
+                    z_sig = (yb - curve_y) * 10_000.0
+                else:
+                    z_sig = (y - curve_y) * 10_000.0
+                if z_sig <= exit_bps:
+                    if needs_repl and not has_candidate:
+                        continue
+                    if min_hold > 0:
+                        edate = pos[sym]["entry_date"]
+                        if _yyyymmdd_diff(edate, date_int) < min_hold:
+                            continue
+                    bids = _ladder(sd.cur, "bid")
+                    if not bids:
+                        continue
+                    floor = price_zero_coupon(
+                        curve_y + exit_bps / 10_000.0, sd.face_value, sd.dtm)
+                    units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
+                    if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
+                        _close(sym, units, notional, t, z_sig, "signal")
+            cands = []
+            for sym, sd in series_items:
+                if sym in held0:
+                    continue
+                y = sd._ytm
+                if y <= 0.0 or sd.cur is None:
+                    continue
+                curve_y = a0 + a1 * sd.x + a2 * sd.x2
+                if exec_mode:
+                    ya = sd._ytm_ask
+                    if ya <= 0.0:
+                        continue
+                    z_sig = (ya - curve_y) * 10_000.0
+                else:
+                    z_sig = (y - curve_y) * 10_000.0
+                if entry_max > 0.0 and z_sig > entry_max:
+                    continue
+                if z_sig < entry_bps:
+                    continue
+                if confirm > 0 and z_run.get(sym, 0) < confirm:
+                    continue
+                cands.append((z_sig, sym, sd, curve_y, y))
+            cands.sort(key=lambda c: -c[0])     # stable: ties keep item order
+            for z_sig, sym, sd, curve_y, y in cands:
+                asks = _ladder(sd.cur, "ask")
+                if not asks:
+                    continue
+                ceiling = price_zero_coupon(
+                    curve_y + entry_bps / 10_000.0, sd.face_value, sd.dtm)
+                budget = _buy_budget(p, portfolio, sym, pos)
+                if budget <= 0:
+                    continue
+                units, notional = _buy_against_asks(asks, ceiling, budget)
+                if units > 0:
+                    if portfolio is not None:
+                        portfolio["cash"] -= notional * (1.0 + p.buy_fee)
+                    pos[sym] = {
+                        "units": units, "buy_notional": notional,
+                        "entry_date": date_int, "entry_time": t,
+                        "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_sig,
+                    }
 
     # force_eod: close all positions at each series' last snapshot of the day.
     if p.force_eod:
@@ -1207,6 +1333,83 @@ def _build_decision_stream(dates, cache, tmpl: BondBacktestParams):
             "tested": tested, "skipped": skipped}
 
 
+def _bf_tick_stream(items, t, date_int, p, pos, portfolio, trades, close_fn,
+                    z_run, has_candidate):
+    """Best-first tick for _replay_stream: all exits first (freeing cash),
+    then entries strongest-z first.  Mirrors the two-phase block in
+    _simulate_bond_day exactly (tick-start membership, stable z-desc order)."""
+    entry_bps, exit_bps = p.entry_bps, p.exit_bps
+    exec_mode = (p.signal_price == "exec")
+    entry_max = p.entry_max_bps
+    needs_repl = p.exit_needs_replacement
+    min_hold = p.min_hold_days
+    confirm = p.entry_confirm_ticks
+    held0 = set(pos)
+    for sym, z_bps, y, curve_y, snap, ya, yb, fv, dtm in items:
+        if sym not in held0 or sym not in pos:
+            continue
+        if exec_mode:
+            if yb <= 0.0:
+                continue
+            z_sig = (yb - curve_y) * 10_000.0
+        else:
+            z_sig = z_bps
+        if z_sig <= exit_bps:
+            if needs_repl and not has_candidate:
+                continue
+            if min_hold > 0:
+                edate = pos[sym]["entry_date"]
+                if _yyyymmdd_diff(edate, date_int) < min_hold:
+                    continue
+            bids = _ladder(snap, "bid")
+            if not bids:
+                continue
+            floor = price_zero_coupon(curve_y + exit_bps / 10_000.0, fv, dtm)
+            units, notional = _sell_against_bids(bids, floor, pos[sym]["units"])
+            if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
+                close_fn(sym, pos[sym], units, notional, t, date_int,
+                         z_sig, "signal")
+    cands = []
+    for it in items:
+        sym = it[0]
+        if sym in held0:
+            continue
+        curve_y = it[3]
+        if exec_mode:
+            ya = it[5]
+            if ya <= 0.0:
+                continue
+            z_sig = (ya - curve_y) * 10_000.0
+        else:
+            z_sig = it[1]
+        if entry_max > 0.0 and z_sig > entry_max:
+            continue
+        if z_sig < entry_bps:
+            continue
+        if confirm > 0 and z_run.get(sym, 0) < confirm:
+            continue
+        cands.append((z_sig, it))
+    cands.sort(key=lambda c: -c[0])         # stable: ties keep item order
+    for z_sig, it in cands:
+        sym, _, y, curve_y, snap, _, _, fv, dtm = it
+        asks = _ladder(snap, "ask")
+        if not asks:
+            continue
+        budget = _buy_budget(p, portfolio, sym, pos)
+        if budget <= 0:
+            continue
+        ceiling = price_zero_coupon(curve_y + entry_bps / 10_000.0, fv, dtm)
+        units, notional = _buy_against_asks(asks, ceiling, budget)
+        if units > 0:
+            if portfolio is not None:
+                portfolio["cash"] -= notional * (1.0 + p.buy_fee)
+            pos[sym] = {
+                "units": units, "buy_notional": notional,
+                "entry_date": date_int, "entry_time": t,
+                "entry_ytm": y, "entry_curve": curve_y, "entry_z": z_sig,
+            }
+
+
 def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
     """Replay a precomputed decision stream under one (entry_bps, exit_bps)
     pair.  Produces exactly the trades _simulate_cache would for the same p."""
@@ -1216,6 +1419,8 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
     entry_max = p.entry_max_bps
     needs_repl = p.exit_needs_replacement
     min_hold  = p.min_hold_days
+    confirm   = p.entry_confirm_ticks
+    best_first = p.entry_best_first
     trades: list[BondTrade] = []
     pos: dict[str, dict] = {}
     portfolio = {"cash": p.total_capital} if p.total_capital > 0 else None
@@ -1230,7 +1435,24 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
         if day["skipped"]:
             continue                       # positions carry silently
         date_int = day["date"]
+        # Momentum-confirm state resets each day (mirrors _simulate_bond_day).
+        z_prev: dict = {}
+        z_run: dict = {}
         for t, items in day["events"]:
+            # Momentum bookkeeping first — tick-start semantics, position-free.
+            if confirm > 0:
+                for it in items:
+                    if exec_mode:
+                        ya0 = it[5]
+                        if ya0 <= 0.0:
+                            continue
+                        zh = (ya0 - it[3]) * 10_000.0
+                    else:
+                        zh = it[1]
+                    pz = z_prev.get(it[0])
+                    if pz is not None:
+                        z_run[it[0]] = z_run.get(it[0], 0) + 1 if zh <= pz else 0
+                    z_prev[it[0]] = zh
             # "Cash = loss" gate: any fresh buy candidate this tick to rotate into?
             # Computed from tick-start pos; mirrors _simulate_bond_day exactly.
             has_candidate = False
@@ -1247,8 +1469,15 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                     else:
                         zc = it[1]
                     if zc >= entry_bps and (entry_max <= 0.0 or zc <= entry_max):
+                        # A momentum-blocked signal is not a rotation target.
+                        if confirm > 0 and z_run.get(it[0], 0) < confirm:
+                            continue
                         has_candidate = True
                         break
+            if best_first:
+                _bf_tick_stream(items, t, date_int, p, pos, portfolio, trades,
+                                _close, z_run, has_candidate)
+                continue
             for sym, z_bps, y, curve_y, snap, ya, yb, fv, dtm in items:
                 if sym not in pos:
                     # Entry on executable ask in exec mode, else mid z-spread.
@@ -1262,6 +1491,9 @@ def _replay_stream(stream, p: BondBacktestParams) -> list[BondTrade]:
                     if entry_max > 0.0 and z_sig > entry_max:
                         continue
                     if z_sig >= entry_bps:
+                        # Momentum confirm — mirrors _simulate_bond_day.
+                        if confirm > 0 and z_run.get(sym, 0) < confirm:
+                            continue
                         asks = _ladder(snap, "ask")
                         if not asks:
                             continue
@@ -1466,10 +1698,12 @@ COARSE_GRID = {
     "exit_bps":         [-32, -24, -16, -8, 0, 8, 16, 24],
     "entry_max_bps":        [70, 100, 130, 160],  # sanity-band ceiling
     "min_hold_days":        [0, 1, 2, 3],    # minimum calendar hold before signal exit
-    # All three below are replay-time only → no extra stream-build cost
+    # All below are replay-time only → no extra stream-build cost
     "force_eod":            [False, True],   # بستن اجباری پایان روز
     "min_exit_profit_bps":  [-1.0, 0.0],    # فقط خروج سودده (-1=off, 0=break-even)
     "exit_needs_replacement":[False, True],  # خروج فقط با جایگزین (نقد نمان)
+    "entry_confirm_ticks":  [0, 2],          # تأیید تکانه z پیش از ورود (0=off)
+    "entry_best_first":     [False, True],   # بهترین فرصت (بیشترین z) اول
 }
 # Phase-2 refinement: ±step around best coarse results (entry/exit only)
 _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
@@ -1478,7 +1712,7 @@ _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
 # ── Optimizer fast path: trigger-compressed batch replay + fork parallelism ──
 #
 # _replay_stream walks EVERY (tick × series) event for EVERY combo.  With the
-# full COARSE_GRID that is ~267k replays over the whole stream — hours of
+# full COARSE_GRID that is ~1.07M replays over the whole stream — hours of
 # pure-Python iteration.  Two observations collapse this:
 #
 #   1. A combo only ACTS where a signal threshold is crossed.  One pass per
@@ -1497,10 +1731,11 @@ _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
 # _replay_stream for the same params — enforced by test_optimizer_parity.py.
 
 def _combo_params(base: BondBacktestParams, c: tuple) -> BondBacktestParams:
-    """Materialise an 11-dim optimizer combo tuple into full params.
+    """Materialise a 13-dim optimizer combo tuple into full params.
 
     Combo layout: 0:degree 1:minpts 2:entry 3:exit 4:step 5:entry_max
-    6:min_dtm 7:min_hold 8:force_eod 9:min_exit_profit 10:exit_needs_repl.
+    6:min_dtm 7:min_hold 8:force_eod 9:min_exit_profit 10:exit_needs_repl
+    11:entry_confirm_ticks 12:entry_best_first.
     """
     return BondBacktestParams(
         capital=base.capital, entry_bps=float(c[2]), exit_bps=float(c[3]),
@@ -1517,7 +1752,9 @@ def _combo_params(base: BondBacktestParams, c: tuple) -> BondBacktestParams:
         curve_trim_bps=base.curve_trim_bps,
         min_dtm=int(c[6]),
         exit_needs_replacement=bool(c[10]),
-        min_hold_days=int(c[7]))
+        min_hold_days=int(c[7]),
+        entry_confirm_ticks=int(c[11]),
+        entry_best_first=bool(c[12]))
 
 
 def _combo_result(p: BondBacktestParams, trades, tested: int,
@@ -1540,7 +1777,8 @@ def _result_sort_key(r: dict):
     return (-r["score"], p["degree"], p["min_curve_points"], p["entry_bps"],
             p["exit_bps"], p["step_secs"], p["entry_max_bps"], p["min_dtm"],
             p["min_hold_days"], p["force_eod"], p["min_exit_profit_bps"],
-            p["exit_needs_replacement"])
+            p["exit_needs_replacement"], p["entry_confirm_ticks"],
+            p["entry_best_first"])
 
 
 def _date_ordinal(d: int) -> int:
@@ -1555,10 +1793,13 @@ def _index_stream_triggers(stream: dict, gates, exits, exec_mode: bool) -> list:
     *gates* is the set of (entry_bps, entry_max_bps) pairs and *exits* the set
     of exit_bps values used by this group's combos.  Returns one element per
     stream day: None for skipped days, else a dict with
-      ent : gate → ([(ord, t, sym, z_sig, curve_y, y, asks), …], [ceiling, …])
-      cand: gate → {t: [sym, …]}      (entry-trigger syms per tick, for the
-                                       exit_needs_replacement gate)
+      ent : gate → ([(ord, t, sym, z_sig, curve_y, y, asks, run), …], [ceiling, …])
+      cand: gate → {t: [(sym, run), …]}  (entry-trigger syms per tick, for the
+                                          exit_needs_replacement gate)
       exi : exit_bps → ([(ord, t, sym, z_sig, bids), …], [floor, …])
+    ``run`` is the symbol's momentum-confirm run (consecutive non-increasing
+    entry-z ticks) at that tick — combo-independent, so it is precomputed here
+    and filtered against entry_confirm_ticks at replay time.
     ``ord`` is the item's global ordinal in the day so a per-combo merge of its
     two lists reproduces _replay_stream's exact iteration order.
 
@@ -1588,7 +1829,12 @@ def _index_stream_triggers(stream: dict, gates, exits, exec_mode: bool) -> list:
         cand = {g: {} for g in gates}
         exi = {x: ([], []) for x in exits}
         ordn = 0
+        z_prev: dict = {}      # momentum-confirm state, resets each day
+        z_run: dict = {}
         for t, items in day["events"]:
+            # Pre-pass: compute z pairs and update momentum runs for the WHOLE
+            # tick first (tick-start semantics — mirrors the replay engines).
+            evs = []
             for it in items:
                 if exec_mode:
                     curve_y = it[3]
@@ -1598,19 +1844,29 @@ def _index_stream_triggers(stream: dict, gates, exits, exec_mode: bool) -> list:
                     zx = (yb - curve_y) * 10_000.0 if yb > 0.0 else None
                 else:
                     ze = zx = it[1]
+                if ze is not None:
+                    pz = z_prev.get(it[0])
+                    if pz is not None:
+                        z_run[it[0]] = z_run.get(it[0], 0) + 1 if ze <= pz else 0
+                    z_prev[it[0]] = ze
+                evs.append((it, ze, zx))
+            for it, ze, zx in evs:
                 if ze is not None and ze >= min_entry:
+                    run = z_run.get(it[0], 0)
                     trig = None
                     no_asks = False
                     ceil_by_e: dict = {}
                     for g in gates:
                         if ze >= g[0] and (g[1] <= 0.0 or ze <= g[1]):
                             # Candidate registration is ladder-independent.
+                            # The run rides along so combos with a confirm
+                            # requirement can filter rotation targets too.
                             cg = cand[g]
                             lst = cg.get(t)
                             if lst is None:
-                                cg[t] = [it[0]]
+                                cg[t] = [(it[0], run)]
                             else:
-                                lst.append(it[0])
+                                lst.append((it[0], run))
                             if no_asks:
                                 continue
                             if trig is None:
@@ -1623,7 +1879,8 @@ def _index_stream_triggers(stream: dict, gates, exits, exec_mode: bool) -> list:
                                 if not asks:
                                     no_asks = True
                                     continue
-                                trig = (ordn, t, it[0], ze, it[3], it[2], asks)
+                                trig = (ordn, t, it[0], ze, it[3], it[2], asks,
+                                        run)
                             e = g[0]
                             c = ceil_by_e.get(e)
                             if c is None:
@@ -1655,6 +1912,92 @@ def _index_stream_triggers(stream: dict, gates, exits, exec_mode: bool) -> list:
     return out
 
 
+def _bf_day_triggers(date_int, elist, eceil, xlist, xfloor, cand_by_t,
+                     p, pos, portfolio, trades, close_fn, dord,
+                     use_pf, fee1, cap0, legacy_budget):
+    """Best-first sparse replay of one day's triggers: per tick, all exits
+    first (ordinal order), then entries sorted strongest-z first.  Mirrors
+    _bf_tick_stream exactly (tick-start membership via held0)."""
+    needs_repl = p.exit_needs_replacement
+    min_hold = p.min_hold_days
+    confirm = p.entry_confirm_ticks
+    i, j, ne, nx = 0, 0, len(elist), len(xlist)
+    while i < ne or j < nx:
+        if not pos and j < nx:
+            if i >= ne:
+                break
+            # While flat every exit is a no-op — and in best-first order the
+            # entry tick's own exits also run BEFORE its entries, so they are
+            # no-ops too: skip exits through the next entry's tick inclusive.
+            te = elist[i][1]
+            while j < nx and xlist[j][1] <= te:
+                j += 1
+        te = elist[i][1] if i < ne else None
+        tx = xlist[j][1] if j < nx else None
+        if te is None and tx is None:
+            break
+        t = te if (tx is None or (te is not None and te <= tx)) else tx
+        held0 = set(pos)                  # tick-start membership
+        # Phase 1 — exit triggers at t, ordinal order.
+        while j < nx and xlist[j][1] == t:
+            trg = xlist[j]
+            aux = xfloor[j]
+            j += 1
+            sym = trg[2]
+            if sym not in pos:
+                continue
+            if needs_repl:
+                has_candidate = False
+                for cs, crun in cand_by_t.get(t, ()):
+                    if crun < confirm:
+                        continue
+                    if cs not in held0:
+                        has_candidate = True
+                        break
+                if not has_candidate:
+                    continue
+            if min_hold > 0:
+                if dord[date_int] - dord[pos[sym]["entry_date"]] < min_hold:
+                    continue
+            units, notional = _sell_against_bids(trg[4], aux, pos[sym]["units"])
+            if units > 0 and _exit_clears_min(pos[sym], units, notional, p):
+                close_fn(sym, pos[sym], units, notional, t, date_int,
+                         trg[3], "signal")
+        # Phase 2 — entry triggers at t, z desc (stable → ordinal ties).
+        k0 = i
+        while i < ne and elist[i][1] == t:
+            i += 1
+        if k0 == i:
+            continue
+        for k in sorted(range(k0, i), key=lambda kk: -elist[kk][3]):
+            trg = elist[k]
+            sym = trg[2]
+            if sym in held0:
+                continue
+            if trg[7] < confirm:
+                continue
+            if use_pf:
+                cash_cap = portfolio["cash"] / fee1
+                budget = cap0 if cap0 < cash_cap else cash_cap
+            else:
+                budget = legacy_budget
+            if budget <= 0:
+                continue
+            asks = trg[6]
+            if budget < asks[0][0]:
+                continue
+            units, notional = _buy_against_asks(asks, eceil[k], budget)
+            if units > 0:
+                if use_pf:
+                    portfolio["cash"] -= notional * (1.0 + p.buy_fee)
+                pos[sym] = {
+                    "units": units, "buy_notional": notional,
+                    "entry_date": date_int, "entry_time": t,
+                    "entry_ytm": trg[5], "entry_curve": trg[4],
+                    "entry_z": trg[3],
+                }
+
+
 def _replay_triggers(tdays: list, stream: dict, p: BondBacktestParams,
                      dord: dict) -> list[BondTrade]:
     """Sparse replay over this combo's trigger points only.
@@ -1667,6 +2010,8 @@ def _replay_triggers(tdays: list, stream: dict, p: BondBacktestParams,
     force_eod = p.force_eod
     needs_repl = p.exit_needs_replacement
     min_hold = p.min_hold_days
+    confirm = p.entry_confirm_ticks
+    best_first = p.entry_best_first
     gate = (entry_bps, p.entry_max_bps)
     trades: list[BondTrade] = []
     pos: dict[str, dict] = {}
@@ -1694,6 +2039,11 @@ def _replay_triggers(tdays: list, stream: dict, p: BondBacktestParams,
         xlist, xfloor = xb if xb is not None else ((), ())
         cand_by_t = td["cand"].get(gate, {})
         i, j, ne, nx = 0, 0, len(elist), len(xlist)
+        if best_first:
+            _bf_day_triggers(date_int, elist, eceil, xlist, xfloor, cand_by_t,
+                             p, pos, portfolio, trades, _close, dord,
+                             use_pf, fee1, cap0, legacy_budget)
+            ne = nx = 0           # legacy merge below becomes a no-op
         cur_t = None
         # has_candidate must see the TICK-START position set (the original
         # computes it before the item loop).  pos only changes when THIS combo
@@ -1728,6 +2078,8 @@ def _replay_triggers(tdays: list, stream: dict, p: BondBacktestParams,
                 sym = trg[2]
                 if sym in pos:
                     continue        # original runs the exit branch here: no-op
+                if trg[7] < confirm:
+                    continue        # momentum confirm not yet satisfied
                 if use_pf:
                     cash_cap = portfolio["cash"] / fee1
                     budget = cap0 if cap0 < cash_cap else cash_cap
@@ -1759,7 +2111,9 @@ def _replay_triggers(tdays: list, stream: dict, p: BondBacktestParams,
                 if needs_repl:
                     ref = pos if tick_pos is None else tick_pos
                     has_candidate = False
-                    for cs in cand_by_t.get(t, ()):
+                    for cs, crun in cand_by_t.get(t, ()):
+                        if crun < confirm:
+                            continue    # momentum-blocked: not a rotation target
                         if cs not in ref:
                             has_candidate = True
                             break
@@ -1994,8 +2348,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
     #   0:degree  1:minpts  2:entry  3:exit  4:step  5:entry_max  6:min_dtm
     #   7:min_hold  8:force_eod  9:min_exit_profit  10:exit_needs_replacement
     coarse = [
-        (deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr)
-        for deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr
+        (deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr, cft, bff)
+        for deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr, cft, bff
         in itertools.product(
             COARSE_GRID["degree"],               COARSE_GRID["min_curve_points"],
             COARSE_GRID["entry_bps"],            COARSE_GRID["exit_bps"],
@@ -2003,6 +2357,7 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             COARSE_GRID["min_dtm"],              COARSE_GRID["min_hold_days"],
             COARSE_GRID["force_eod"],            COARSE_GRID["min_exit_profit_bps"],
             COARSE_GRID["exit_needs_replacement"],
+            COARSE_GRID["entry_confirm_ticks"],  COARSE_GRID["entry_best_first"],
         )
         # ex < ent: exit must sit below entry.  ent <= emax: the entry band
         # [entry_bps, entry_max_bps] must be non-empty, else zero trades.
@@ -2031,7 +2386,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                         p["degree"], p["min_curve_points"], ne, nx, p["step_secs"],
                         p["entry_max_bps"], p["min_dtm"], p["min_hold_days"],
                         p["force_eod"], p["min_exit_profit_bps"],
-                        p["exit_needs_replacement"],
+                        p["exit_needs_replacement"], p["entry_confirm_ticks"],
+                        p["entry_best_first"],
                     ))
     fine_new = [c for c in fine_set if c not in seen]
 
@@ -2077,7 +2433,9 @@ def _param_stability(dates: list, cache: dict, best_params: dict,
             curve_trim_bps=base.curve_trim_bps,
             min_dtm=int(bp.get("min_dtm", base.min_dtm)),
             exit_needs_replacement=bool(bp.get("exit_needs_replacement", base.exit_needs_replacement)),
-            min_hold_days=int(bp.get("min_hold_days", base.min_hold_days)))
+            min_hold_days=int(bp.get("min_hold_days", base.min_hold_days)),
+            entry_confirm_ticks=int(bp.get("entry_confirm_ticks", base.entry_confirm_ticks)),
+            entry_best_first=bool(bp.get("entry_best_first", base.entry_best_first)))
         trades, _, _ = _simulate_cache(dates, cache, p)
         s = _summarize(trades, base.buy_fee)
         m = _risk_metrics(trades, base.buy_fee)
@@ -2132,7 +2490,11 @@ def _walk_forward(dates: list, cache: dict, params: dict,
             min_dtm=int(p_dict.get("min_dtm", base.min_dtm)),
             exit_needs_replacement=bool(p_dict.get("exit_needs_replacement",
                                                    base.exit_needs_replacement)),
-            min_hold_days=int(p_dict.get("min_hold_days", base.min_hold_days)))
+            min_hold_days=int(p_dict.get("min_hold_days", base.min_hold_days)),
+            entry_confirm_ticks=int(p_dict.get("entry_confirm_ticks",
+                                               base.entry_confirm_ticks)),
+            entry_best_first=bool(p_dict.get("entry_best_first",
+                                             base.entry_best_first)))
 
     windows = []
     for i in range(n_windows):
@@ -2192,7 +2554,7 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
 
     Phases
     ------
-    1. **Coarse** — evaluate every COARSE_GRID combo (~267k after validity
+    1. **Coarse** — evaluate every COARSE_GRID combo (~1.07M after validity
        filter) via trigger-compressed batch replay, parallel across cores
        (``n_jobs``: 0 = auto, 1 = sequential).
     2. **Fine** — zoom into top-5 coarse winners with ±8 bps / ±4 bps steps.

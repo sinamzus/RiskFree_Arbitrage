@@ -1957,11 +1957,19 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
             <label class="chk" title="در اوراق درآمد ثابت، نقد ماندن یعنی از دست دادن بازده بدون‌ریسک (کشش به سمت ارزش اسمی). با این گزینه، موقعیتِ برگشته‌به‌منحنی فقط زمانی فروخته می‌شود که همان لحظه یک سیگنال خریدِ تازه وجود داشته باشد تا سرمایه فوراً جابه‌جا شود؛ در غیر این‌صورت نگه داشته می‌شود و به کشش قیمت ادامه می‌دهد. خروج‌های اجباری (پایان روز/بازه/سررسید) همچنان انجام می‌شوند.">
               <input id="bbt-needrepl" type="checkbox" checked> خروج فقط با جایگزین (نقد نمان)
             </label>
+            <label class="chk" title="وقتی چند سیگنال ورود هم‌زمان فعال شوند، اول همهٔ خروج‌ها انجام می‌شوند (تا نقدینگی آزاد شود) و سپس ورودها به ترتیب بزرگ‌ترین z تأمین مالی می‌شوند — پول همیشه به بهترین فرصت موجود می‌رود، نه اولین فرصت در ترتیب فهرست.">
+              <input id="bbt-bestfirst" type="checkbox"> بهترین فرصت اول (z بیشتر)
+            </label>
           </div>
           <div class="bbt-row">
             <div class="bbt-field" title="حداقل روزهایی که یک موقعیت باید نگه داشته شود تا خروج سیگنالی مجاز باشد. خروج‌های روزانه (اینتراروز) را که ناشی از نوسان منحنی بازده هستند بلاک می‌کند. ۰ = خاموش">
               <label>حداقل نگه‌داری (روز)</label>
               <input id="bbt-minholddays" type="number" value="1" step="1" min="0"
+                     style="width:70px">
+            </div>
+            <div class="bbt-field" title="تأیید تکانه: ورود فقط وقتی انجام می‌شود که اسپرد z در این تعداد تیک متوالی دیگر بازتر نشده باشد (اوراق در حال برگشت است، نه سقوط آزاد). از خرید در میانهٔ ارزان‌ترشدن جلوگیری می‌کند. ۰ = خاموش (ورود در اولین عبور از آستانه)">
+              <label>تأیید تکانه z (تیک)</label>
+              <input id="bbt-confirmticks" type="number" value="0" step="1" min="0"
                      style="width:70px">
             </div>
           </div>
@@ -4632,6 +4640,10 @@ async function bondBacktest() {
     exit_needs_replacement: document.getElementById('bbt-needrepl').checked ? '1' : '0',
     // Min hold: block intraday signal exits to avoid intraday curve-shift losses.
     min_hold_days: document.getElementById('bbt-minholddays').value || '1',
+    // Momentum confirm: only enter after z stopped widening for N ticks.
+    entry_confirm_ticks: document.getElementById('bbt-confirmticks').value || '0',
+    // Best-first: exits before entries, then fund the highest-z signal first.
+    entry_best_first: document.getElementById('bbt-bestfirst').checked ? '1' : '0',
   });
   // Date inputs carry the Gregorian YYYYMMDD the API needs in dataset.greg.
   const start = document.getElementById('bbt-start').dataset.greg;
@@ -4675,6 +4687,8 @@ async function bondOptimize() {
     min_dtm:          +document.getElementById('bbt-mindtm').value    || 0,
     exit_needs_replacement: document.getElementById('bbt-needrepl').checked ? '1' : '0',
     min_hold_days: +document.getElementById('bbt-minholddays').value || 1,
+    entry_confirm_ticks: +document.getElementById('bbt-confirmticks').value || 0,
+    entry_best_first: document.getElementById('bbt-bestfirst').checked ? '1' : '0',
   };
   const start = document.getElementById('bbt-start').dataset.greg;
   const end   = document.getElementById('bbt-end').dataset.greg;
@@ -4812,6 +4826,8 @@ function renderBondOptimize(res) {
       · سقف z <b>${bp.entry_max_bps} bps</b>
       · حداقل DTM <b>${bp.min_dtm} روز</b>
       · حداقل نگه‌داری <b>${bp.min_hold_days} روز</b>
+      ${bp.entry_confirm_ticks > 0 ? `· تأیید تکانه <b>${bp.entry_confirm_ticks} تیک</b>` : ''}
+      ${bp.entry_best_first ? '· <b>بهترین فرصت اول</b>' : ''}
       · ${bs.trade_count} معامله · نرخ برد <b>${bs.win_rate}%</b>
       · سود خالص <b>${fmt(bs.total_net_pnl)}</b> ریال
       · بازده <b>${bs.total_return_pct}%</b> · EOD <b>${bs.eod_count}</b>
@@ -4827,6 +4843,8 @@ function renderBondOptimize(res) {
     const feodMark  = p.force_eod             ? '✓' : '—';
     const noloss    = p.min_exit_profit_bps >= 0 ? '✓' : '—';
     const needrepl  = p.exit_needs_replacement  ? '✓' : '—';
+    const confMark  = p.entry_confirm_ticks > 0 ? p.entry_confirm_ticks : '—';
+    const bfMark    = p.entry_best_first        ? '✓' : '—';
     return `<tr class="${i===0?'best':''}">
       <td>${p.degree}</td><td>${p.min_curve_points}</td>
       <td>${p.entry_bps}</td><td>${p.exit_bps}</td>
@@ -4835,6 +4853,8 @@ function renderBondOptimize(res) {
       <td title="بستن اجباری پایان روز">${feodMark}</td>
       <td title="فقط خروج سودده">${noloss}</td>
       <td title="خروج فقط با جایگزین">${needrepl}</td>
+      <td title="تأیید تکانه z (تیک)">${confMark}</td>
+      <td title="بهترین فرصت اول">${bfMark}</td>
       <td>${s.trade_count}</td><td>${s.win_rate}%</td>
       <td class="${rc}">${s.total_return_pct}%</td>
       <td>${fmtR(m.sharpe)}</td>
@@ -4852,6 +4872,8 @@ function renderBondOptimize(res) {
     <th title="بستن اجباری پایان روز">EOD</th>
     <th title="فقط خروج سودده">NoLoss</th>
     <th title="خروج فقط با جایگزین">Repl</th>
+    <th title="تأیید تکانه z پیش از ورود (تیک)">Conf</th>
+    <th title="بهترین فرصت (بیشترین z) اول">Best</th>
     <th>معامله</th><th>برد</th><th>بازده</th>
     <th>Sharpe</th><th>Sortino</th><th>PF</th><th>MDD</th>
     <th>سود خالص</th>
@@ -4872,6 +4894,10 @@ function applyBondOpt(bp) {
   if (bp.entry_max_bps  != null) document.getElementById('bbt-entrymax').value      = bp.entry_max_bps;
   if (bp.min_dtm        != null) document.getElementById('bbt-mindtm').value        = bp.min_dtm;
   if (bp.min_hold_days  != null) document.getElementById('bbt-minholddays').value   = bp.min_hold_days;
+  if (bp.entry_confirm_ticks != null)
+    document.getElementById('bbt-confirmticks').value = bp.entry_confirm_ticks;
+  if (bp.entry_best_first != null)
+    document.getElementById('bbt-bestfirst').checked = bp.entry_best_first;
   if (bp.force_eod      != null) document.getElementById('bbt-forceeod').checked    = bp.force_eod;
   if (bp.exit_needs_replacement != null)
     document.getElementById('bbt-needrepl').checked = bp.exit_needs_replacement;
@@ -5008,6 +5034,7 @@ function bbtApplyAllParams(p) {
   sv('bbt-curvetrim',   p.curve_trim_bps);
   sv('bbt-mindtm',      p.min_dtm);
   sv('bbt-minholddays', p.min_hold_days);
+  sv('bbt-confirmticks', p.entry_confirm_ticks);
   // Capital management: total_capital as-is; max_position_pct stored as fraction → show as %
   sv('bbt-totalcap',    p.total_capital);
   if (p.max_position_pct != null) sv('bbt-maxpos', Math.round(p.max_position_pct * 100));
@@ -5017,6 +5044,7 @@ function bbtApplyAllParams(p) {
   // Booleans → checkboxes
   cb('bbt-forceeod', p.force_eod);
   cb('bbt-needrepl', p.exit_needs_replacement);
+  cb('bbt-bestfirst', p.entry_best_first);
   cb('bbt-matured',  p.include_matured);
   // min_exit_profit_bps: -1 means "noloss" is OFF
   if (p.min_exit_profit_bps != null) {
