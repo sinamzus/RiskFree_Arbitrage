@@ -1330,6 +1330,52 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 #bbt-table td.bbt-lossreason::after { content:" ⓘ"; font-size:0.85em; opacity:0.7;
                 text-decoration:none; }
 
+/* ── Backtest / Optimizer history panel ────────────────────────────────── */
+#bbt-hist-wrap {
+  border: 1px solid var(--brd); border-radius: 8px;
+  margin: 10px 0 4px; overflow: hidden; flex-shrink: 0;
+}
+#bbt-hist-hdr {
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+  background: var(--surf2); cursor: pointer; user-select: none;
+  font-size: var(--fs-sm); font-weight: 600;
+}
+#bbt-hist-hdr:hover { background: var(--brd); }
+#bbt-hist-hdr .hist-title { flex: 1; }
+#bbt-hist-hdr .hist-count { color: var(--muted); font-size: var(--fs-xs); }
+#bbt-hist-hdr .hist-toggle { color: var(--muted); font-size: 0.75em; transition: transform .2s; }
+#bbt-hist-wrap.open .hist-toggle { transform: rotate(180deg); }
+#bbt-hist-body { display: none; max-height: 320px; overflow-y: auto; }
+#bbt-hist-wrap.open #bbt-hist-body { display: block; }
+#bbt-hist-list { padding: 4px 0; }
+.bht-empty { padding: 14px; text-align: center; color: var(--muted);
+             font-size: var(--fs-xs); }
+.bbt-hist-entry {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 12px; border-bottom: 1px solid var(--brd);
+  font-size: var(--fs-xs);
+}
+.bbt-hist-entry:last-child { border-bottom: none; }
+.bbt-hist-entry:hover { background: var(--surf2); }
+.bht-type  { font-weight: 700; min-width: 80px; }
+.bht-ts    { color: var(--muted); min-width: 110px; }
+.bht-stats { flex: 1; }
+.bht-params { width: 100%; color: var(--sub); margin-top: 2px;
+              font-variant-numeric: tabular-nums; }
+.bht-load {
+  padding: 3px 10px; font-size: var(--fs-xs); border-radius: 5px;
+  background: var(--accent); color: #fff; border: none; cursor: pointer;
+  white-space: nowrap;
+}
+.bht-load:hover { opacity: 0.85; }
+.bht-del { background: transparent; border: none; cursor: pointer;
+           color: var(--muted); font-size: 1.1em; padding: 2px 4px; }
+.bht-del:hover { color: var(--red); }
+#bbt-hist-clear { font-size: var(--fs-xs); color: var(--muted);
+                  background: transparent; border: none; cursor: pointer;
+                  padding: 2px 6px; }
+#bbt-hist-clear:hover { color: var(--red); }
+
 /* ─── Sortable table headers ─────────────────────────────────── */
 .th-sort { cursor: pointer; user-select: none; }
 .th-sort:hover { color: var(--txt); }
@@ -1932,6 +1978,20 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div id="bbt-opt" style="display:none"></div>
       <div id="bbt-capital" style="display:none"></div>
       <div id="bbt-cards"></div>
+      <!-- History panel: persists backtest & optimizer runs across page reloads -->
+      <div id="bbt-hist-wrap">
+        <div id="bbt-hist-hdr" onclick="bbtToggleHistory()">
+          <span class="hist-title">📋 تاریخچهٔ بک‌تست‌ها و بهینه‌سازی‌ها</span>
+          <span class="hist-count" id="bbt-hist-count">۰ رکورد</span>
+          <button id="bbt-hist-clear" onclick="event.stopPropagation();bbtClearHistory()"
+                  title="پاک کردن تاریخچه">🗑</button>
+          <span class="hist-toggle">▼</span>
+        </div>
+        <div id="bbt-hist-body">
+          <div id="bbt-hist-list"></div>
+        </div>
+      </div>
+
       <div id="bbt-table-wrap">
         <table id="bbt-table">
           <thead><tr>
@@ -2023,6 +2083,7 @@ window.addEventListener('DOMContentLoaded', () => {
   checkBootstrapStatus();   // show banner if bootstrap already running
   loadFunds();
   loadStats();
+  bbtRenderHistory();       // restore history from localStorage
   setInterval(loadFunds, 60_000);
   setInterval(loadStats, 120_000);
   setInterval(() => { if (selected.size===1) loadOrderBook([...selected][0]); }, 30_000);
@@ -4775,6 +4836,10 @@ function renderBondOptimize(res) {
   </tr></thead><tbody>${rows}</tbody></table>`;
   panel.innerHTML = best + table;
   attachSort('bbt-opt-table');
+  // Save to history: store best params so "بارگذاری ▸" applies the optimal point
+  if (b.summary?.trade_count > 0) {
+    bbtSaveHistory('optimizer', {}, b.summary, b.params);
+  }
 }
 
 function applyBondOpt(bp) {
@@ -4793,6 +4858,153 @@ function applyBondOpt(bp) {
     document.getElementById('bbt-noloss').checked = noloss;
     if (noloss) document.getElementById('bbt-minexit').value = bp.min_exit_profit_bps;
   }
+  bondBacktest();
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Backtest / Optimizer history  (persisted in localStorage)
+// ══════════════════════════════════════════════════════════════════
+const BBT_HIST_KEY = 'bbt_history_v2';
+const BBT_HIST_MAX = 40;
+
+function _bbtGetHist() {
+  try { return JSON.parse(localStorage.getItem(BBT_HIST_KEY) || '[]'); }
+  catch { return []; }
+}
+function _bbtSaveHist(hist) {
+  localStorage.setItem(BBT_HIST_KEY, JSON.stringify(hist));
+}
+
+/** Save one entry to history and refresh the panel. */
+function bbtSaveHistory(type, params, summary, bestParams = null) {
+  const hist = _bbtGetHist();
+  hist.unshift({
+    id: Date.now(),
+    type,           // 'backtest' | 'optimizer'
+    ts: Date.now(),
+    params: params || {},
+    summary: {
+      trade_count:      summary?.trade_count      || 0,
+      win_rate:         summary?.win_rate         || 0,
+      total_net_pnl:    summary?.total_net_pnl    || 0,
+      total_return_pct: summary?.total_return_pct || 0,
+    },
+    bestParams: bestParams || null,
+  });
+  if (hist.length > BBT_HIST_MAX) hist.length = BBT_HIST_MAX;
+  _bbtSaveHist(hist);
+  bbtRenderHistory();
+}
+
+/** Delete one entry by id. */
+function bbtDeleteHistEntry(id) {
+  const hist = _bbtGetHist().filter(e => e.id !== id);
+  _bbtSaveHist(hist);
+  bbtRenderHistory();
+}
+
+function bbtClearHistory() {
+  if (!confirm('تمام تاریخچه پاک شود؟')) return;
+  localStorage.removeItem(BBT_HIST_KEY);
+  bbtRenderHistory();
+}
+
+function bbtToggleHistory() {
+  document.getElementById('bbt-hist-wrap').classList.toggle('open');
+}
+
+/** Render the history list into #bbt-hist-list. */
+function bbtRenderHistory() {
+  const hist = _bbtGetHist();
+  // Update badge count
+  const countEl = document.getElementById('bbt-hist-count');
+  if (countEl) countEl.textContent = hist.length + ' رکورد';
+
+  const list = document.getElementById('bbt-hist-list');
+  if (!list) return;
+  if (!hist.length) {
+    list.innerHTML = '<div class="bht-empty">هیچ نتیجه‌ای هنوز ذخیره نشده است</div>';
+    return;
+  }
+  list.innerHTML = hist.map(e => {
+    const s  = e.summary;
+    // Show best params (optimizer) or used params (backtest) in the compact line
+    const dp = e.bestParams || e.params || {};
+    const tsStr = new Date(e.ts).toLocaleString('fa-IR', {dateStyle:'short', timeStyle:'short'});
+    const typeLbl = e.type === 'optimizer' ? '🔧 بهینه‌ساز' : '🧪 بک‌تست';
+    const pnlFmt  = Math.round(s.total_net_pnl).toLocaleString('en-US');
+    const pnlCls  = s.total_net_pnl >= 0 ? 'pos' : 'neg';
+    const pLine   = [
+      dp.entry_bps     != null ? `ورود ${dp.entry_bps}`      : '',
+      dp.exit_bps      != null ? `خروج ${dp.exit_bps}`       : '',
+      dp.degree        != null ? `درجه ${dp.degree}`         : '',
+      dp.min_curve_points != null ? `حداقل ${dp.min_curve_points}` : '',
+      dp.entry_max_bps != null ? `Zmax ${dp.entry_max_bps}`  : '',
+      dp.min_dtm       != null ? `DTM ${dp.min_dtm}`         : '',
+      dp.min_hold_days != null ? `Hold ${dp.min_hold_days}`  : '',
+      dp.force_eod     ? 'EOD✓' : '',
+      dp.exit_needs_replacement === false ? 'Repl✗' :
+        dp.exit_needs_replacement ? 'Repl✓' : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="bbt-hist-entry">
+      <span class="bht-type">${typeLbl}</span>
+      <span class="bht-ts">${tsStr}</span>
+      <span class="bht-stats">
+        ${s.trade_count} معامله · ${s.win_rate}% برد · <span class="${pnlCls}">${pnlFmt} ریال</span>
+        · ${s.total_return_pct}%
+      </span>
+      <button class="bht-load" onclick="bbtLoadHistoryParams(${e.id})"
+              title="بارگذاری پارامترها در فرم اصلی">بارگذاری ▸</button>
+      <button class="bht-del"  onclick="bbtDeleteHistEntry(${e.id})" title="حذف این رکورد">✕</button>
+      <div class="bht-params">${pLine}</div>
+    </div>`;
+  }).join('');
+}
+
+/** Load params from a history entry into the UI, then run backtest. */
+function bbtLoadHistoryParams(id) {
+  const e = _bbtGetHist().find(x => x.id === id);
+  if (!e) return;
+  bbtApplyAllParams(e.bestParams || e.params || {});
+}
+
+/**
+ * Comprehensive param-to-UI loader. Fills every bond backtest control
+ * from a params dict (as returned by the API in res.params / res.best.params).
+ */
+function bbtApplyAllParams(p) {
+  const sv = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+  const cb = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.checked = !!val; };
+  const sel= (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+
+  sv('bbt-entry',       p.entry_bps);
+  sv('bbt-exit',        p.exit_bps);
+  sv('bbt-degree',      p.degree);
+  sv('bbt-minpts',      p.min_curve_points);
+  sv('bbt-step',        p.step_secs);
+  sv('bbt-entrymax',    p.entry_max_bps);
+  sv('bbt-curvetrim',   p.curve_trim_bps);
+  sv('bbt-mindtm',      p.min_dtm);
+  sv('bbt-minholddays', p.min_hold_days);
+  // Capital management: total_capital as-is; max_position_pct stored as fraction → show as %
+  sv('bbt-totalcap',    p.total_capital);
+  if (p.max_position_pct != null) sv('bbt-maxpos', Math.round(p.max_position_pct * 100));
+  // Fees stored as fraction → show as %
+  if (p.buy_fee  != null) sv('bbt-buyfee',  +(p.buy_fee  * 100).toFixed(4));
+  if (p.sell_fee != null) sv('bbt-sellfee', +(p.sell_fee * 100).toFixed(4));
+  // Booleans → checkboxes
+  cb('bbt-forceeod', p.force_eod);
+  cb('bbt-needrepl', p.exit_needs_replacement);
+  cb('bbt-matured',  p.include_matured);
+  // min_exit_profit_bps: -1 means "noloss" is OFF
+  if (p.min_exit_profit_bps != null) {
+    const noloss = p.min_exit_profit_bps >= 0;
+    cb('bbt-noloss', noloss);
+    if (noloss) sv('bbt-minexit', p.min_exit_profit_bps);
+  }
+  // Select
+  sel('bbt-signalprice', p.signal_price);
+  // Run backtest with the loaded params
   bondBacktest();
 }
 
@@ -4870,6 +5082,10 @@ function renderBondBacktest(res) {
   tb.innerHTML = trs || '<tr><td colspan="15" style="color:var(--muted);padding:20px">هیچ معامله‌ای یافت نشد — ابتدا «جمع‌آوری داده» را اجرا کنید و آستانه‌ها را تنظیم کنید</td></tr>';
   attachSort('bbt-table');
   attachBtObHover();
+  // Save to history (only if there were any results)
+  if ((s.trade_count || 0) > 0 || (res.days_tested || 0) > 0) {
+    bbtSaveHistory('backtest', res.params || {}, s);
+  }
 }
 
 // ── Whole-period capital view: start → end, MWRR, peak deployed ─────────────
