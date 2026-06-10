@@ -2235,6 +2235,8 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
         "min_trades":     min_trades,
         "opt_metric":     opt_metric,
         "days_available": len(dates),
+        "date_from":      dates[0]  if dates else None,
+        "date_to":        dates[-1] if dates else None,
         "best":           best,
         "top":            all_results[:top_n],
     }

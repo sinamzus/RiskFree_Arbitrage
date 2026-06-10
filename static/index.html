@@ -1151,6 +1151,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 #bbt-opt-best .ob-h { font-weight: 700; color: var(--txt); margin-bottom: 6px; }
 #bbt-opt-best .ob-p { color: var(--sub); font-size: var(--fs-xs); line-height: 1.7; }
 #bbt-opt-best .ob-p b { color: var(--txt); font-variant-numeric: tabular-nums; }
+.opt-daterange {
+  font-size: var(--fs-xs); color: var(--sub); margin-bottom: 8px;
+  padding: 4px 8px; background: rgba(0,150,255,.07);
+  border-right: 3px solid var(--blue); border-radius: 4px;
+}
+.opt-daterange b { color: var(--txt); }
 #bbt-opt-apply {
   margin-top: 8px; background: var(--green); color: #042; border: none;
   border-radius: 6px; padding: 6px 14px; font-weight: 700; cursor: pointer;
@@ -4718,8 +4724,10 @@ async function bondOptimize() {
 function renderBondOptimize(res) {
   const panel = document.getElementById('bbt-opt');
   if (!res || !res.best || (res.best.summary?.trade_count||0) === 0) {
+    const _g2j = g => { if(!g) return '—'; const s=String(g); const [jy,jm,jd]=gregorianToJalali(+s.slice(0,4),+s.slice(4,6),+s.slice(6,8)); return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`; };
     panel.innerHTML = `<div id="bbt-opt-best"><div class="ob-h">نتیجهٔ معناداری یافت نشد</div>`
-      + `<div class="ob-p">${res?.tested_combos||0} ترکیب آزموده شد روی ${res?.days_available||0} روز داده. `
+      + `<div class="ob-p">${res?.tested_combos||0} ترکیب آزموده شد روی ${res?.days_available||0} روز داده`
+      + (res?.date_from ? ` (${_g2j(res.date_from)} تا ${_g2j(res.date_to)})` : '') + `. `
       + `ابتدا «📊 وضعیت داده» را پر کنید تا چند سری اوراق همزمان اردربوک داشته باشند.</div></div>`;
     return;
   }
@@ -4781,8 +4789,22 @@ function renderBondOptimize(res) {
     'profit_factor':'Profit Factor','expectancy':'Expectancy','total_return':'بازده کل'};
   const usedMetric = metricName[res.opt_metric] || res.opt_metric || 'Sharpe';
 
+  // Date range banner: show the actual date window the engine used.
+  function _gregToJalali(g) {
+    if (!g) return '—';
+    const s = String(g);
+    const [jy,jm,jd] = gregorianToJalali(+s.slice(0,4), +s.slice(4,6), +s.slice(6,8));
+    return `${jy}/${String(jm).padStart(2,'0')}/${String(jd).padStart(2,'0')}`;
+  }
+  const dateRangeHtml = `<div class="opt-daterange">
+    📅 بازه داده‌های مورد استفاده: <b>${_gregToJalali(res.date_from)}</b>
+    تا <b>${_gregToJalali(res.date_to)}</b>
+    (${res.days_available||0} روز معاملاتی)
+  </div>`;
+
   const best = `<div id="bbt-opt-best">
     <div class="ob-h">🏆 بهترین ترکیب (معیار: ${usedMetric}) &nbsp;${stabHtml}</div>
+    ${dateRangeHtml}
     <div class="ob-p">
       درجهٔ منحنی <b>${bp.degree}</b> · حداقل اوراق همزمان <b>${bp.min_curve_points}</b>
       · ورود ≥ <b>${bp.entry_bps} bps</b> · خروج ≤ <b>${bp.exit_bps} bps</b>
