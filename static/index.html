@@ -4741,11 +4741,17 @@ function renderBondOptimize(res) {
   const rows = (res.top || []).map((r, i) => {
     const s = r.summary, p = r.params, m = r.metrics || {};
     const rc = s.total_return_pct >= 0 ? 'pos' : 'neg';
+    const feodMark  = p.force_eod             ? '✓' : '—';
+    const noloss    = p.min_exit_profit_bps >= 0 ? '✓' : '—';
+    const needrepl  = p.exit_needs_replacement  ? '✓' : '—';
     return `<tr class="${i===0?'best':''}">
       <td>${p.degree}</td><td>${p.min_curve_points}</td>
       <td>${p.entry_bps}</td><td>${p.exit_bps}</td>
       <td>${p.step_secs||0}s</td>
       <td>${p.entry_max_bps}</td><td>${p.min_dtm}</td><td>${p.min_hold_days}</td>
+      <td title="بستن اجباری پایان روز">${feodMark}</td>
+      <td title="فقط خروج سودده">${noloss}</td>
+      <td title="خروج فقط با جایگزین">${needrepl}</td>
       <td>${s.trade_count}</td><td>${s.win_rate}%</td>
       <td class="${rc}">${s.total_return_pct}%</td>
       <td>${fmtR(m.sharpe)}</td>
@@ -4753,17 +4759,19 @@ function renderBondOptimize(res) {
       <td>${fmtR(m.profit_factor)}</td>
       <td>${fmtR(m.max_drawdown_pct)}%</td>
       <td class="${rc}">${fmt(s.total_net_pnl)}</td>
-      <td>${s.eod_count}</td>
     </tr>`;
   }).join('');
   const table = `<table id="bbt-opt-table"><thead><tr>
     <th>درجه</th><th>حداقل</th><th>ورود</th><th>خروج</th><th>step</th>
-    <th title="سقف Z-spread ورود (بهداشت داده)">Z‌max</th>
+    <th title="سقف Z-spread ورود">Z‌max</th>
     <th title="حداقل روز تا سررسید">DTM</th>
     <th title="حداقل روزهای نگه‌داری">Hold</th>
+    <th title="بستن اجباری پایان روز">EOD</th>
+    <th title="فقط خروج سودده">NoLoss</th>
+    <th title="خروج فقط با جایگزین">Repl</th>
     <th>معامله</th><th>برد</th><th>بازده</th>
     <th>Sharpe</th><th>Sortino</th><th>PF</th><th>MDD</th>
-    <th>سود خالص</th><th>EOD</th>
+    <th>سود خالص</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
   panel.innerHTML = best + table;
   attachSort('bbt-opt-table');
@@ -4774,9 +4782,17 @@ function applyBondOpt(bp) {
   document.getElementById('bbt-minpts').value    = bp.min_curve_points;
   document.getElementById('bbt-entry').value     = bp.entry_bps;
   document.getElementById('bbt-exit').value      = bp.exit_bps;
-  if (bp.entry_max_bps  != null) document.getElementById('bbt-entrymax').value     = bp.entry_max_bps;
-  if (bp.min_dtm        != null) document.getElementById('bbt-mindtm').value       = bp.min_dtm;
-  if (bp.min_hold_days  != null) document.getElementById('bbt-minholddays').value  = bp.min_hold_days;
+  if (bp.entry_max_bps  != null) document.getElementById('bbt-entrymax').value      = bp.entry_max_bps;
+  if (bp.min_dtm        != null) document.getElementById('bbt-mindtm').value        = bp.min_dtm;
+  if (bp.min_hold_days  != null) document.getElementById('bbt-minholddays').value   = bp.min_hold_days;
+  if (bp.force_eod      != null) document.getElementById('bbt-forceeod').checked    = bp.force_eod;
+  if (bp.exit_needs_replacement != null)
+    document.getElementById('bbt-needrepl').checked = bp.exit_needs_replacement;
+  if (bp.min_exit_profit_bps != null) {
+    const noloss = bp.min_exit_profit_bps >= 0;
+    document.getElementById('bbt-noloss').checked = noloss;
+    if (noloss) document.getElementById('bbt-minexit').value = bp.min_exit_profit_bps;
+  }
   bondBacktest();
 }
 

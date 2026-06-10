@@ -1458,9 +1458,13 @@ COARSE_GRID = {
     "entry_bps":        [15, 30, 45, 65, 85, 110],
     "exit_bps":         [-20, -10, 0, 10, 20],
     "step_secs":        [0, 30, 60],
-    "entry_max_bps":    [80, 120, 150],  # sanity-band ceiling
-    "min_dtm":          [15, 30],        # near-maturity exclusion (days)
-    "min_hold_days":    [0, 1, 2],       # minimum calendar hold before signal exit
+    "entry_max_bps":        [80, 120, 150],  # sanity-band ceiling
+    "min_dtm":              [15, 30],        # near-maturity exclusion (days)
+    "min_hold_days":        [0, 1, 2],       # minimum calendar hold before signal exit
+    # All three below are replay-time only → no extra stream-build cost
+    "force_eod":            [False, True],   # بستن اجباری پایان روز
+    "min_exit_profit_bps":  [-1.0, 0.0],    # فقط خروج سودده (-1=off, 0=break-even)
+    "exit_needs_replacement":[False, True],  # خروج فقط با جایگزین (نقد نمان)
 }
 # Phase-2 refinement: ±step around best coarse results (entry/exit only)
 _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
@@ -1500,22 +1504,23 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             stream_cache[key] = st
         return st
 
-    def _eval(degree, minpts, entry, exit_, step, entry_max, min_dtm_val, min_hold):
+    def _eval(degree, minpts, entry, exit_, step, entry_max, min_dtm_val, min_hold,
+              feod, min_exit_prof, needs_repl):
         p = BondBacktestParams(
             capital=base.capital, entry_bps=float(entry), exit_bps=float(exit_),
             degree=int(degree), min_curve_points=int(minpts),
-            step_secs=int(step), force_eod=base.force_eod,
+            step_secs=int(step), force_eod=bool(feod),
             include_matured=base.include_matured,
             buy_fee=base.buy_fee, sell_fee=base.sell_fee,
             strategy=base.strategy,
-            min_exit_profit_bps=base.min_exit_profit_bps,
+            min_exit_profit_bps=float(min_exit_prof),
             total_capital=base.total_capital,
             max_position_pct=base.max_position_pct,
             signal_price=base.signal_price,
             entry_max_bps=float(entry_max),
             curve_trim_bps=base.curve_trim_bps,
             min_dtm=int(min_dtm_val),
-            exit_needs_replacement=base.exit_needs_replacement,
+            exit_needs_replacement=bool(needs_repl),
             min_hold_days=int(min_hold))
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
@@ -1538,9 +1543,10 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
     def _run_combos(combos):
         """Evaluate combos, building each group's stream once (grouped first).
 
-        Group key = (degree, minpts, step, min_dtm).  Within a group only
-        entry_bps, exit_bps, entry_max_bps and min_hold_days vary — all are
-        replay-time parameters that don't require a new stream build.
+        Group key = (degree, minpts, step, min_dtm) — indices (0,1,4,6).
+        All other dimensions (entry, exit, entry_max, min_hold, force_eod,
+        min_exit_profit, exit_needs_replacement) are replay-time only and
+        require no stream rebuild.
         """
         combos = sorted(combos, key=lambda c: (c[0], c[1], c[4], c[6]))
         out = []
@@ -1552,14 +1558,19 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
         return out
 
     # Phase 1 — coarse grid
-    # Combo tuple: (degree, minpts, entry, exit, step, entry_max, min_dtm, min_hold)
+    # Combo tuple (11 elements):
+    #   0:degree  1:minpts  2:entry  3:exit  4:step  5:entry_max  6:min_dtm
+    #   7:min_hold  8:force_eod  9:min_exit_profit  10:exit_needs_replacement
     coarse = [
-        (deg, minp, ent, ex, stp, emax, mdtm, mhold)
-        for deg, minp, ent, ex, stp, emax, mdtm, mhold in itertools.product(
-            COARSE_GRID["degree"],           COARSE_GRID["min_curve_points"],
-            COARSE_GRID["entry_bps"],        COARSE_GRID["exit_bps"],
-            COARSE_GRID["step_secs"],        COARSE_GRID["entry_max_bps"],
-            COARSE_GRID["min_dtm"],          COARSE_GRID["min_hold_days"],
+        (deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr)
+        for deg, minp, ent, ex, stp, emax, mdtm, mhold, feod, mep, nr
+        in itertools.product(
+            COARSE_GRID["degree"],               COARSE_GRID["min_curve_points"],
+            COARSE_GRID["entry_bps"],            COARSE_GRID["exit_bps"],
+            COARSE_GRID["step_secs"],            COARSE_GRID["entry_max_bps"],
+            COARSE_GRID["min_dtm"],              COARSE_GRID["min_hold_days"],
+            COARSE_GRID["force_eod"],            COARSE_GRID["min_exit_profit_bps"],
+            COARSE_GRID["exit_needs_replacement"],
         )
         if ex < ent
     ]
@@ -1585,6 +1596,8 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                     fine_set.add((
                         p["degree"], p["min_curve_points"], ne, nx, p["step_secs"],
                         p["entry_max_bps"], p["min_dtm"], p["min_hold_days"],
+                        p["force_eod"], p["min_exit_profit_bps"],
+                        p["exit_needs_replacement"],
                     ))
     fine_new = [c for c in fine_set if c not in seen]
 
@@ -1618,15 +1631,17 @@ def _param_stability(dates: list, cache: dict, best_params: dict,
         p = BondBacktestParams(
             capital=base.capital, entry_bps=float(ne), exit_bps=float(nx),
             degree=int(bp["degree"]), min_curve_points=int(bp["min_curve_points"]),
-            step_secs=int(bp.get("step_secs", 0)), force_eod=base.force_eod,
+            step_secs=int(bp.get("step_secs", 0)),
             include_matured=base.include_matured,
             buy_fee=base.buy_fee, sell_fee=base.sell_fee, strategy=base.strategy,
-            # Use the optimised best_params values — stability should be measured
-            # around the actual best point, not the base UI defaults.
+            # All the following use the optimised best_params values so stability
+            # is measured around the actual best point, not the UI defaults.
+            force_eod=bool(bp.get("force_eod", base.force_eod)),
+            min_exit_profit_bps=float(bp.get("min_exit_profit_bps", base.min_exit_profit_bps)),
             entry_max_bps=float(bp.get("entry_max_bps", base.entry_max_bps)),
             curve_trim_bps=base.curve_trim_bps,
             min_dtm=int(bp.get("min_dtm", base.min_dtm)),
-            exit_needs_replacement=base.exit_needs_replacement,
+            exit_needs_replacement=bool(bp.get("exit_needs_replacement", base.exit_needs_replacement)),
             min_hold_days=int(bp.get("min_hold_days", base.min_hold_days)))
         trades, _, _ = _simulate_cache(dates, cache, p)
         s = _summarize(trades, base.buy_fee)
