@@ -1454,14 +1454,18 @@ def _objective_v2(summary: dict, metrics: dict, min_trades: int,
 
 # Phase-1 coarse grid: wide spacing over expanded parameter space
 COARSE_GRID = {
+    # ── Stream-building dims: every extra value = a full stream rebuild ──
     "degree":           [1, 2],
     "min_curve_points": [3, 4, 5],
-    "entry_bps":        [15, 30, 45, 65, 85, 110],
-    "exit_bps":         [-20, -10, 0, 10, 20],
     "step_secs":        [0, 30, 60],
-    "entry_max_bps":        [80, 120, 150],  # sanity-band ceiling
     "min_dtm":              [15, 30],        # near-maturity exclusion (days)
-    "min_hold_days":        [0, 1, 2],       # minimum calendar hold before signal exit
+    # ── Replay-only dims (cheap → dense). Spacing is chosen so the fine
+    #    phase (±8 entry / ±4 exit) covers each axis with NO blind gaps:
+    #    entry step 15 ≤ 2×8, exit step 8 ≤ 2×4. ──
+    "entry_bps":        [10, 25, 40, 55, 70, 85, 100, 115, 130],
+    "exit_bps":         [-32, -24, -16, -8, 0, 8, 16, 24],
+    "entry_max_bps":        [70, 100, 130, 160],  # sanity-band ceiling
+    "min_hold_days":        [0, 1, 2, 3],    # minimum calendar hold before signal exit
     # All three below are replay-time only → no extra stream-build cost
     "force_eod":            [False, True],   # بستن اجباری پایان روز
     "min_exit_profit_bps":  [-1.0, 0.0],    # فقط خروج سودده (-1=off, 0=break-even)
@@ -1474,7 +1478,7 @@ _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
 # ── Optimizer fast path: trigger-compressed batch replay + fork parallelism ──
 #
 # _replay_stream walks EVERY (tick × series) event for EVERY combo.  With the
-# full COARSE_GRID that is ~75k replays over the whole stream — hours of
+# full COARSE_GRID that is ~267k replays over the whole stream — hours of
 # pure-Python iteration.  Two observations collapse this:
 #
 #   1. A combo only ACTS where a signal threshold is crossed.  One pass per
@@ -2000,7 +2004,9 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             COARSE_GRID["force_eod"],            COARSE_GRID["min_exit_profit_bps"],
             COARSE_GRID["exit_needs_replacement"],
         )
-        if ex < ent
+        # ex < ent: exit must sit below entry.  ent <= emax: the entry band
+        # [entry_bps, entry_max_bps] must be non-empty, else zero trades.
+        if ex < ent and ent <= emax
     ]
     if progress is not None:
         with _lock:
@@ -2020,7 +2026,7 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             for dx in [-_FINE_STEP["exit_bps"], _FINE_STEP["exit_bps"]]:
                 ne = p["entry_bps"] + de
                 nx = p["exit_bps"] + dx
-                if nx < ne and ne > 5:
+                if nx < ne and ne > 5 and ne <= p["entry_max_bps"]:
                     fine_set.add((
                         p["degree"], p["min_curve_points"], ne, nx, p["step_secs"],
                         p["entry_max_bps"], p["min_dtm"], p["min_hold_days"],
@@ -2186,7 +2192,7 @@ def optimize_bond_backtest(db, symbols: list[str] | None = None,
 
     Phases
     ------
-    1. **Coarse** — evaluate every COARSE_GRID combo (~75k after validity
+    1. **Coarse** — evaluate every COARSE_GRID combo (~267k after validity
        filter) via trigger-compressed batch replay, parallel across cores
        (``n_jobs``: 0 = auto, 1 = sequential).
     2. **Fine** — zoom into top-5 coarse winners with ±8 bps / ±4 bps steps.

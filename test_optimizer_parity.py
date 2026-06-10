@@ -113,7 +113,7 @@ def coarse_combos() -> list[tuple]:
             COARSE_GRID["min_dtm"], COARSE_GRID["min_hold_days"],
             COARSE_GRID["force_eod"], COARSE_GRID["min_exit_profit_bps"],
             COARSE_GRID["exit_needs_replacement"])
-        if ex < ent
+        if ex < ent and ent <= emax     # mirrors _c2f_optimize validity filter
     ]
 
 
