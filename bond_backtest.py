@@ -1817,6 +1817,15 @@ def _replay_triggers(tdays: list, stream: dict, p: BondBacktestParams,
 _OPT_SHARED: dict = {}
 
 
+def _spawn_init(shared: dict) -> None:
+    """Pool initializer for spawn-based workers (Windows / no fork).
+
+    Spawned children re-import this module with an empty _OPT_SHARED, so the
+    inputs (including the pickled day-cache) are shipped once per worker."""
+    _OPT_SHARED.clear()
+    _OPT_SHARED.update(shared)
+
+
 def _opt_group_worker(task):
     """Evaluate one stream-group's combos: build the group's decision stream,
     index its triggers, then sparse-replay every combo.  Runs inside worker
@@ -1892,10 +1901,26 @@ def _run_combo_tasks(combos: list, progress: dict | None, lock,
     if jobs > 1:
         import multiprocessing as _mp
         import threading as _th
-        if "fork" in _mp.get_all_start_methods():
+        methods = _mp.get_all_start_methods()
+        # fork (Linux/WSL): children inherit the day-cache copy-on-write.
+        # spawn (Windows): children re-import the module; the inputs are
+        # pickled once per worker via the pool initializer — slower startup,
+        # but the replays still run fully parallel.
+        method = os.environ.get("BOND_OPT_START_METHOD") or (
+            "fork" if "fork" in methods else
+            "spawn" if "spawn" in methods else "")
+        if method in methods:
+            ctx = _mp.get_context(method)
             done0 = progress.get("done", 0) if progress is not None else 0
-            counter = _mp.Value("q", done0)
-            _OPT_SHARED["counter"] = counter
+            counter = ctx.Value("q", done0)
+            if method == "fork":
+                _OPT_SHARED["counter"] = counter
+                init, initargs = None, ()
+            else:
+                shared = {k: _OPT_SHARED[k] for k in
+                          ("dates", "cache", "base", "opt_metric", "min_trades")}
+                shared.update({"counter": counter, "progress": None, "lock": None})
+                init, initargs = _spawn_init, (shared,)
             stop = _th.Event()
 
             def _poll():
@@ -1907,8 +1932,7 @@ def _run_combo_tasks(combos: list, progress: dict | None, lock,
             poller = _th.Thread(target=_poll, daemon=True)
             poller.start()
             try:
-                ctx = _mp.get_context("fork")
-                with ctx.Pool(jobs) as pool:
+                with ctx.Pool(jobs, initializer=init, initargs=initargs) as pool:
                     for res in pool.imap_unordered(_opt_group_worker, tasks,
                                                    chunksize=1):
                         out.extend(res)

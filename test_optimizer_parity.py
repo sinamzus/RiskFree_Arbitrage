@@ -223,14 +223,24 @@ def check_worker_and_pool(seed: int, base: BondBacktestParams) -> None:
     try:
         r1 = _c2f_optimize(dates, cache, base, "sharpe", 3, top_k=5, n_jobs=1)
         r2 = _c2f_optimize(dates, cache, base, "sharpe", 3, top_k=5, n_jobs=2)
+        # Force the spawn path (what Windows uses) even where fork exists.
+        os.environ["BOND_OPT_START_METHOD"] = "spawn"
+        try:
+            r3 = _c2f_optimize(dates, cache, base, "sharpe", 3, top_k=5, n_jobs=2)
+        finally:
+            del os.environ["BOND_OPT_START_METHOD"]
     finally:
         bb.COARSE_GRID = saved
     j1 = json.dumps([(r["params"], r["score"], r["summary"]) for r in r1],
                     sort_keys=True, ensure_ascii=False)
     j2 = json.dumps([(r["params"], r["score"], r["summary"]) for r in r2],
                     sort_keys=True, ensure_ascii=False)
-    assert j1 == j2, "n_jobs=1 vs n_jobs=2 results differ!"
-    print(f"  ✓ pool parity: {len(r1)} combos identical across n_jobs=1/2")
+    j3 = json.dumps([(r["params"], r["score"], r["summary"]) for r in r3],
+                    sort_keys=True, ensure_ascii=False)
+    assert j1 == j2, "n_jobs=1 vs n_jobs=2 (fork) results differ!"
+    assert j1 == j3, "sequential vs spawn-pool results differ!"
+    print(f"  ✓ pool parity: {len(r1)} combos identical across "
+          f"sequential / fork / spawn")
 
 
 def main() -> int:
