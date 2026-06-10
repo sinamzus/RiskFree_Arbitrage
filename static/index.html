@@ -4726,6 +4726,9 @@ function renderBondOptimize(res) {
       درجهٔ منحنی <b>${bp.degree}</b> · حداقل اوراق همزمان <b>${bp.min_curve_points}</b>
       · ورود ≥ <b>${bp.entry_bps} bps</b> · خروج ≤ <b>${bp.exit_bps} bps</b>
       · تناوب <b>${bp.step_secs||0}s</b>
+      · سقف z <b>${bp.entry_max_bps} bps</b>
+      · حداقل DTM <b>${bp.min_dtm} روز</b>
+      · حداقل نگه‌داری <b>${bp.min_hold_days} روز</b>
       · ${bs.trade_count} معامله · نرخ برد <b>${bs.win_rate}%</b>
       · سود خالص <b>${fmt(bs.total_net_pnl)}</b> ریال
       · بازده <b>${bs.total_return_pct}%</b> · EOD <b>${bs.eod_count}</b>
@@ -4742,6 +4745,7 @@ function renderBondOptimize(res) {
       <td>${p.degree}</td><td>${p.min_curve_points}</td>
       <td>${p.entry_bps}</td><td>${p.exit_bps}</td>
       <td>${p.step_secs||0}s</td>
+      <td>${p.entry_max_bps}</td><td>${p.min_dtm}</td><td>${p.min_hold_days}</td>
       <td>${s.trade_count}</td><td>${s.win_rate}%</td>
       <td class="${rc}">${s.total_return_pct}%</td>
       <td>${fmtR(m.sharpe)}</td>
@@ -4754,6 +4758,9 @@ function renderBondOptimize(res) {
   }).join('');
   const table = `<table id="bbt-opt-table"><thead><tr>
     <th>درجه</th><th>حداقل</th><th>ورود</th><th>خروج</th><th>step</th>
+    <th title="سقف Z-spread ورود (بهداشت داده)">Z‌max</th>
+    <th title="حداقل روز تا سررسید">DTM</th>
+    <th title="حداقل روزهای نگه‌داری">Hold</th>
     <th>معامله</th><th>برد</th><th>بازده</th>
     <th>Sharpe</th><th>Sortino</th><th>PF</th><th>MDD</th>
     <th>سود خالص</th><th>EOD</th>
@@ -4763,10 +4770,13 @@ function renderBondOptimize(res) {
 }
 
 function applyBondOpt(bp) {
-  document.getElementById('bbt-degree').value = bp.degree;
-  document.getElementById('bbt-minpts').value = bp.min_curve_points;
-  document.getElementById('bbt-entry').value  = bp.entry_bps;
-  document.getElementById('bbt-exit').value   = bp.exit_bps;
+  document.getElementById('bbt-degree').value    = bp.degree;
+  document.getElementById('bbt-minpts').value    = bp.min_curve_points;
+  document.getElementById('bbt-entry').value     = bp.entry_bps;
+  document.getElementById('bbt-exit').value      = bp.exit_bps;
+  if (bp.entry_max_bps  != null) document.getElementById('bbt-entrymax').value     = bp.entry_max_bps;
+  if (bp.min_dtm        != null) document.getElementById('bbt-mindtm').value       = bp.min_dtm;
+  if (bp.min_hold_days  != null) document.getElementById('bbt-minholddays').value  = bp.min_hold_days;
   bondBacktest();
 }
 

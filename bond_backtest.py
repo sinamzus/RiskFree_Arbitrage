@@ -1458,17 +1458,12 @@ COARSE_GRID = {
     "entry_bps":        [15, 30, 45, 65, 85, 110],
     "exit_bps":         [-20, -10, 0, 10, 20],
     "step_secs":        [0, 30, 60],
+    "entry_max_bps":    [80, 120, 150],  # sanity-band ceiling
+    "min_dtm":          [15, 30],        # near-maturity exclusion (days)
+    "min_hold_days":    [0, 1, 2],       # minimum calendar hold before signal exit
 }
-# Phase-2 refinement: ±step around best coarse results
+# Phase-2 refinement: ±step around best coarse results (entry/exit only)
 _FINE_STEP = {"entry_bps": 8, "exit_bps": 4}
-
-# Legacy grid kept for reference (no longer used by default)
-DEFAULT_GRID = {
-    "degree":           [1, 2],
-    "min_curve_points": [3, 4],
-    "entry_bps":        [25, 40, 55, 70, 90],
-    "exit_bps":         [-10, 0, 10, 20],
-}
 
 
 def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
@@ -1478,16 +1473,20 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                   lock=None) -> list[dict]:
     """Two-phase coarse-to-fine search. Returns all evaluated combos sorted by score.
 
-    Combos are grouped by (degree, min_curve_points, step_secs); the expensive
-    z-spread decision stream is built once per group (and cached across phases),
-    then each (entry, exit) combo is replayed cheaply on top of it.
+    Combos are grouped by (degree, min_curve_points, step_secs, min_dtm); the
+    expensive z-spread decision stream is built once per group (and cached across
+    phases), then each (entry, exit, entry_max, min_hold) combo is replayed
+    cheaply on top of it.  entry_max_bps and min_hold_days are replay-time
+    parameters and add zero stream-rebuild cost.
     """
     import threading
     _lock = lock or threading.Lock()
-    stream_cache: dict = {}     # (degree, minpts, step) → decision stream
+    # Stream key includes min_dtm: different exclusion thresholds yield different
+    # curve fits and z-spread time-series, so streams cannot be shared across them.
+    stream_cache: dict = {}   # (degree, minpts, step, min_dtm) → decision stream
 
-    def _get_stream(degree, minpts, step):
-        key = (degree, minpts, step)
+    def _get_stream(degree, minpts, step, min_dtm_val):
+        key = (degree, minpts, step, min_dtm_val)
         st = stream_cache.get(key)
         if st is None:
             tmpl = BondBacktestParams(
@@ -1496,12 +1495,12 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                 force_eod=base.force_eod, include_matured=base.include_matured,
                 buy_fee=base.buy_fee, sell_fee=base.sell_fee,
                 signal_price=base.signal_price, curve_trim_bps=base.curve_trim_bps,
-                min_dtm=base.min_dtm)
+                min_dtm=int(min_dtm_val))
             st = _build_decision_stream(dates, cache, tmpl)
             stream_cache[key] = st
         return st
 
-    def _eval(degree, minpts, entry, exit_, step):
+    def _eval(degree, minpts, entry, exit_, step, entry_max, min_dtm_val, min_hold):
         p = BondBacktestParams(
             capital=base.capital, entry_bps=float(entry), exit_bps=float(exit_),
             degree=int(degree), min_curve_points=int(minpts),
@@ -1513,17 +1512,17 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
             total_capital=base.total_capital,
             max_position_pct=base.max_position_pct,
             signal_price=base.signal_price,
-            entry_max_bps=base.entry_max_bps,
+            entry_max_bps=float(entry_max),
             curve_trim_bps=base.curve_trim_bps,
-            min_dtm=base.min_dtm,
+            min_dtm=int(min_dtm_val),
             exit_needs_replacement=base.exit_needs_replacement,
-            min_hold_days=base.min_hold_days)
+            min_hold_days=int(min_hold))
         if base.strategy == "outlier":
             # Per-order outlier z depends on the OB ladders, not just the mid,
             # so the mid-based decision-stream cache doesn't apply — simulate.
             trades, tested, _ = _simulate_cache(dates, cache, p)
         else:
-            st = _get_stream(degree, minpts, step)
+            st = _get_stream(degree, minpts, step, min_dtm_val)
             trades = _replay_stream(st, p)
             tested = st["tested"]
         summary = _summarize(trades, base.buy_fee)
@@ -1537,10 +1536,13 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
         }
 
     def _run_combos(combos):
-        """Evaluate combos, building each group's stream once (grouped first)."""
-        # Sort by group so a group's stream is built once then reused, and can
-        # be dropped right after to bound memory.
-        combos = sorted(combos, key=lambda c: (c[0], c[1], c[4]))
+        """Evaluate combos, building each group's stream once (grouped first).
+
+        Group key = (degree, minpts, step, min_dtm).  Within a group only
+        entry_bps, exit_bps, entry_max_bps and min_hold_days vary — all are
+        replay-time parameters that don't require a new stream build.
+        """
+        combos = sorted(combos, key=lambda c: (c[0], c[1], c[4], c[6]))
         out = []
         for combo in combos:
             out.append(_eval(*combo))
@@ -1549,13 +1551,15 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                     progress["done"] += 1
         return out
 
-    # Phase 1 — coarse
+    # Phase 1 — coarse grid
+    # Combo tuple: (degree, minpts, entry, exit, step, entry_max, min_dtm, min_hold)
     coarse = [
-        (deg, minp, ent, ex, stp)
-        for deg, minp, ent, ex, stp in itertools.product(
-            COARSE_GRID["degree"], COARSE_GRID["min_curve_points"],
-            COARSE_GRID["entry_bps"], COARSE_GRID["exit_bps"],
-            COARSE_GRID["step_secs"],
+        (deg, minp, ent, ex, stp, emax, mdtm, mhold)
+        for deg, minp, ent, ex, stp, emax, mdtm, mhold in itertools.product(
+            COARSE_GRID["degree"],           COARSE_GRID["min_curve_points"],
+            COARSE_GRID["entry_bps"],        COARSE_GRID["exit_bps"],
+            COARSE_GRID["step_secs"],        COARSE_GRID["entry_max_bps"],
+            COARSE_GRID["min_dtm"],          COARSE_GRID["min_hold_days"],
         )
         if ex < ent
     ]
@@ -1567,7 +1571,9 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
     results: list[dict] = _run_combos(coarse)
     results.sort(key=lambda r: r["score"], reverse=True)
 
-    # Phase 2 — fine-grid zoom around top-K coarse winners
+    # Phase 2 — fine-grid zoom around top-K coarse winners.
+    # Only entry_bps/exit_bps are perturbed; entry_max/min_dtm/min_hold stay
+    # fixed at the best-combo value found in phase 1.
     fine_set: set = set()
     for r in results[:top_k]:
         p = r["params"]
@@ -1576,7 +1582,10 @@ def _c2f_optimize(dates: list, cache: dict, base: BondBacktestParams,
                 ne = p["entry_bps"] + de
                 nx = p["exit_bps"] + dx
                 if nx < ne and ne > 5:
-                    fine_set.add((p["degree"], p["min_curve_points"], ne, nx, p["step_secs"]))
+                    fine_set.add((
+                        p["degree"], p["min_curve_points"], ne, nx, p["step_secs"],
+                        p["entry_max_bps"], p["min_dtm"], p["min_hold_days"],
+                    ))
     fine_new = [c for c in fine_set if c not in seen]
 
     if fine_new and progress is not None:
@@ -1612,9 +1621,13 @@ def _param_stability(dates: list, cache: dict, best_params: dict,
             step_secs=int(bp.get("step_secs", 0)), force_eod=base.force_eod,
             include_matured=base.include_matured,
             buy_fee=base.buy_fee, sell_fee=base.sell_fee, strategy=base.strategy,
-            entry_max_bps=base.entry_max_bps, curve_trim_bps=base.curve_trim_bps,
-            min_dtm=base.min_dtm, exit_needs_replacement=base.exit_needs_replacement,
-            min_hold_days=base.min_hold_days)
+            # Use the optimised best_params values — stability should be measured
+            # around the actual best point, not the base UI defaults.
+            entry_max_bps=float(bp.get("entry_max_bps", base.entry_max_bps)),
+            curve_trim_bps=base.curve_trim_bps,
+            min_dtm=int(bp.get("min_dtm", base.min_dtm)),
+            exit_needs_replacement=base.exit_needs_replacement,
+            min_hold_days=int(bp.get("min_hold_days", base.min_hold_days)))
         trades, _, _ = _simulate_cache(dates, cache, p)
         s = _summarize(trades, base.buy_fee)
         m = _risk_metrics(trades, base.buy_fee)
