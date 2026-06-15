@@ -1319,6 +1319,7 @@ def create_app(db, scan_callback=None):
             sell_fee=_f("sell_fee", 0.0005),
             center_mode=str(getter("center_mode", None) or "mid"),
             flatten_eod=_b("flatten_eod", False),
+            relieve_queue=_b("relieve_queue", True),
         )
 
     @app.route("/api/mm/symbols")

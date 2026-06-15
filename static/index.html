@@ -2115,6 +2115,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="mm-sellfee" type="number" step="0.01" value="0.05" style="width:64px"></div>
       <label class="chk" title="اگر روشن باشد موجودیِ پایانِ روز به آخرین قیمت تسویه می‌شود">
         <input id="mm-flatten" type="checkbox"> تسویهٔ پایان روز</label>
+      <label class="chk" title="در صف خرید/فروش (قفلِ سقف/کف)، تعهدِ دوطرفه ساقط است و بازارگردان فقط سمتِ رفعِ صف را می‌گذارد: فروش روی سقف در صف خرید، خرید روی کف در صف فروش.">
+        <input id="mm-relieve" type="checkbox" checked> رفعِ صف خرید/فروش</label>
     </div>
     <div class="bbt-actions">
       <div class="bbt-field bbt-metric"><label>معیارِ بهینه‌ساز</label>
@@ -5761,6 +5763,7 @@ function mmParams() {
     buy_fee:          pct('mm-buyfee'),
     sell_fee:         pct('mm-sellfee'),
     flatten_eod:      document.getElementById('mm-flatten').checked ? '1' : '0',
+    relieve_queue:    document.getElementById('mm-relieve').checked ? '1' : '0',
   };
 }
 
@@ -5796,6 +5799,8 @@ function renderMMBacktest(res) {
     ${card('Sharpe', s.sharpe||0)}
     ${card('افتِ سرمایه', (s.max_drawdown_pct||0) + '%')}
     ${card('روزهای برنده', (s.win_rate||0) + '%')}
+    ${card('صف خرید/فروش', (s.lock_buy_snaps||0) + '/' + (s.lock_sell_snaps||0))}
+    ${card('حجمِ رفعِ صف', fmt(s.total_relief_vol))}
   </div>`;
   const tb = document.getElementById('mm-tbody');
   tb.innerHTML = (res.days || []).map(d => {

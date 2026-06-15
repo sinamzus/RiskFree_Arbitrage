@@ -92,6 +92,12 @@ class MMParams:
     # رفتارِ پایانِ روز
     flatten_eod: bool = False             # True = موجودی پایانِ روز صفر شود
 
+    # صف خرید / صف فروش (قفلِ سقف/کف دامنهٔ نوسان)
+    relieve_queue: bool = True            # در قفل، تعهدِ دوطرفه ساقط و بازارگردان
+                                          # فقط سمتِ رفعِ صف را می‌گذارد (فروش روی
+                                          # سقف در صف خرید، خرید روی کف در صف فروش).
+                                          # False = در قفل کنار می‌کشد (بدون مظنه).
+
     # ساعتِ معاملاتی
     session_open: int = SESSION_OPEN_DEFAULT
     session_close: int = SESSION_CLOSE_DEFAULT
@@ -179,10 +185,12 @@ def _simulate_mm_day(date_int: int, snaps: list, trades: list,
     if not snaps or not trades:
         return _empty_day(date_int, cash, inv), MMDayState(cash, inv), []
 
-    # مرجعِ روز: prev_close (اگر داده شد) وگرنه میانهٔ آغازِ روز.
+    # مرجعِ دامنهٔ نوسان: ثابت برای کلِ روز — قیمتِ پایانیِ روز قبل (اگر داده شد)
+    # وگرنه میانهٔ آغازِ روز. این مرجع، سقف/کفِ باند و تشخیصِ صف را تعیین می‌کند؛
+    # نباید با میانهٔ زندهٔ بازار (که در روزِ قفل خودش روی سقف است) شناور شود.
     first = snaps[0]
     day_open_mid = _mid(first)
-    ref = ref_override if ref_override > 0 else day_open_mid
+    band_ref = ref_override if ref_override > 0 else day_open_mid
 
     trades_sorted = sorted(trades, key=lambda x: (int(x["time"]), x.get("seq", 0)))
     ti = 0
@@ -196,6 +204,8 @@ def _simulate_mm_day(date_int: int, snaps: list, trades: list,
 
     intervals = 0
     compliant_intervals = 0
+    lock_buy_snaps = lock_sell_snaps = 0    # تعدادِ snapshotهای صف خرید/فروش
+    relief_vol = 0                          # حجمی که بازارگردان به صف تزریق کرد
 
     # وضعیتِ صف: قیمتِ فعلیِ مظنه و حجمِ جلوترِ مصرف‌نشده در هر سمت.
     cur_bid = cur_ask = None
@@ -206,25 +216,51 @@ def _simulate_mm_day(date_int: int, snaps: list, trades: list,
         t0 = int(snap["time"])
         t1 = int(snaps[si + 1]["time"]) if si + 1 < len(snaps) else p.session_close + 1
 
-        # مرکزِ مظنه
-        if p.center_mode == "ref":
-            center = ref
-        else:
-            center = _mid(snap) or ref
-        if p.ref_mode == "last":
-            ref = (snap.get("ask1_price", 0) + snap.get("bid1_price", 0)) / 2.0 or ref
+        # مرکزِ مظنه: حول مرجعِ ثابت (center_mode=ref) یا میانهٔ زندهٔ بازار.
+        center = band_ref if p.center_mode == "ref" else (_mid(snap) or band_ref)
 
-        new_bid, new_ask = _quote(center, ref, inv, p)
+        # دامنهٔ نوسان: سقف/کفِ ثابتِ روز، و تشخیصِ صف خرید/فروش (قفل).
+        pc_ceiling = band_ref * (1.0 + p.price_band_pct)
+        pc_floor   = band_ref * (1.0 - p.price_band_pct)
+        lock = _lock_state(snap, pc_ceiling, pc_floor, p)
+
+        # شمارشِ قفل (مستقل از رفتارِ بازارگردان)
+        if lock == "buy":
+            lock_buy_snaps += 1
+        elif lock == "sell":
+            lock_sell_snaps += 1
+
+        if lock and p.relieve_queue:
+            # تعهدِ دوطرفه ساقط؛ بازارگردان فقط سمتِ رفعِ صف را می‌گذارد.
+            if lock == "buy":                  # صف خرید → فقط فروش روی سقف
+                new_bid, new_ask = None, _round_tick(pc_ceiling, p)
+            else:                               # صف فروش → فقط خرید روی کف
+                new_bid, new_ask = _round_tick(pc_floor, p), None
+        elif lock:
+            # رفعِ صف خاموش است → در قفل کنار می‌کشد (بدون مظنه).
+            new_bid, new_ask = None, None
+        else:
+            new_bid, new_ask = _quote(center, band_ref, inv, p)
 
         # کف/سقفِ موجودی: سمتِ پر را تعطیل کن
         buy_ok = inv < p.inventory_ceiling and cash > 0
         sell_ok = inv > p.inventory_floor
-        # حضورِ قانونی = مظنهٔ دوطرفهٔ معتبر و هر دو سمت فعال
+
+        # حضورِ قانونی
         intervals += 1
-        two_sided = (new_bid is not None and buy_ok and sell_ok
-                     and bid_remaining_target(p) > 0)
-        if two_sided:
-            compliant_intervals += 1
+        if lock and p.relieve_queue:
+            # در قفل، حضور = ارائهٔ سمتِ رفعِ صف (تعهدِ دوطرفه ساقط است).
+            relieving_ok = ((lock == "buy" and new_ask is not None and sell_ok)
+                            or (lock == "sell" and new_bid is not None and buy_ok))
+            if relieving_ok:
+                compliant_intervals += 1
+        elif lock:
+            pass                                # غایب در قفل → ناسازگار
+        else:
+            two_sided = (new_bid is not None and new_ask is not None
+                         and buy_ok and sell_ok)
+            if two_sided:
+                compliant_intervals += 1
 
         # تازه‌سازیِ مظنه؛ اگر قیمت عوض شد، صف از نو (ته صف) شروع می‌شود.
         if new_bid != cur_bid:
@@ -263,9 +299,12 @@ def _simulate_mm_day(date_int: int, snaps: list, trades: list,
                             buy_vol += fill
                             buy_notional += cost
                             fees_paid += fee
+                            if lock:
+                                relief_vol += fill
                             fills.append({"date": date_int, "time": int(tr["time"]),
                                           "side": "buy", "price": cur_bid,
-                                          "volume": fill, "inv": inv})
+                                          "volume": fill, "inv": inv,
+                                          "lock": lock or ""})
                 continue
 
             # سمتِ خریدِ تهاجمی → پرشدنِ askِ بازارگردان
@@ -287,9 +326,12 @@ def _simulate_mm_day(date_int: int, snaps: list, trades: list,
                         sell_vol += fill
                         sell_notional += proceeds
                         fees_paid += fee
+                        if lock:
+                            relief_vol += fill
                         fills.append({"date": date_int, "time": int(tr["time"]),
                                       "side": "sell", "price": cur_ask,
-                                      "volume": fill, "inv": inv})
+                                      "volume": fill, "inv": inv,
+                                      "lock": lock or ""})
 
     # علامت‌گذاریِ موجودیِ پایانی به آخرین قیمتِ معامله
     last_price = float(trades_sorted[-1]["price"])
@@ -320,6 +362,9 @@ def _simulate_mm_day(date_int: int, snaps: list, trades: list,
         "presence_pct": round(presence * 100.0, 1),
         "last_price": last_price,
         "round_trips": min(buy_vol, sell_vol),
+        "lock_buy": lock_buy_snaps,
+        "lock_sell": lock_sell_snaps,
+        "relief_vol": relief_vol,
     }
     return metrics, MMDayState(cash, inv), fills
 
@@ -334,6 +379,31 @@ def _mid(snap: dict) -> float:
     if b > 0 and a > 0:
         return (a + b) / 2.0
     return float(a or b or 0)
+
+
+def _lock_state(snap: dict, pc_ceiling: float, pc_floor: float,
+                p: MMParams) -> str:
+    """تشخیصِ قفلِ دامنهٔ نوسان از روی اردربوک: "buy" | "sell" | "".
+
+    صف خرید (buy): تقاضا روی سقف و سمتِ عرضه خالی/بالاتر از سقف
+                   (همه می‌خواهند بخرند، فروشنده‌ای نیست).
+    صف فروش (sell): عرضه روی کف و سمتِ تقاضا خالی/پایین‌تر از کف.
+    """
+    tick = (pc_ceiling * p.tick_pct) if p.tick_pct > 0 else p.tick_size
+    tol = max(tick, pc_ceiling * 1e-4)
+    b1p = snap.get("bid1_price", 0) or 0
+    b1v = snap.get("bid1_vol", 0) or 0
+    a1p = snap.get("ask1_price", 0) or 0
+    a1v = snap.get("ask1_vol", 0) or 0
+    # صف خرید: بهترین خرید روی سقف، عرضه‌ای در/زیرِ سقف نیست.
+    if b1p > 0 and b1p >= pc_ceiling - tol and (a1p <= 0 or a1v <= 0
+                                                or a1p > pc_ceiling + tol):
+        return "buy"
+    # صف فروش: بهترین فروش روی کف، تقاضایی در/بالایِ کف نیست.
+    if a1p > 0 and a1p <= pc_floor + tol and (b1p <= 0 or b1v <= 0
+                                              or b1p < pc_floor - tol):
+        return "sell"
+    return ""
 
 
 def _level_vol(snap: dict, price: float, side: str) -> float:
@@ -363,7 +433,8 @@ def _empty_day(date_int, cash, inv):
     return {"date": date_int, "buys": 0, "sells": 0, "buy_vol": 0, "sell_vol": 0,
             "buy_notional": 0.0, "sell_notional": 0.0, "fees": 0.0,
             "end_inventory": inv, "end_cash": round(cash, 0), "pnl": 0.0,
-            "presence_pct": 0.0, "last_price": 0.0, "round_trips": 0}
+            "presence_pct": 0.0, "last_price": 0.0, "round_trips": 0,
+            "lock_buy": 0, "lock_sell": 0, "relief_vol": 0}
 
 
 # --------------------------------------------------------------------------- #
@@ -453,7 +524,8 @@ def _summarize_mm(day_rows: list, p: MMParams, end_state: MMDayState) -> dict:
         return {"trade_days": 0, "total_pnl": 0.0, "total_return_pct": 0.0,
                 "avg_presence_pct": 0.0, "total_buys": 0, "total_sells": 0,
                 "total_volume": 0, "total_fees": 0.0, "end_inventory": end_state.inventory,
-                "sharpe": 0.0, "max_drawdown_pct": 0.0, "win_days": 0, "win_rate": 0.0}
+                "sharpe": 0.0, "max_drawdown_pct": 0.0, "win_days": 0, "win_rate": 0.0,
+                "lock_buy_snaps": 0, "lock_sell_snaps": 0, "total_relief_vol": 0}
     pnls = [r["pnl"] for r in day_rows]
     total_pnl = sum(pnls)
     base = p.cash + p.initial_inventory * (day_rows[0].get("last_price") or 0)
@@ -484,6 +556,9 @@ def _summarize_mm(day_rows: list, p: MMParams, end_state: MMDayState) -> dict:
         "max_drawdown_pct": round(mdd * 100.0, 3),
         "win_days": win_days,
         "win_rate": round(win_days / len(pnls) * 100.0, 1),
+        "lock_buy_snaps": sum(r.get("lock_buy", 0) for r in day_rows),
+        "lock_sell_snaps": sum(r.get("lock_sell", 0) for r in day_rows),
+        "total_relief_vol": sum(r.get("relief_vol", 0) for r in day_rows),
     }
 
 
