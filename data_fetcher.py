@@ -424,15 +424,33 @@ class TSETMCFetcher:
         fallbacks) because TSETMC occasionally renames them; if a future change
         breaks parsing, the per-row counts logged here make it obvious.
         """
-        url = (f"{TSETMC_CDN}/ClosingPrice/GetMarketWatch"
-               "?market=0&paperTypes[0]=1&paperTypes[1]=2&paperTypes[2]=3"
-               "&paperTypes[3]=4&showTraded=false&withBestLimits=false")
-        data = self._get(url, silent=True)
+        # Try a few known parameter encodings — TSETMC's GetMarketWatch has
+        # required refID/hEven params and the paperTypes bracket form varies.
+        variants = [
+            (f"{TSETMC_CDN}/ClosingPrice/GetMarketWatch?market=0&industrialGroup="
+             "&paperTypes%5B0%5D=1&paperTypes%5B1%5D=2&paperTypes%5B2%5D=3"
+             "&paperTypes%5B3%5D=4&paperTypes%5B4%5D=5&paperTypes%5B5%5D=6"
+             "&paperTypes%5B6%5D=7&paperTypes%5B7%5D=8&paperTypes%5B8%5D=9"
+             "&showTraded=false&withBestLimits=false&hEven=0&refID=0"),
+            (f"{TSETMC_CDN}/ClosingPrice/GetMarketWatch?market=0"
+             "&paperTypes[0]=1&paperTypes[1]=2&paperTypes[2]=3&paperTypes[3]=4"
+             "&showTraded=false&withBestLimits=false&hEven=0&refID=0"),
+        ]
+        data = None
+        for url in variants:
+            data = self._get(url, silent=True)
+            if data and (data.get("marketwatch") or data.get("marketWatch")
+                         or data.get("MarketWatch")):
+                break
         if not data:
-            logger.warning("get_market_watch: no data (endpoint blocked or changed)")
+            logger.warning("get_market_watch: endpoint returned no JSON "
+                           "(blocked/changed). Use per-symbol --watch instead.")
             return []
         rows = (data.get("marketwatch") or data.get("marketWatch")
                 or data.get("MarketWatch") or [])
+        if not rows:
+            logger.warning("get_market_watch: JSON had no marketwatch list; "
+                           "top-level keys=%s", list(data.keys()))
         out: list[dict] = []
         for r in rows:
             code = str(r.get("insCode") or r.get("InsCode") or "").strip()

@@ -115,6 +115,47 @@ def _mark_done(ckpt: dict, key: str, symbol: str) -> None:
 
 # ── discovery ────────────────────────────────────────────────────────────────
 
+def resolve_and_watch(db, fetcher, symbols: list[str]) -> int:
+    """Resolve each symbol's ins_code via per-symbol TSETMC search and add it to
+    the watchlist — independent of the bulk MarketWatch call.
+
+    Collection needs an ins_code, so a bare watch flag on a non-existent row is
+    useless. This searches each نماد, upserts an instruments row with its real
+    ins_code, and sets watch=1. Returns the count resolved.
+    """
+    from data_fetcher import _normalize, classify_instrument
+    rows, missing = [], []
+    for sym in symbols:
+        target = _normalize(sym)
+        try:
+            hits = fetcher.search_instrument(sym)
+        except Exception as exc:
+            logger.warning("  جستجوی «%s» ناموفق: %s", sym, exc)
+            missing.append(sym)
+            continue
+        match = next((h for h in hits if _normalize(h.get("symbol", "")) == target), None)
+        if not match:
+            match = next((h for h in hits
+                          if _normalize(h.get("symbol", "")).startswith(target)), None)
+        if not match or not (match.get("ins_code") or "").strip():
+            logger.warning("  نماد یافت نشد یا بدونِ ins_code: «%s»", sym)
+            missing.append(sym)
+            continue
+        nm = match.get("full_name", "")
+        rows.append({"symbol": _normalize(match["symbol"]),
+                     "ins_code": match["ins_code"].strip(), "name": nm,
+                     "type": classify_instrument(match["symbol"], nm),
+                     "market": "", "watch": 1, "updated": _today_int()})
+        logger.info("  ✓ %s → %s", _normalize(match["symbol"]), match["ins_code"].strip())
+    if rows:
+        db.upsert_instruments(rows)
+        db.set_instrument_watch([r["symbol"] for r in rows], True)
+    logger.info("واچ‌لیست: %d از %d نماد resolve و علامت‌گذاری شد%s",
+                len(rows), len(symbols),
+                (" — ناموفق: " + ", ".join(missing)) if missing else "")
+    return len(rows)
+
+
 def discover(db, fetcher) -> int:
     """MarketWatch → instruments table. Returns count stored."""
     rows = fetcher.get_market_watch()
@@ -318,8 +359,9 @@ def main() -> int:
         discover(db, fetcher)
     if args.watch:
         syms = [s.strip() for s in args.watch.split(",") if s.strip()]
-        db.set_instrument_watch(syms, True)
-        logger.info("به واچ‌لیست اضافه شد: %s", syms)
+        # Resolve each symbol's ins_code (per-symbol search) so the watchlist is
+        # usable even if the bulk MarketWatch discovery returned nothing.
+        resolve_and_watch(db, fetcher, syms)
     if args.unwatch:
         syms = [s.strip() for s in args.unwatch.split(",") if s.strip()]
         db.set_instrument_watch(syms, False)
