@@ -1278,6 +1278,173 @@ def create_app(db, scan_callback=None):
                         "result": _bond_opt_state["result"]})
 
     # ──────────────────────────────────────────────────────────────────────
+    #  Market-making (بازارگردانی) — stocks بورس/فرابورس
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _mm_params_from(getter):
+        """Build MMParams from a param getter (request.args.get or body.get)."""
+        from mm_backtest import MMParams
+
+        def _f(name, default):
+            v = getter(name, None)
+            try:
+                return float(v) if v not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
+
+        def _i(name, default):
+            return int(_f(name, default))
+
+        def _b(name, default):
+            v = getter(name, None)
+            if v in (None, ""):
+                return default
+            return str(v) == "1" or str(v).lower() == "true"
+
+        return MMParams(
+            cash=_f("cash", 10_000_000_000.0),
+            initial_inventory=_i("initial_inventory", 0),
+            target_inventory=_i("target_inventory", 0),
+            quote_spread_pct=_f("quote_spread_pct", 0.015),
+            max_spread_pct=_f("max_spread_pct", 0.02),
+            order_volume=_i("order_volume", 10_000),
+            price_band_pct=_f("price_band_pct", 0.05),
+            ref_mode=str(getter("ref_mode", None) or "prev_close"),
+            tick_size=_f("tick_size", 1.0),
+            tick_pct=_f("tick_pct", 0.0),
+            inventory_floor=_i("inventory_floor", -1_000_000),
+            inventory_ceiling=_i("inventory_ceiling", 1_000_000),
+            skew_pct_per_unit=_f("skew_pct_per_unit", 0.0),
+            buy_fee=_f("buy_fee", 0.0005),
+            sell_fee=_f("sell_fee", 0.0005),
+            center_mode=str(getter("center_mode", None) or "mid"),
+            flatten_eod=_b("flatten_eod", False),
+        )
+
+    @app.route("/api/mm/symbols")
+    def api_mm_symbols():
+        """List instruments. ?watch=1 → watchlist only; ?market=/?type= filter."""
+        try:
+            watch_only = request.args.get("watch", "0") == "1"
+            market = request.args.get("market") or None
+            itype = request.args.get("type") or None
+            rows = db.get_instruments(market=market, itype=itype,
+                                      watch_only=watch_only)
+        except Exception as e:
+            logger.exception("mm symbols failed")
+            return jsonify({"error": str(e)}), 500
+        # also report which watchlist symbols actually have OB data collected
+        for r in rows:
+            try:
+                r["ob_days"] = len(db.get_ob_dates(r["symbol"]))
+            except Exception:
+                r["ob_days"] = 0
+        return jsonify({"instruments": rows, "count": len(rows)})
+
+    @app.route("/api/mm/watch", methods=["POST"])
+    def api_mm_watch():
+        """Toggle watchlist membership: {symbols:[...], watch:true|false}."""
+        body = request.get_json(silent=True) or {}
+        syms = [s for s in (body.get("symbols") or []) if s]
+        watch = bool(body.get("watch", True))
+        try:
+            n = db.set_instrument_watch(syms, watch)
+        except Exception as e:
+            logger.exception("mm watch failed")
+            return jsonify({"error": str(e)}), 500
+        return jsonify({"updated": n, "watch": watch})
+
+    @app.route("/api/mm/backtest")
+    def api_mm_backtest():
+        """Market-making backtest for one stock symbol."""
+        from mm_backtest import run_mm_backtest
+        symbol = (request.args.get("symbol") or "").strip()
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+
+        def _int(name):
+            v = request.args.get(name, "")
+            return int(v) if v else None
+
+        params = _mm_params_from(request.args.get)
+        try:
+            result = run_mm_backtest(db, symbol, _int("start"), _int("end"), params)
+        except Exception as e:
+            logger.exception("mm backtest failed")
+            return jsonify({"error": str(e)}), 500
+        return jsonify(result)
+
+    _mm_opt_state = {"running": False, "progress": {}, "result": None}
+    _mm_opt_lock = threading.Lock()
+
+    @app.route("/api/mm/optimize", methods=["GET", "POST"])
+    def api_mm_optimize():
+        from mm_backtest import optimize_mm_backtest
+        body = request.get_json(silent=True) or {}
+
+        def _get(name, default=None):
+            if name in body:
+                return body[name]
+            return request.args.get(name, default)
+
+        symbol = str(_get("symbol", "") or "").strip()
+        if not symbol:
+            return jsonify({"error": "symbol required"}), 400
+        base = _mm_params_from(_get)
+        opt_metric = str(_get("opt_metric", "sharpe"))
+        try:
+            min_presence = float(_get("min_presence_pct", 50.0))
+        except (ValueError, TypeError):
+            min_presence = 50.0
+        try:
+            n_jobs = int(float(_get("n_jobs", 0)))
+        except (ValueError, TypeError):
+            n_jobs = 0
+
+        def _int(name):
+            v = _get(name)
+            try:
+                return int(v) if v not in (None, "") else None
+            except (ValueError, TypeError):
+                return None
+        start, end = _int("start"), _int("end")
+
+        if _mm_opt_state["running"]:
+            return jsonify({"status": "already running",
+                            "progress": _mm_opt_state["progress"]}), 409
+
+        def _run():
+            with _mm_opt_lock:
+                _mm_opt_state["running"] = True
+                _mm_opt_state["progress"] = {"done": 0, "total": 0, "phase": "grid"}
+                _mm_opt_state["result"] = None
+            try:
+                res = optimize_mm_backtest(
+                    db, symbol, start, end, base=base, opt_metric=opt_metric,
+                    min_presence_pct=min_presence,
+                    progress=_mm_opt_state["progress"],
+                    progress_lock=_mm_opt_lock, n_jobs=n_jobs)
+                _mm_opt_state["result"] = res
+                logger.info("[MMOptimize] %s: %d combos, best=%s",
+                            symbol, res.get("tested_combos", 0),
+                            res["best"]["score"] if res.get("best") else None)
+            except Exception:
+                logger.exception("mm optimize failed")
+                _mm_opt_state["result"] = {"error": "optimization failed"}
+            finally:
+                with _mm_opt_lock:
+                    _mm_opt_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="mm-optimize").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/mm/optimize/status")
+    def api_mm_optimize_status():
+        return jsonify({"running": _mm_opt_state["running"],
+                        "progress": _mm_opt_state["progress"],
+                        "result": _mm_opt_state["result"]})
+
+    # ──────────────────────────────────────────────────────────────────────
     #  Data coverage + on-demand collection (funds + اخزا)
     # ──────────────────────────────────────────────────────────────────────
 

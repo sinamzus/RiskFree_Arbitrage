@@ -245,6 +245,26 @@ CREATE TABLE IF NOT EXISTS bond_prices (
 );
 CREATE INDEX IF NOT EXISTS ix_bp_date ON bond_prices(date);
 CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
+
+-- ── Instrument registry (سهام بورس/فرابورس) for market-making ─────────────
+-- One row per tradeable instrument, discovered from the TSETMC market watch.
+-- `watch=1` marks symbols whose intraday tick + order-book is collected for
+-- the market-making backtest.
+CREATE TABLE IF NOT EXISTS instruments (
+    symbol      TEXT PRIMARY KEY,
+    ins_code    TEXT    DEFAULT '',
+    name        TEXT    DEFAULT '',
+    market      TEXT    DEFAULT '',   -- bourse | farabourse | paye | other
+    board       TEXT    DEFAULT '',   -- board/tableau label or code
+    type        TEXT    DEFAULT '',   -- stock | fund | bond | right | option | other
+    base_volume INTEGER DEFAULT 0,    -- حجم مبنا
+    watch       INTEGER DEFAULT 0,    -- 1 = in the market-making watchlist
+    active      INTEGER DEFAULT 1,
+    updated     INTEGER DEFAULT 0     -- YYYYMMDD last refreshed
+);
+CREATE INDEX IF NOT EXISTS ix_instr_market ON instruments(market);
+CREATE INDEX IF NOT EXISTS ix_instr_type   ON instruments(type);
+CREATE INDEX IF NOT EXISTS ix_instr_watch  ON instruments(watch);
 """
 
 
@@ -1131,6 +1151,65 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
     # ------------------------------------------------------------------ #
     #  Bond registry & prices                                             #
     # ------------------------------------------------------------------ #
+
+    # ------------------------------------------------------------------ #
+    #  Instrument registry (market-making)                                #
+    # ------------------------------------------------------------------ #
+
+    def upsert_instruments(self, rows: list[dict]) -> int:
+        """Insert/replace instrument rows (keyed by symbol). Preserves the
+        existing `watch` flag unless a row explicitly sets it."""
+        if not rows:
+            return 0
+        with self._conn() as conn:
+            prev = {r[0]: r[1] for r in conn.execute(
+                "SELECT symbol, watch FROM instruments").fetchall()}
+            payload = []
+            for s in rows:
+                sym = (s.get("symbol") or "").strip()
+                if not sym:
+                    continue
+                watch = s.get("watch")
+                if watch is None:
+                    watch = prev.get(sym, 0)
+                payload.append((
+                    sym, s.get("ins_code", ""), s.get("name", ""),
+                    s.get("market", ""), s.get("board", ""), s.get("type", ""),
+                    int(s.get("base_volume", 0) or 0),
+                    1 if watch else 0,
+                    1 if s.get("active", True) else 0,
+                    int(s.get("updated", 0) or 0)))
+            conn.executemany(
+                """INSERT OR REPLACE INTO instruments
+                   (symbol, ins_code, name, market, board, type, base_volume,
+                    watch, active, updated)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""", payload)
+        return len(payload)
+
+    def get_instruments(self, *, market: str | None = None,
+                        itype: str | None = None,
+                        watch_only: bool = False) -> list[dict]:
+        """Return instruments, optionally filtered by market / type / watchlist."""
+        q = "SELECT * FROM instruments WHERE 1=1"
+        args: list = []
+        if market:
+            q += " AND market=?"; args.append(market)
+        if itype:
+            q += " AND type=?"; args.append(itype)
+        if watch_only:
+            q += " AND watch=1"
+        q += " ORDER BY symbol"
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+    def set_instrument_watch(self, symbols: list[str], watch: bool) -> int:
+        """Toggle the watchlist flag for the given symbols. Returns count."""
+        if not symbols:
+            return 0
+        with self._conn() as conn:
+            conn.executemany("UPDATE instruments SET watch=? WHERE symbol=?",
+                             [(1 if watch else 0, s) for s in symbols])
+        return len(symbols)
 
     def get_bond_series(self, active_only: bool = True) -> list[dict]:
         """Return all bond series, optionally only active ones."""

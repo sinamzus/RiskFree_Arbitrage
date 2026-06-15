@@ -1336,6 +1336,25 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 #bbt-table td.bbt-lossreason::after { content:" ⓘ"; font-size:0.85em; opacity:0.7;
                 text-decoration:none; }
 
+/* ── Market-making tab (mirrors the bond backtest look) ── */
+#mm-app { flex:1; min-height:0; display:flex; flex-direction:column; gap:10px;
+          overflow-y:auto; padding:12px 16px; }
+#mm-head { font-size: var(--fs-sm); font-weight:700; color:var(--txt);
+           display:flex; flex-direction:column; gap:2px; }
+#mm-params { display:flex; flex-direction:column; gap:10px;
+             background:var(--surf); border:1px solid var(--brd);
+             border-radius:8px; padding:12px 14px; flex-shrink:0; }
+#mm-params .bbt-group { flex-direction:row; flex-wrap:wrap; gap:14px; align-items:flex-end; }
+#mm-controls { display:flex; align-items:center; gap:8px; }
+#mm-table-wrap { overflow:auto; min-height:160px; }
+#mm-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); }
+#mm-table th, #mm-table td { padding:5px 8px; text-align:center; white-space:nowrap;
+                border-bottom:1px solid var(--brd); }
+#mm-table th { color:var(--muted); font-weight:600; position:sticky; top:0;
+               background:var(--surf); }
+#mm-table td.pos { color:var(--green); font-weight:700; }
+#mm-table td.neg { color:var(--red);   font-weight:700; }
+
 /* ── Backtest / Optimizer history panel ────────────────────────────────── */
 #bbt-hist-wrap {
   border: 1px solid var(--brd); border-radius: 8px;
@@ -1556,6 +1575,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <div id="mode-tabs">
     <button class="mode-tab on" id="mode-funds" onclick="setMode('funds')">📊 صندوق‌ها</button>
     <button class="mode-tab"    id="mode-bonds" onclick="setMode('bonds')">📈 اوراق</button>
+    <button class="mode-tab"    id="mode-mm"    onclick="setMode('mm')">💹 بازارگردانی</button>
   </div>
   <div class="h-div"></div>
 
@@ -1633,6 +1653,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <button class="scan-btn" onclick="bondDiscover()" title="جستجوی نمادهای اخزا در TSETMC و افزودن خودکار آن‌ها">🔍 کشف نمادها</button>
     <button class="scan-btn" onclick="openDataModal('bonds')" title="مشاهده کامل بودن داده هر اوراق و فرمان جمع‌آوری (لازم برای بک‌تست)">📊 وضعیت داده</button>
     <button class="scan-btn" onclick="bondScan()">📡 اسکن اوراق</button>
+  </div>
+
+  <!-- Market-making controls (hidden unless mm mode) -->
+  <div id="mm-controls" style="display:none">
+    <label style="font-size:11px;color:var(--sub)">نماد:</label>
+    <select id="mm-symbol" style="background:var(--bg);border:1px solid var(--brd);color:var(--txt);padding:3px 7px;border-radius:4px;font-size:12px;font-family:var(--font);min-width:120px" title="نمادِ واچ‌لیست با دادهٔ اردربوک"></select>
+    <button class="scan-btn" onclick="loadMMSymbols()" title="بازخوانی فهرست نمادهای واچ‌لیست">🔄 نمادها</button>
+    <div class="h-div"></div>
+    <span style="font-size:11px;color:var(--muted)">جمع‌آوری داده: <code>python tools/backfill_stocks.py --discover --watch &lt;نماد&gt; --collect</code></span>
   </div>
 
   <button id="theme-btn" onclick="toggleTheme()" title="حالت روز / شب">☀️</button>
@@ -2043,6 +2072,74 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   </div><!-- /#bond-main -->
 </div><!-- /#bond-app -->
+
+<!-- ═══════════════════════════════════════ Market-Making App ═════ -->
+<div id="mm-app" style="display:none">
+  <div id="mm-head">
+    <span>بک‌تستِ بازارگردانیِ قانونی — سهام بورس و فرابورس</span>
+    <span class="bbt-sub">مظنهٔ دوطرفه داخلِ دامنهٔ مظنه و دامنهٔ نوسان؛ پرشدنِ محافظه‌کارانه (اولویتِ صف) روی دادهٔ تیکِ واقعی. مقادیر را با آخرین دستورالعمل سازمان و قراردادِ نماد تطبیق دهید.</span>
+  </div>
+
+  <div id="mm-params">
+    <div class="bbt-group">
+      <div class="bbt-field" title="اسپردِ هدفی که بازارگردان می‌گذارد (٪)"><label>اسپردِ مظنه ٪</label>
+        <input id="mm-spread" type="number" step="0.1" value="1.5" style="width:64px"></div>
+      <div class="bbt-field" title="سقفِ قانونیِ دامنهٔ مظنه (٪) — اسپرد از این بیشتر نمی‌شود"><label>سقفِ مظنه ٪</label>
+        <input id="mm-maxspread" type="number" step="0.1" value="2.0" style="width:64px"></div>
+      <div class="bbt-field" title="حجمِ تعهدِ هر طرف (سهم)"><label>حجمِ هر سفارش</label>
+        <input id="mm-vol" type="number" step="1000" value="10000" style="width:84px"></div>
+      <div class="bbt-field" title="دامنهٔ نوسانِ روزانه (±٪) — بورس ۵، پایه کمتر"><label>دامنهٔ نوسان ±٪</label>
+        <input id="mm-band" type="number" step="0.5" value="5" style="width:64px"></div>
+      <div class="bbt-field" title="آستانهٔ قیمت (ریال) برای گردکردنِ مظنه"><label>آستانهٔ قیمت</label>
+        <input id="mm-tick" type="number" step="1" value="1" style="width:64px"></div>
+    </div>
+    <div class="bbt-group">
+      <div class="bbt-field" title="مرجعِ دامنهٔ نوسان"><label>مرجعِ مظنه</label>
+        <select id="mm-refmode"><option value="prev_close">قیمت پایانیِ روز قبل</option>
+          <option value="day_open">میانهٔ آغازِ روز</option><option value="last">آخرین میانه</option></select></div>
+      <div class="bbt-field" title="مرکزِ مظنه حولِ میانهٔ زنده یا مرجعِ روز"><label>مرکزِ مظنه</label>
+        <select id="mm-center"><option value="mid">میانهٔ اردربوک</option><option value="ref">مرجعِ روز</option></select></div>
+      <div class="bbt-field" title="شیفتِ مرکز به‌ازای هر واحد انحراف موجودی از هدف (٪)"><label>skew موجودی ٪</label>
+        <input id="mm-skew" type="number" step="0.05" value="0" style="width:64px"></div>
+      <div class="bbt-field" title="کفِ موجودیِ مجاز (سهم؛ منفی=شورت مجاز)"><label>کفِ موجودی</label>
+        <input id="mm-invfloor" type="number" step="10000" value="-500000" style="width:96px"></div>
+      <div class="bbt-field" title="سقفِ موجودیِ مجاز (سهم)"><label>سقفِ موجودی</label>
+        <input id="mm-invceil" type="number" step="10000" value="500000" style="width:96px"></div>
+    </div>
+    <div class="bbt-group">
+      <div class="bbt-field" title="نقدِ اولیهٔ بازارگردانی (ریال)"><label>سرمایهٔ نقد</label>
+        <input id="mm-cash" type="number" step="1000000000" value="10000000000" style="width:130px"></div>
+      <div class="bbt-field" title="کارمزدِ خریدِ بازارگردان (٪) — معمولاً معاف/تخفیف‌خورده"><label>کارمزد خرید ٪</label>
+        <input id="mm-buyfee" type="number" step="0.01" value="0.05" style="width:64px"></div>
+      <div class="bbt-field" title="کارمزدِ فروشِ بازارگردان (٪)"><label>کارمزد فروش ٪</label>
+        <input id="mm-sellfee" type="number" step="0.01" value="0.05" style="width:64px"></div>
+      <label class="chk" title="اگر روشن باشد موجودیِ پایانِ روز به آخرین قیمت تسویه می‌شود">
+        <input id="mm-flatten" type="checkbox"> تسویهٔ پایان روز</label>
+    </div>
+    <div class="bbt-actions">
+      <div class="bbt-field bbt-metric"><label>معیارِ بهینه‌ساز</label>
+        <select id="mm-optmetric" title="هدفِ بهینه‌سازی">
+          <option value="sharpe">Sharpe</option><option value="total_pnl">سودِ کل</option>
+          <option value="return_pct">بازدهٔ ٪</option><option value="presence_pnl">سود×حضور</option></select></div>
+      <div class="bbt-field" title="حداقلِ نرخِ حضورِ قانونی؛ ترکیب‌های کم‌حضور رد می‌شوند"><label>حداقل حضور ٪</label>
+        <input id="mm-minpresence" type="number" step="5" value="50" style="width:64px"></div>
+      <button class="scan-btn" id="mm-opt-btn" onclick="mmOptimize()" title="جستجوی شبکه‌ای روی اسپرد/حجم/skew/مرجع با گیتِ حضورِ قانونی">🔧 بهینه‌سازی</button>
+      <button class="scan-btn" id="mm-run" onclick="mmBacktest()">🧪 اجرای بک‌تست</button>
+    </div>
+  </div>
+
+  <div id="mm-opt" style="display:none"></div>
+  <div id="mm-cards"></div>
+  <div id="mm-table-wrap">
+    <table id="mm-table">
+      <thead><tr>
+        <th>تاریخ</th><th>خرید</th><th>فروش</th><th>حجمِ خرید</th><th>حجمِ فروش</th>
+        <th>موجودیِ پایان</th><th>کارمزد</th><th>حضور ٪</th><th>سود/زیان</th>
+      </tr></thead>
+      <tbody id="mm-tbody"></tbody>
+    </table>
+  </div>
+</div><!-- /#mm-app -->
 
 <!-- Backtest hover order-book popup (follows cursor over price cells) -->
 <div id="bt-ob-pop"></div>
@@ -4198,11 +4295,15 @@ function setMode(mode) {
   appMode = mode;
   document.getElementById('app').style.display       = (mode === 'funds') ? '' : 'none';
   document.getElementById('bond-app').style.display  = (mode === 'bonds') ? 'flex' : 'none';
+  document.getElementById('mm-app').style.display    = (mode === 'mm')    ? 'flex' : 'none';
   document.getElementById('fund-controls').style.display  = (mode === 'funds') ? '' : 'none';
   document.getElementById('bond-controls').style.display  = (mode === 'bonds') ? '' : 'none';
+  document.getElementById('mm-controls').style.display    = (mode === 'mm')    ? '' : 'none';
   document.getElementById('mode-funds').classList.toggle('on', mode === 'funds');
   document.getElementById('mode-bonds').classList.toggle('on', mode === 'bonds');
+  document.getElementById('mode-mm').classList.toggle('on', mode === 'mm');
   if (mode === 'bonds') loadBonds();
+  if (mode === 'mm') loadMMSymbols();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -5620,6 +5721,169 @@ function drawBondMiniSVG(svgId, rows) {
   out += `<circle cx="${px(li).toFixed(1)}" cy="${py(valid[li].ytm).toFixed(1)}"
             r="3.5" fill="var(--blue)" stroke="var(--surf)" stroke-width="1.5"/>`;
   svg.innerHTML = out;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Market-Making (بازارگردانی)
+// ══════════════════════════════════════════════════════════════════
+let mmOptTimer = null;
+
+async function loadMMSymbols() {
+  const sel = document.getElementById('mm-symbol');
+  if (!sel) return;
+  const r = await fetch('/api/mm/symbols?watch=1').catch(() => null);
+  if (!r?.ok) return;
+  const j = await r.json();
+  const cur = sel.value;
+  const withData = (j.instruments || []).filter(x => (x.ob_days || 0) > 0);
+  const list = withData.length ? withData : (j.instruments || []);
+  sel.innerHTML = list.map(x =>
+    `<option value="${E(x.symbol)}">${x.symbol} (${x.ob_days||0} روز)</option>`).join('')
+    || '<option value="">— واچ‌لیست خالی —</option>';
+  if (cur) sel.value = cur;
+}
+
+function mmParams() {
+  const pct = id => (+document.getElementById(id).value || 0) / 100;
+  return {
+    symbol:           document.getElementById('mm-symbol').value || '',
+    quote_spread_pct: pct('mm-spread'),
+    max_spread_pct:   pct('mm-maxspread'),
+    order_volume:     +document.getElementById('mm-vol').value || 10000,
+    price_band_pct:   pct('mm-band'),
+    tick_size:        +document.getElementById('mm-tick').value || 1,
+    ref_mode:         document.getElementById('mm-refmode').value,
+    center_mode:      document.getElementById('mm-center').value,
+    skew_pct_per_unit: pct('mm-skew'),
+    inventory_floor:  +document.getElementById('mm-invfloor').value || 0,
+    inventory_ceiling:+document.getElementById('mm-invceil').value || 0,
+    cash:             +document.getElementById('mm-cash').value || 0,
+    buy_fee:          pct('mm-buyfee'),
+    sell_fee:         pct('mm-sellfee'),
+    flatten_eod:      document.getElementById('mm-flatten').checked ? '1' : '0',
+  };
+}
+
+async function mmBacktest() {
+  const btn = document.getElementById('mm-run');
+  const p = mmParams();
+  if (!p.symbol) { showError('ابتدا یک نماد انتخاب کنید (واچ‌لیست با دادهٔ اردربوک).'); return; }
+  const q = new URLSearchParams(p);
+  btn.disabled = true; btn.textContent = '⏳ در حال اجرا ...';
+  const r = await fetch('/api/mm/backtest?' + q.toString()).catch(() => null);
+  btn.disabled = false; btn.textContent = '🧪 اجرای بک‌تست';
+  if (!r?.ok) { showError('بک‌تستِ بازارگردانی ناموفق'); return; }
+  const res = await r.json();
+  if (res.error) { showError('خطا: ' + res.error); return; }
+  document.getElementById('mm-opt').style.display = 'none';
+  renderMMBacktest(res);
+}
+
+function renderMMBacktest(res) {
+  const s = res.summary || {};
+  const fmt = n => (+n || 0).toLocaleString('en-US');
+  const card = (k, v, cls) => `<div class="opt-mc"><div class="omk">${k}</div><div class="omv ${cls||''}">${v}</div></div>`;
+  const pnlCls = (s.total_pnl || 0) >= 0 ? 'pos' : 'neg';
+  document.getElementById('mm-cards').innerHTML = `<div class="opt-metric-row">
+    ${card('سود/زیان کل', fmt(s.total_pnl) + ' ﷼', pnlCls)}
+    ${card('بازده', (s.total_return_pct||0) + '%', pnlCls)}
+    ${card('روزِ معاملاتی', s.trade_days||0)}
+    ${card('نرخِ حضور', (s.avg_presence_pct||0) + '%')}
+    ${card('خرید/فروش', (s.total_buys||0) + '/' + (s.total_sells||0))}
+    ${card('حجمِ کل', fmt(s.total_volume))}
+    ${card('کارمزد', fmt(s.total_fees) + ' ﷼')}
+    ${card('موجودیِ پایان', fmt(s.end_inventory))}
+    ${card('Sharpe', s.sharpe||0)}
+    ${card('افتِ سرمایه', (s.max_drawdown_pct||0) + '%')}
+    ${card('روزهای برنده', (s.win_rate||0) + '%')}
+  </div>`;
+  const tb = document.getElementById('mm-tbody');
+  tb.innerHTML = (res.days || []).map(d => {
+    const c = (d.pnl || 0) >= 0 ? 'pos' : 'neg';
+    return `<tr><td>${d.date}</td><td>${d.buys}</td><td>${d.sells}</td>
+      <td>${fmt(d.buy_vol)}</td><td>${fmt(d.sell_vol)}</td>
+      <td>${fmt(d.end_inventory)}</td><td>${fmt(d.fees)}</td>
+      <td>${d.presence_pct}%</td><td class="${c}">${fmt(d.pnl)}</td></tr>`;
+  }).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--muted)">داده‌ای نیست — اول برای این نماد داده جمع کنید.</td></tr>';
+}
+
+async function mmOptimize() {
+  const btn = document.getElementById('mm-opt-btn');
+  const body = mmParams();
+  if (!body.symbol) { showError('ابتدا یک نماد انتخاب کنید.'); return; }
+  body.opt_metric = document.getElementById('mm-optmetric').value;
+  body.min_presence_pct = +document.getElementById('mm-minpresence').value || 0;
+  const r = await fetch('/api/mm/optimize', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  }).catch(() => null);
+  if (!r?.ok) { showError('بهینه‌سازی شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
+  btn.disabled = true; btn.textContent = '⏳ بهینه‌سازی ...';
+  const panel = document.getElementById('mm-opt');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">⏳ جستجوی شبکه‌ای ...</div>';
+  if (mmOptTimer) clearInterval(mmOptTimer);
+  const poll = async () => {
+    const s = await fetch('/api/mm/optimize/status').catch(() => null);
+    if (!s?.ok) return;
+    const j = await s.json();
+    const pr = j.progress || {};
+    if (j.running) {
+      panel.innerHTML = `<div class="ob-p">⏳ بهینه‌سازی — ${pr.done||0}/${pr.total||0} ترکیب</div>`;
+      return;
+    }
+    clearInterval(mmOptTimer); mmOptTimer = null;
+    btn.disabled = false; btn.textContent = '🔧 بهینه‌سازی';
+    if (j.result?.error) { panel.innerHTML = `<div class="ob-p">خطا: ${j.result.error}</div>`; return; }
+    renderMMOptimize(j.result);
+  };
+  mmOptTimer = setInterval(poll, 1500);
+  poll();
+}
+
+function renderMMOptimize(res) {
+  const panel = document.getElementById('mm-opt');
+  if (!res || !res.best) {
+    panel.innerHTML = `<div id="bbt-opt-best"><div class="ob-h">نتیجهٔ معتبری یافت نشد</div>`
+      + `<div class="ob-p">${res?.tested_combos||0} ترکیب روی ${res?.days_available||0} روز آزموده شد. `
+      + `شاید هیچ ترکیبی به حداقلِ نرخِ حضور نرسید — حداقل حضور را کم کنید یا داده بیشتری جمع کنید.</div></div>`;
+    return;
+  }
+  const b = res.best, bp = b.params, bs = b.summary, fmt = n => (+n||0).toLocaleString('en-US');
+  const best = `<div id="bbt-opt-best">
+    <div class="ob-h">🏆 بهترین ترکیبِ بازارگردانی (معیار: ${res.opt_metric})</div>
+    <div class="ob-p">
+      اسپرد <b>${(bp.quote_spread_pct*100).toFixed(2)}%</b> · حجم <b>${fmt(bp.order_volume)}</b>
+      · skew <b>${(bp.skew_pct_per_unit*100).toFixed(2)}%</b> · مرکز <b>${bp.center_mode}</b>
+      · مرجع <b>${bp.ref_mode}</b>
+      · سود <b>${fmt(bs.total_pnl)}</b> ﷼ · بازده <b>${bs.total_return_pct}%</b>
+      · حضور <b>${bs.avg_presence_pct}%</b> · Sharpe <b>${bs.sharpe}</b>
+      · حداقلِ حضورِ گیت <b>${res.min_presence_pct}%</b>
+    </div>
+    <button id="bbt-opt-apply" onclick='mmApplyOpt(${JSON.stringify(bp)})'>اعمال و اجرای بک‌تست ▸</button>
+  </div>`;
+  const rows = (res.top || []).map((r, i) => {
+    const p = r.params, s = r.summary, c = (s.total_pnl||0) >= 0 ? 'pos' : 'neg';
+    return `<tr class="${i===0?'best':''}">
+      <td>${(p.quote_spread_pct*100).toFixed(2)}%</td><td>${fmt(p.order_volume)}</td>
+      <td>${(p.skew_pct_per_unit*100).toFixed(2)}%</td><td>${p.center_mode}</td><td>${p.ref_mode}</td>
+      <td>${s.avg_presence_pct}%</td><td>${s.total_buys}/${s.total_sells}</td>
+      <td>${s.sharpe}</td><td class="${c}">${fmt(s.total_pnl)}</td></tr>`;
+  }).join('');
+  panel.innerHTML = best + `<table id="bbt-opt-table"><thead><tr>
+    <th>اسپرد</th><th>حجم</th><th>skew</th><th>مرکز</th><th>مرجع</th>
+    <th>حضور</th><th>خرید/فروش</th><th>Sharpe</th><th>سود/زیان</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function mmApplyOpt(bp) {
+  const setpct = (id, v) => { document.getElementById(id).value = +(v*100).toFixed(3); };
+  setpct('mm-spread', bp.quote_spread_pct);
+  document.getElementById('mm-vol').value = bp.order_volume;
+  setpct('mm-skew', bp.skew_pct_per_unit);
+  document.getElementById('mm-center').value = bp.center_mode;
+  document.getElementById('mm-refmode').value = bp.ref_mode;
+  mmBacktest();
 }
 </script>
 </body>

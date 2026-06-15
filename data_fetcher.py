@@ -148,6 +148,32 @@ def _normalize(text: str) -> str:
     )
 
 
+def classify_instrument(symbol: str, name: str) -> str:
+    """Best-effort instrument-type classification from symbol + full name.
+
+    Returns one of: option | bond | fund | right | stock | other.
+    Heuristics (Iranian market conventions):
+      • option (اختيار):  "اختيار" in name, or symbol starts with ض/ط
+      • bond (اوراق بدهی): treasury/sukuk/lease/… keywords in name
+      • fund (صندوق):      "صندوق" in name
+      • right (حق تقدم):    "حق تقدم" in name, or symbol ends with "ح"
+      • stock (سهام):       everything else (the default common-share case)
+    """
+    s = _normalize((symbol or "").strip())
+    n = (name or "")
+    if "اختيار" in n or "اختیار" in n or s[:1] in ("ض", "ط"):
+        return "option"
+    bond_kw = ("خزانه", "صکوک", "مشارکت", "اجاره", "مرابحه", "سلف",
+               "اوراق", "گام", "رهنی", "منفعت")
+    if any(k in n for k in bond_kw):
+        return "bond"
+    if "صندوق" in n:
+        return "fund"
+    if "حق تقدم" in n or (s.endswith("ح") and len(s) > 1):
+        return "right"
+    return "stock"
+
+
 # =========================================================================== #
 #  TSETMC fetcher                                                              #
 # =========================================================================== #
@@ -373,6 +399,76 @@ class TSETMCFetcher:
         logger.info("discover_akhza: %d treasury bills (%d active) from %d queries",
                     len(out), n_active, len(queries))
         return out
+
+    # ------------------------------------------------------------------ #
+    #  Market watch — enumerate ALL بورس/فرابورس instruments              #
+    # ------------------------------------------------------------------ #
+
+    # TSETMC `flow` (market) codes seen in the market-watch payload.
+    _FLOW_MARKET = {1: "bourse", 2: "farabourse", 3: "other", 4: "other",
+                    5: "other", 6: "other", 7: "paye"}
+
+    def get_market_watch(self) -> list[dict]:
+        """Snapshot EVERY tradeable instrument from the TSETMC market watch.
+
+        Endpoint: ``ClosingPrice/GetMarketWatch`` — one row per instrument with
+        its code, symbol, name and market flow.  This is the only TSETMC call
+        that enumerates the whole بورس + فرابورس universe in one shot.
+
+        Returns a list of dicts:
+            {ins_code, symbol, name, market, board, type, base_volume}
+        ``type`` is classified heuristically (stock / fund / bond / right /
+        option / other) from the symbol+name.  Returns [] on failure.
+
+        NOTE: the market-watch JSON field names are parsed defensively (several
+        fallbacks) because TSETMC occasionally renames them; if a future change
+        breaks parsing, the per-row counts logged here make it obvious.
+        """
+        url = (f"{TSETMC_CDN}/ClosingPrice/GetMarketWatch"
+               "?market=0&paperTypes[0]=1&paperTypes[1]=2&paperTypes[2]=3"
+               "&paperTypes[3]=4&showTraded=false&withBestLimits=false")
+        data = self._get(url, silent=True)
+        if not data:
+            logger.warning("get_market_watch: no data (endpoint blocked or changed)")
+            return []
+        rows = (data.get("marketwatch") or data.get("marketWatch")
+                or data.get("MarketWatch") or [])
+        out: list[dict] = []
+        for r in rows:
+            code = str(r.get("insCode") or r.get("InsCode") or "").strip()
+            sym  = (r.get("lva") or r.get("lVal18AFC") or r.get("symbol") or "").strip()
+            name = (r.get("lvc") or r.get("lVal30") or r.get("name") or "").strip()
+            if not code or not sym:
+                continue
+            flow = r.get("flow", r.get("Flow", 0))
+            try:
+                flow = int(flow)
+            except (TypeError, ValueError):
+                flow = 0
+            market = self._FLOW_MARKET.get(flow, "other")
+            base_vol = r.get("bv") or r.get("baseVol") or r.get("baseVolume") or 0
+            try:
+                base_vol = int(base_vol)
+            except (TypeError, ValueError):
+                base_vol = 0
+            out.append({
+                "ins_code": code, "symbol": _normalize(sym), "name": name,
+                "market": market, "board": str(r.get("cs", "") or ""),
+                "type": classify_instrument(sym, name),
+                "base_volume": base_vol,
+            })
+        logger.info("get_market_watch: %d instruments", len(out))
+        return out
+
+    def discover_stocks(self) -> list[dict]:
+        """Convenience: market-watch filtered to common stocks (سهام) on the
+        main بورس and فرابورس boards (drops funds, bonds, rights, options)."""
+        rows = self.get_market_watch()
+        stocks = [r for r in rows
+                  if r["type"] == "stock" and r["market"] in ("bourse", "farabourse")]
+        logger.info("discover_stocks: %d common stocks (of %d instruments)",
+                    len(stocks), len(rows))
+        return stocks
 
     # ------------------------------------------------------------------ #
     #  Price data                                                          #
