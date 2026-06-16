@@ -437,11 +437,40 @@ def scan_options_live(db, fetcher, underlying: str,
         live = dict(ex.map(_fetch, targets))
 
     u_top = live.get(underlying)
-    if not u_top:
-        return {"error": "قیمت لحظه‌ای پایه دریافت نشد (شبکه یا توقف نماد)"}
-    u_bid, u_ask, u_bv, u_av = u_top
+    u_bid = u_ask = 0.0
+    u_bv = u_av = 0
+    if u_top:
+        u_bid, u_ask, u_bv, u_av = u_top
+
+    # تشخیصِ وضعیتِ بازار: اگر در کلِ زنجیره هیچ مظنه‌ای نبود، بازار بسته/قطع است.
+    quotes_live = sum(1 for v in live.values() if v and (v[0] > 0 or v[1] > 0))
+    if quotes_live == 0:
+        from datetime import timezone, timedelta
+        now_thr = _dt.now(timezone(timedelta(hours=3, minutes=30)))
+        # تعطیلیِ هفتگی: پنجشنبه (۳) و جمعه (۴) — یا خارج از ساعتِ ۹ تا ۱۲:۳۰
+        closed = (now_thr.weekday() in (3, 4)
+                  or now_thr.hour < 9
+                  or (now_thr.hour == 12 and now_thr.minute > 30)
+                  or now_thr.hour >= 13)
+        reason = ("بازار بسته است (ساعاتِ معاملات: شنبه تا چهارشنبه، ۹:۰۰ تا ۱۲:۳۰)."
+                  if closed else
+                  "هیچ مظنه‌ای دریافت نشد (احتمالاً قطعیِ شبکه یا توقفِ سراسری).")
+        return {
+            "underlying": underlying,
+            "scanned_at": now_thr.strftime("%H:%M:%S"),
+            "market_closed": closed,
+            "chain_size": len(chain),
+            "quotes_fetched": 0,
+            "trade_count": 0,
+            "trades": [],
+            "error": "مظنهٔ زندهٔ آپشن در این لحظه موجود نیست — " + reason,
+        }
+
+    # بازار باز است ولی شاید خودِ پایه متوقف باشد — Box (صرفاً آپشنی) باز هم بررسی می‌شود.
+    note = None
     if u_ask <= 0:
-        return {"error": "پایه ask فعال ندارد (احتمالاً متوقف است)"}
+        note = (f"پایهٔ «{underlying}» مظنهٔ خرید (ask) زنده ندارد (متوقف؟) — "
+                "Conversion بررسی نشد؛ فقط Box و در صورتِ امکان Reversal.")
 
     meta = {c["symbol"]: {
         "opt_type":      c.get("opt_type", ""),
@@ -485,11 +514,11 @@ def scan_options_live(db, fetcher, underlying: str,
             cb, ca, cbv, cav, _ = calls[K]
             pb, pa, pbv, pav, _ = puts[K]
             cs = cs_map.get(K, 1000)
-            if p.do_conversion and cb > 0 and pa > 0:
+            if p.do_conversion and u_ask > 0 and cb > 0 and pa > 0:
                 _try_conversion(date_int, 0, expiry, dte, df, K,
                                 u_ask, u_av, cb, cbv, pa, pav, cs,
                                 p, trades, seen)
-            if p.do_reversal and p.allow_short and ca > 0 and pb > 0 and u_bid > 0:
+            if p.do_reversal and p.allow_short and u_bid > 0 and ca > 0 and pb > 0:
                 _try_reversal(date_int, 0, expiry, dte, df, K,
                               u_bid, u_bv, ca, cav, pb, pbv, cs,
                               p, trades, seen)
@@ -506,8 +535,10 @@ def scan_options_live(db, fetcher, underlying: str,
         "underlying": underlying,
         "scanned_at": _dt.now().strftime("%H:%M:%S"),
         "date_int": date_int,
+        "market_closed": False,
+        "note": note,
         "chain_size": len(chain),
-        "quotes_fetched": sum(1 for v in live.values() if v and (v[0] > 0 or v[1] > 0)),
+        "quotes_fetched": quotes_live,
         "s_ask": u_ask,
         "s_bid": u_bid,
         "trade_count": len(trades),

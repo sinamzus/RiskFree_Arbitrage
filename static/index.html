@@ -6424,6 +6424,19 @@ async function optLiveScan() {
 function renderOptLive(res) {
   const panel = document.getElementById('opt-live');
   const fmt = n => (+n||0).toLocaleString('en-US');
+  // Market closed → calm, informative state (not a scary red error)
+  if (res.market_closed) {
+    panel.innerHTML = `<div class="opt-live-hdr">
+        <span>🔴 اسکنِ زنده</span>
+        <span class="opt-live-badge" style="background:rgba(120,144,156,.18);color:#90A4AE;border-color:rgba(120,144,156,.4)">🌙 بازار بسته</span>
+      </div>
+      <div class="ob-p" style="color:var(--muted);padding:14px 0;line-height:1.9">
+        ${res.error || 'بازار بسته است.'}<br>
+        آربیتراژِ زنده فقط با مظنه‌های اجراشدنی در ساعاتِ معاملات معنا دارد.
+        برای تحلیلِ دادهٔ تاریخی به تب <b>📈 بک‌تست</b> بروید.
+      </div>`;
+    return;
+  }
   if (res.error) {
     panel.innerHTML = `<div class="opt-live-hdr">
       <span>🔴 اسکنِ زنده</span>
@@ -6436,9 +6449,13 @@ function renderOptLive(res) {
   const badge = trades.length > 0
     ? `<span class="opt-live-badge r">${trades.length} آربیتراژ یافت شد!</span>`
     : `<span class="opt-live-badge ok">هیچ آربیتراژی در این لحظه نیست ✓</span>`;
+  const sStr = (res.s_ask || 0) > 0 ? fmt(res.s_ask) + '﷼' : '—';
   const meta = `<span style="font-size:var(--fs-xs);color:var(--muted)">
     ساعت ${res.scanned_at} · پایه: ${res.underlying} · ${res.chain_size} قرارداد · ${res.quotes_fetched} مظنهٔ دریافتی
-    · S=${fmt(res.s_ask)}﷼</span>`;
+    · S=${sStr}</span>`;
+  const noteHtml = res.note
+    ? `<div class="ob-p" style="color:#FFA726;font-size:var(--fs-xs);padding:6px 0">⚠ ${res.note}</div>`
+    : '';
 
   let cardsHtml = '';
   if (trades.length === 0) {
@@ -6478,6 +6495,7 @@ function renderOptLive(res) {
     ${badge}
     ${meta}
   </div>
+  ${noteHtml}
   ${cardsHtml}`;
 }
 
