@@ -27,9 +27,13 @@ def _aggregate_ticks(ticks: list, interval_min: int, date_int: int = 0) -> list:
     Each tick dict has: seq, time (HHMMSS int), price, volume, canceled.
     Returns list of bar dicts sorted ascending by bar_time (Unix UTC seconds).
     """
-    from zoneinfo import ZoneInfo
-    from datetime import datetime as _dt
-    _tz = ZoneInfo("Asia/Tehran")
+    from datetime import datetime as _dt, timezone, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        _tz = ZoneInfo("Asia/Tehran")
+    except Exception:
+        # Fallback for Windows without tzdata: Iran Standard Time UTC+3:30
+        _tz = timezone(timedelta(hours=3, minutes=30))
 
     d = str(date_int or 19700101)
     year, month, day = int(d[:4]), int(d[4:6]), int(d[6:8])
