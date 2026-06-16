@@ -1358,8 +1358,6 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 /* ── Options arbitrage tab (mirrors the market-making look) ── */
 #opt-app { flex:1; min-height:0; display:flex; flex-direction:column; gap:10px;
            overflow-y:auto; padding:12px 16px; }
-#opt-head { font-size: var(--fs-sm); font-weight:700; color:var(--txt);
-            display:flex; flex-direction:column; gap:2px; }
 #opt-params { display:flex; flex-direction:column; gap:10px;
               background:var(--surf); border:1px solid var(--brd);
               border-radius:8px; padding:12px 14px; flex-shrink:0; }
@@ -1423,34 +1421,61 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .olc-b.b { background:rgba(66,165,245,.10); color:#42A5F5; border-color:rgba(66,165,245,.3); }
 .olc-b.r { background:rgba(239,83,80,.10); color:#EF5350; border-color:rgba(239,83,80,.3); }
 .olc-payoff-wrap { overflow-x:auto; }
-/* Options data panel */
-#opt-data-panel {
+/* Options tab: view containers */
+#opt-view-live, #opt-view-bt, #opt-view-data {
+  display:flex; flex-direction:column; gap:10px;
+}
+/* Action bar (live tab) */
+.opt-act-bar {
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  background:var(--surf); border:1px solid var(--brd);
+  border-radius:8px; padding:10px 14px; flex-shrink:0;
+}
+.opt-live-hint { font-size:var(--fs-xs); color:var(--muted); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.opt-link-btn {
+  background:none; border:none; color:var(--accent); cursor:pointer;
+  font-size:var(--fs-xs); font-family:var(--font); padding:0;
+  text-decoration:underline dotted;
+}
+.opt-link-btn:hover { color:var(--txt); }
+/* Advanced params toggle */
+.opt-adv-toggle {
+  background:none; border:none; color:var(--muted); cursor:pointer;
+  font-size:var(--fs-xs); font-family:var(--font); padding:2px 0;
+  text-align:right; direction:rtl; display:block;
+}
+.opt-adv-toggle:hover { color:var(--accent); }
+#opt-adv-params { display:none; }
+#opt-adv-params.open { display:flex; flex-direction:column; gap:10px; }
+/* Data tab step cards */
+.opt-step-card {
   background:var(--surf); border:1px solid var(--brd); border-radius:8px;
   padding:12px 14px; flex-shrink:0;
 }
-.odp-hdr {
-  display:flex; align-items:center; justify-content:space-between;
-  margin-bottom:10px; font-size:var(--fs-sm); font-weight:700; color:var(--txt);
+.opt-step-hdr {
+  display:flex; align-items:center; gap:8px; margin-bottom:10px;
+  font-size:var(--fs-sm); font-weight:600; color:var(--txt); flex-wrap:wrap;
 }
-.odp-close {
-  background:var(--surf2); border:1px solid var(--brd); border-radius:5px;
-  padding:3px 10px; cursor:pointer; color:var(--muted); font-size:var(--fs-xs);
-  font-family:var(--font);
+.opt-step-n {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:22px; height:22px; border-radius:50%; background:var(--accent);
+  color:#000; font-size:11px; font-weight:800; flex-shrink:0;
 }
-.odp-close:hover { color:var(--txt); }
-.odp-discover {
-  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
-  padding:8px 10px; background:var(--surf2); border:1px solid var(--brd);
-  border-radius:6px; margin-bottom:10px;
+.opt-step-sub { font-size:var(--fs-xs); color:var(--muted); font-weight:400; }
+.opt-discover-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.opt-discover-row input {
+  flex:1; min-width:180px; background:var(--bg); border:1px solid var(--brd);
+  color:var(--txt); padding:5px 9px; border-radius:4px;
+  font-size:var(--fs-xs); font-family:var(--font);
 }
-.odp-discover label { font-size:var(--fs-xs); color:var(--muted); }
-.odp-discover input {
-  background:var(--bg); border:1px solid var(--brd); color:var(--txt);
-  padding:4px 8px; border-radius:4px; font-size:var(--fs-xs);
-  font-family:var(--font); flex:1; min-width:140px;
+.opt-discover-row input:focus { outline:1px solid var(--accent); }
+.opt-cli-block {
+  background:var(--bg); border:1px solid var(--brd); border-radius:5px;
+  padding:8px 11px; font-size:var(--fs-xs); color:var(--muted);
+  direction:ltr; text-align:left; overflow-x:auto; white-space:nowrap;
+  font-family:monospace;
 }
-.odp-discover input:focus { outline:1px solid var(--accent); }
-.odp-hint { font-size:10px; color:var(--muted); width:100%; line-height:1.5; }
+/* Data status table */
 #opt-data-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); }
 #opt-data-table th, #opt-data-table td {
   padding:5px 8px; text-align:center; white-space:nowrap;
@@ -1458,9 +1483,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 }
 #opt-data-table th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--surf); }
 #opt-data-table td.u-name { text-align:right; font-weight:700; color:var(--txt); }
-#opt-data-table td.has { color:#66BB6A; }
-#opt-data-table td.miss { color:#ef5350; }
-.odp-empty { color:var(--muted); font-size:var(--fs-xs); text-align:center; padding:16px; }
+.has { color:#66BB6A; } .miss { color:#ef5350; }
+.opt-empty { color:var(--muted); font-size:var(--fs-xs); text-align:center; padding:16px; }
 
 /* ── Backtest / Optimizer history panel ────────────────────────────────── */
 #bbt-hist-wrap {
@@ -1774,11 +1798,14 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
   <!-- Options arbitrage controls (hidden unless opt mode) -->
   <div id="opt-controls" style="display:none">
-    <label style="font-size:11px;color:var(--sub)">دارایی پایه:</label>
-    <select id="opt-underlying" style="background:var(--bg);border:1px solid var(--brd);color:var(--txt);padding:3px 7px;border-radius:4px;font-size:12px;font-family:var(--font);min-width:120px" title="پایه‌ای که زنجیرهٔ آپشن و اردربوک دارد"></select>
-    <button class="scan-btn" onclick="optToggleData()" title="وضعیت داده و کشفِ زنجیره‌های آپشن">📊 وضعیت داده</button>
+    <div class="pill-group">
+      <button class="pill on" id="opt-tab-live" onclick="optSetTab('live')">🔴 زنده</button>
+      <button class="pill"    id="opt-tab-bt"   onclick="optSetTab('bt')">📈 بک‌تست</button>
+      <button class="pill"    id="opt-tab-data" onclick="optSetTab('data')">📊 داده</button>
+    </div>
     <div class="h-div"></div>
-    <span style="font-size:11px;color:var(--muted)">جمع‌آوری: <code>python tools/backfill_options.py --underlyings &lt;پایه&gt; --discover --collect</code></span>
+    <label style="font-size:11px;color:var(--sub)">پایه:</label>
+    <select id="opt-underlying" style="background:var(--bg);border:1px solid var(--brd);color:var(--txt);padding:3px 7px;border-radius:4px;font-size:12px;font-family:var(--font);min-width:120px" title="دارایی پایه — زنجیرهٔ آپشن"></select>
   </div>
 
   <button id="theme-btn" onclick="toggleTheme()" title="حالت روز / شب">☀️</button>
@@ -2262,89 +2289,117 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
 <!-- ═══════════════════════════════════════ Options Arbitrage App ═════ -->
 <div id="opt-app" style="display:none">
-  <div id="opt-head">
-    <span>بک‌تستِ آربیتراژِ اختيار معامله (آپشن)</span>
-    <span class="bbt-sub">Conversion (برابریِ پوت/کال، بدونِ فروشِ استقراضی) · Box spread (جعبه) · Reversal (نیاز به فروشِ استقراضی). قیمت‌های اجراشدنی + کارمزد + تنزیلِ DF=1/(1+r)^T. مقادیر را با مشخصاتِ قرارداد و مقررات تطبیق دهید.</span>
-  </div>
 
-  <div id="opt-params">
-    <div class="bbt-group">
-      <label class="chk" title="فروشِ کال + خریدِ پوت + خریدِ سهم؛ بدونِ فروشِ استقراضی">
-        <input id="opt-conv" type="checkbox" checked> Conversion</label>
-      <label class="chk" title="جعبه: دو strike، چهار آپشن؛ بدونِ سهم">
-        <input id="opt-box" type="checkbox" checked> Box spread</label>
-      <label class="chk" title="نیاز به فروشِ استقراضیِ سهم (در ایران معمولاً ناممکن)">
-        <input id="opt-rev" type="checkbox"> Reversal (فروشِ استقراضی)</label>
-    </div>
-    <div class="bbt-group">
-      <div class="bbt-field" title="نرخِ بدونِ‌ریسکِ سالانه برای تنزیل (٪)"><label>نرخِ سالانه ٪</label>
-        <input id="opt-rate" type="number" step="1" value="30" style="width:64px"></div>
-      <div class="bbt-field" title="حداقلِ بازدهِ سالانه‌شده برای ثبتِ آربیتراژ (٪)"><label>حداقل بازده ٪</label>
-        <input id="opt-minedge" type="number" step="1" value="5" style="width:64px"></div>
-      <div class="bbt-field" title="نمونه‌برداریِ زمانی (ثانیه؛ ۰=هر اسنپ‌شات)"><label>تناوب (ث)</label>
-        <input id="opt-step" type="number" step="10" value="60" style="width:64px"></div>
-      <div class="bbt-field" title="مظنهٔ کهنه‌تر از این (ثانیه) نادیده گرفته شود"><label>کهنگیِ مظنه (ث)</label>
-        <input id="opt-maxage" type="number" step="60" value="600" style="width:74px"></div>
-      <div class="bbt-field" title="سررسیدِ نزدیک‌تر از این (روز) کنار گذاشته شود"><label>حداقل DTE</label>
-        <input id="opt-mindte" type="number" step="1" value="1" style="width:64px"></div>
-    </div>
-    <div class="bbt-group">
-      <div class="bbt-field" title="سقفِ سرمایهٔ هر معامله (ریال)"><label>سقفِ هر معامله</label>
-        <input id="opt-maxcap" type="number" step="1000000000" value="10000000000" style="width:130px"></div>
-      <div class="bbt-field" title="کارمزدِ هر طرفِ آپشن ٪"><label>کارمزد آپشن ٪</label>
-        <input id="opt-optfee" type="number" step="0.01" value="0.05" style="width:64px"></div>
-      <div class="bbt-field" title="کارمزدِ سهم ٪"><label>کارمزد سهم ٪</label>
-        <input id="opt-stockfee" type="number" step="0.01" value="0.37" style="width:64px"></div>
-      <div class="bbt-field" title="کارمزدِ اعمال در سررسید ٪"><label>کارمزد اعمال ٪</label>
-        <input id="opt-exfee" type="number" step="0.01" value="0.05" style="width:64px"></div>
-    </div>
-    <div class="bbt-actions">
-      <div class="bbt-field bbt-metric"><label>معیارِ بهینه‌ساز</label>
-        <select id="opt-optmetric"><option value="total_profit">سودِ کل</option>
-          <option value="ann_pct">بازدهٔ سالانه</option><option value="arb_count">تعدادِ آربیتراژ</option></select></div>
-      <button class="scan-btn" id="opt-opt-btn" onclick="optOptimize()" title="جستجوی شبکه‌ای روی نرخ/حداقل‌بازده/استراتژی/تناوب">🔧 بهینه‌سازی</button>
-      <button class="scan-btn" id="opt-run" onclick="optBacktest()">🧪 اجرای بک‌تست</button>
+  <!-- ══ Live tab ══════════════════════════════════════════════════ -->
+  <div id="opt-view-live">
+    <div class="opt-act-bar">
       <button class="scan-btn" id="opt-live-btn" onclick="optLiveScan()"
-              title="اسکنِ لحظه‌ای — قیمت‌های زنده از TSETMC BestLimits"
-              style="background:rgba(239,83,80,.18);border-color:rgba(239,83,80,.4);color:#ef5350">
+              style="background:rgba(239,83,80,.18);border-color:rgba(239,83,80,.4);color:#ef5350;font-size:13px;padding:6px 18px">
         🔴 اسکنِ زنده
       </button>
+      <div class="h-div" style="height:28px"></div>
+      <div class="opt-live-hint">
+        <span id="opt-live-params-txt">نرخ ۳۰٪ · حداقل بازده ۵٪ · کارمزد آپشن ۰.۰۵٪</span>
+        <button class="opt-link-btn" onclick="optSetTab('bt')" title="رفتن به تب بک‌تست برای تغییر پارامترها">⚙️ تغییر پارامترها</button>
+      </div>
+    </div>
+    <div id="opt-live"></div>
+  </div>
+
+  <!-- ══ Backtest tab ═══════════════════════════════════════════════ -->
+  <div id="opt-view-bt" style="display:none">
+    <div id="opt-params">
+      <div class="bbt-group">
+        <label class="chk" title="فروشِ کال + خریدِ پوت + خریدِ سهم؛ بدونِ فروشِ استقراضی">
+          <input id="opt-conv" type="checkbox" checked> Conversion</label>
+        <label class="chk" title="جعبه: دو strike، چهار آپشن؛ بدونِ سهم">
+          <input id="opt-box" type="checkbox" checked> Box spread</label>
+        <label class="chk" title="نیاز به فروشِ استقراضیِ سهم (در ایران معمولاً ناممکن)">
+          <input id="opt-rev" type="checkbox"> Reversal</label>
+        <div class="h-div" style="height:22px"></div>
+        <div class="bbt-field" title="نرخِ بدونِ‌ریسکِ سالانه برای تنزیل (٪)"><label>نرخ سالانه ٪</label>
+          <input id="opt-rate" type="number" step="1" value="30" style="width:56px" oninput="optUpdateLiveParams()"></div>
+        <div class="bbt-field" title="حداقلِ بازدهِ سالانه‌شده برای ثبتِ آربیتراژ (٪)"><label>حداقل بازده ٪</label>
+          <input id="opt-minedge" type="number" step="1" value="5" style="width:56px" oninput="optUpdateLiveParams()"></div>
+        <div class="bbt-field" title="سررسیدِ نزدیک‌تر از این (روز) کنار گذاشته شود"><label>حداقل DTE</label>
+          <input id="opt-mindte" type="number" step="1" value="1" style="width:48px"></div>
+      </div>
+      <button class="opt-adv-toggle" id="opt-adv-btn" onclick="optToggleAdv()">▸ کارمزدها و تنظیمات پیشرفته ...</button>
+      <div id="opt-adv-params">
+        <div class="bbt-group">
+          <div class="bbt-field" title="نمونه‌برداریِ زمانی (ثانیه؛ ۰=هر اسنپ‌شات)"><label>تناوب (ث)</label>
+            <input id="opt-step" type="number" step="10" value="60" style="width:56px"></div>
+          <div class="bbt-field" title="مظنهٔ کهنه‌تر از این (ثانیه) نادیده گرفته شود"><label>کهنگی مظنه (ث)</label>
+            <input id="opt-maxage" type="number" step="60" value="600" style="width:70px"></div>
+          <div class="bbt-field" title="سقفِ سرمایهٔ هر معامله (ریال)"><label>سقفِ هر معامله</label>
+            <input id="opt-maxcap" type="number" step="1000000000" value="10000000000" style="width:120px"></div>
+          <div class="bbt-field" title="کارمزدِ هر طرفِ آپشن ٪"><label>کارمزد آپشن ٪</label>
+            <input id="opt-optfee" type="number" step="0.01" value="0.05" style="width:56px" oninput="optUpdateLiveParams()"></div>
+          <div class="bbt-field" title="کارمزدِ سهم ٪"><label>کارمزد سهم ٪</label>
+            <input id="opt-stockfee" type="number" step="0.01" value="0.37" style="width:56px"></div>
+          <div class="bbt-field" title="کارمزدِ اعمال در سررسید ٪"><label>کارمزد اعمال ٪</label>
+            <input id="opt-exfee" type="number" step="0.01" value="0.05" style="width:56px"></div>
+        </div>
+      </div>
+      <div class="bbt-actions">
+        <div class="bbt-field bbt-metric"><label>معیارِ بهینه‌ساز</label>
+          <select id="opt-optmetric">
+            <option value="total_profit">سودِ کل</option>
+            <option value="ann_pct">بازدهٔ سالانه</option>
+            <option value="arb_count">تعدادِ آربیتراژ</option>
+          </select></div>
+        <button class="scan-btn" id="opt-opt-btn" onclick="optOptimize()" title="جستجوی شبکه‌ای روی نرخ/حداقل‌بازده/استراتژی/تناوب">🔧 بهینه‌سازی</button>
+        <button class="scan-btn" id="opt-run" onclick="optBacktest()">🧪 اجرای بک‌تست</button>
+      </div>
+    </div>
+    <div id="opt-opt" style="display:none"></div>
+    <div id="opt-cards"></div>
+    <div id="opt-table-wrap">
+      <table id="opt-table">
+        <thead><tr>
+          <th title="نمودار Payoff">📊</th>
+          <th>تاریخ</th><th>زمان</th><th>استراتژی</th><th>سررسید</th><th>DTE</th>
+          <th>اعمال</th><th>لِگ‌ها</th><th>edge/سهم</th><th>حجم</th>
+          <th>بازده سالانه ٪</th><th>سود</th>
+        </tr></thead>
+        <tbody id="opt-tbody"></tbody>
+      </table>
+    </div>
+    <div id="opt-payoff-panel" style="display:none"></div>
+  </div>
+
+  <!-- ══ Data tab ═══════════════════════════════════════════════════ -->
+  <div id="opt-view-data" style="display:none">
+    <div class="opt-step-card">
+      <div class="opt-step-hdr">
+        <span class="opt-step-n">۱</span>
+        <span>کشف زنجیرهٔ آپشن از TSETMC</span>
+        <span class="opt-step-sub">— شناسایی قراردادها و کدِ دارایی پایه (چند ثانیه)</span>
+      </div>
+      <div class="opt-discover-row">
+        <input id="odp-input" placeholder="نام پایه‌ها با کاما، مثلاً: فولاد,اهرم,خساپا">
+        <button class="scan-btn" onclick="optDiscover()" id="odp-btn">🔍 کشف</button>
+      </div>
+    </div>
+    <div class="opt-step-card">
+      <div class="opt-step-hdr">
+        <span class="opt-step-n">۲</span>
+        <span>جمع‌آوری دادهٔ تاریخی</span>
+        <span class="opt-step-sub">— فقط برای بک‌تست لازم است؛ اسکنِ زنده این مرحله را نمی‌خواهد</span>
+      </div>
+      <div class="opt-cli-block">python tools/backfill_options.py --underlyings فولاد,اهرم --discover --collect</div>
+    </div>
+    <div class="opt-step-card">
+      <div class="opt-step-hdr" style="margin-bottom:6px">
+        <span>وضعیت پایه‌ها</span>
+        <button class="scan-btn" onclick="optDataRefresh()" style="margin-right:auto;font-size:11px">🔄 بروزرسانی</button>
+      </div>
+      <div id="opt-data-tbl-wrap" style="overflow:auto;max-height:340px">
+        <p class="opt-empty">⏳ در حال بارگذاری ...</p>
+      </div>
     </div>
   </div>
 
-  <div id="opt-data-panel" style="display:none">
-    <div class="odp-hdr">
-      <span>📊 وضعیت داده‌های آپشن</span>
-      <button class="odp-close" onclick="optToggleData()">✕ بستن</button>
-    </div>
-    <div class="odp-discover">
-      <label>کشفِ زنجیره از TSETMC:</label>
-      <input id="odp-input" placeholder="مثال: فولاد,اهرم,خساپا" title="نام پایه‌ها با کاما (خالی = همه)">
-      <button class="scan-btn" onclick="optDiscover()" id="odp-btn">🔍 کشف</button>
-      <span class="odp-hint">
-        برای بک‌تست به اردربوک نیاز است — پس از کشف، ابزارِ CLI را اجرا کنید:<br>
-        <code>python tools/backfill_options.py --underlyings فولاد,اهرم --discover --collect</code>
-      </span>
-    </div>
-    <div id="opt-data-tbl-wrap">
-      <p class="odp-empty">در حال بارگذاری ...</p>
-    </div>
-  </div>
-  <div id="opt-live" style="display:none"></div>
-  <div id="opt-opt" style="display:none"></div>
-  <div id="opt-cards"></div>
-  <div id="opt-table-wrap">
-    <table id="opt-table">
-      <thead><tr>
-        <th title="نمودار Payoff">📊</th>
-        <th>تاریخ</th><th>زمان</th><th>استراتژی</th><th>سررسید</th><th>DTE</th>
-        <th>اعمال</th><th>لِگ‌ها</th><th>edge/سهم</th><th>حجم</th>
-        <th>بازده سالانه ٪</th><th>سود</th>
-      </tr></thead>
-      <tbody id="opt-tbody"></tbody>
-    </table>
-  </div>
-  <div id="opt-payoff-panel" style="display:none"></div>
 </div><!-- /#opt-app -->
 
 <!-- Backtest hover order-book popup (follows cursor over price cells) -->
@@ -4513,7 +4568,7 @@ function setMode(mode) {
   document.getElementById('mode-opt').classList.toggle('on', mode === 'opt');
   if (mode === 'bonds') loadBonds();
   if (mode === 'mm') loadMMSymbols();
-  if (mode === 'opt') loadOptUnderlyings();
+  if (mode === 'opt') { loadOptUnderlyings(); optSetTab(_optTab); }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -6104,6 +6159,38 @@ function mmApplyOpt(bp) {
 // ══════════════════════════════════════════════════════════════════
 let optOptTimer = null;
 let _OPT_TRADES = [], _OPT_PARAMS = {};
+let _optTab = 'live';
+
+function optSetTab(tab) {
+  _optTab = tab;
+  ['live','bt','data'].forEach(t => {
+    const v = document.getElementById('opt-view-' + t);
+    const b = document.getElementById('opt-tab-' + t);
+    if (v) v.style.display = t === tab ? 'flex' : 'none';
+    if (b) b.classList.toggle('on', t === tab);
+  });
+  if (tab === 'data') optDataRefresh();
+  if (tab === 'live') optUpdateLiveParams();
+}
+
+function optUpdateLiveParams() {
+  const el = document.getElementById('opt-live-params-txt');
+  if (!el) return;
+  const rate    = document.getElementById('opt-rate')?.value    || '30';
+  const minedge = document.getElementById('opt-minedge')?.value || '5';
+  const fee     = document.getElementById('opt-optfee')?.value  || '0.05';
+  el.textContent = `نرخ ${rate}٪ · حداقل بازده ${minedge}٪ · کارمزد آپشن ${fee}٪`;
+}
+
+function optToggleAdv() {
+  const adv = document.getElementById('opt-adv-params');
+  const btn = document.getElementById('opt-adv-btn');
+  if (!adv) return;
+  const open = adv.classList.toggle('open');
+  if (btn) btn.textContent = open
+    ? '▾ کارمزدها و تنظیمات پیشرفته ...'
+    : '▸ کارمزدها و تنظیمات پیشرفته ...';
+}
 
 async function loadOptUnderlyings() {
   const sel = document.getElementById('opt-underlying');
@@ -6119,25 +6206,19 @@ async function loadOptUnderlyings() {
   if (cur) sel.value = cur;
 }
 
-let _odp_open = false;
-function optToggleData() {
-  const panel = document.getElementById('opt-data-panel');
-  _odp_open = !_odp_open;
-  panel.style.display = _odp_open ? 'block' : 'none';
-  if (_odp_open) optDataRefresh();
-}
+function optToggleData() { optSetTab('data'); }
 
 async function optDataRefresh() {
   const wrap = document.getElementById('opt-data-tbl-wrap');
   if (!wrap) return;
-  wrap.innerHTML = '<p class="odp-empty">⏳ در حال بارگذاری ...</p>';
+  wrap.innerHTML = '<p class="opt-empty">⏳ در حال بارگذاری ...</p>';
   const r = await fetch('/api/opt/status').catch(() => null);
-  if (!r?.ok) { wrap.innerHTML = '<p class="odp-empty">خطا در بارگذاری — سرور؟</p>'; return; }
+  if (!r?.ok) { wrap.innerHTML = '<p class="opt-empty">خطا در بارگذاری — سرور؟</p>'; return; }
   const j = await r.json();
-  if (j.error) { wrap.innerHTML = `<p class="odp-empty">خطا: ${E(j.error)}</p>`; return; }
+  if (j.error) { wrap.innerHTML = `<p class="opt-empty">خطا: ${E(j.error)}</p>`; return; }
   const rows = j.underlyings || [];
   if (!rows.length) {
-    wrap.innerHTML = `<p class="odp-empty">
+    wrap.innerHTML = `<p class="opt-empty">
       هیچ زنجیره‌ای ثبت نشده.<br>
       نام پایه‌ها را در فیلدِ بالا وارد کنید (مثل <code>فولاد,اهرم</code>) و 🔍 کشف را بزنید.
     </p>`;
