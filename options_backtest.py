@@ -385,6 +385,137 @@ def _empty_opt_day(date_int):
 
 
 # --------------------------------------------------------------------------- #
+#  اسکنِ لحظه‌ای با قیمت‌های زنده از TSETMC                                      #
+# --------------------------------------------------------------------------- #
+
+def scan_options_live(db, fetcher, underlying: str,
+                      params: OptionsParams | None = None) -> dict:
+    """قیمت لحظه‌ای BestLimits را از TSETMC می‌گیرد و آربیتراژ فعلی را بررسی می‌کند."""
+    import concurrent.futures
+    from datetime import date as _date, datetime as _dt
+
+    p = params or OptionsParams()
+    chain = db.get_option_series(underlying=underlying)
+    chain = [c for c in chain
+             if (c.get("ins_code") or "").strip() and c.get("strike")
+             and c.get("expiry") and c.get("opt_type") in ("call", "put")]
+    if not chain:
+        return {"error": "زنجیرهٔ آپشنی ثبت نشده — اول --discover را اجرا کنید."}
+
+    instr = {r["symbol"]: (r.get("ins_code") or "").strip()
+             for r in db.get_instruments()}
+    und_code = instr.get(underlying, "")
+    if not und_code:
+        return {"error": f"ins_code پایهٔ «{underlying}» در جدول instruments نیست. "
+                         "با backfill_options.py --underlyings آن را watch کنید."}
+
+    targets = [(underlying, und_code)] + [
+        (c["symbol"], c["ins_code"].strip())
+        for c in chain if (c.get("ins_code") or "").strip()
+    ]
+
+    def _fetch(sym_code):
+        sym, code = sym_code
+        try:
+            bl = fetcher.get_best_limits(code)
+        except Exception:
+            return sym, None
+        if not bl:
+            return sym, None
+        bids = bl.get("bids", [])
+        asks = bl.get("asks", [])
+        b1 = bids[0] if bids else {}
+        a1 = asks[0] if asks else {}
+        return sym, (
+            float(b1.get("price", 0) or 0),
+            float(a1.get("price", 0) or 0),
+            int(b1.get("volume", 0) or 0),
+            int(a1.get("volume", 0) or 0),
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(20, len(targets))) as ex:
+        live = dict(ex.map(_fetch, targets))
+
+    u_top = live.get(underlying)
+    if not u_top:
+        return {"error": "قیمت لحظه‌ای پایه دریافت نشد (شبکه یا توقف نماد)"}
+    u_bid, u_ask, u_bv, u_av = u_top
+    if u_ask <= 0:
+        return {"error": "پایه ask فعال ندارد (احتمالاً متوقف است)"}
+
+    meta = {c["symbol"]: {
+        "opt_type":      c.get("opt_type", ""),
+        "strike":        float(c.get("strike", 0) or 0),
+        "expiry":        int(c.get("expiry", 0) or 0),
+        "contract_size": int(c.get("contract_size", 1000) or 1000),
+    } for c in chain}
+
+    by_expiry: dict[int, list[str]] = {}
+    for sym, m in meta.items():
+        if m["expiry"] and live.get(sym) is not None:
+            by_expiry.setdefault(m["expiry"], []).append(sym)
+
+    from bonds import days_to_maturity
+    date_int = int(_date.today().strftime("%Y%m%d"))
+    trades: list[dict] = []
+    seen: set = set()
+
+    for expiry, syms in sorted(by_expiry.items()):
+        dte = days_to_maturity(expiry, date_int)
+        if dte < p.min_days_to_expiry:
+            continue
+        df = _df(p.annual_rate, dte)
+        calls: dict[float, tuple] = {}
+        puts:  dict[float, tuple] = {}
+        cs_map: dict[float, int] = {}
+        for sym in syms:
+            top = live.get(sym)
+            if top is None:
+                continue
+            m = meta[sym]
+            K = m["strike"]
+            cs_map[K] = m["contract_size"]
+            t_tup = (top[0], top[1], top[2], top[3], 0)
+            if m["opt_type"] == "call":
+                calls[K] = t_tup
+            elif m["opt_type"] == "put":
+                puts[K] = t_tup
+
+        for K in set(calls) & set(puts):
+            cb, ca, cbv, cav, _ = calls[K]
+            pb, pa, pbv, pav, _ = puts[K]
+            cs = cs_map.get(K, 1000)
+            if p.do_conversion and cb > 0 and pa > 0:
+                _try_conversion(date_int, 0, expiry, dte, df, K,
+                                u_ask, u_av, cb, cbv, pa, pav, cs,
+                                p, trades, seen)
+            if p.do_reversal and p.allow_short and ca > 0 and pb > 0 and u_bid > 0:
+                _try_reversal(date_int, 0, expiry, dte, df, K,
+                              u_bid, u_bv, ca, cav, pb, pbv, cs,
+                              p, trades, seen)
+        if p.do_box:
+            strikes = sorted(set(calls) & set(puts))
+            for ii in range(len(strikes)):
+                for jj in range(ii + 1, len(strikes)):
+                    K1, K2 = strikes[ii], strikes[jj]
+                    _try_box(date_int, 0, expiry, dte, df, K1, K2,
+                             calls[K1], calls[K2], puts[K1], puts[K2],
+                             cs_map.get(K1, 1000), p, trades, seen)
+
+    return {
+        "underlying": underlying,
+        "scanned_at": _dt.now().strftime("%H:%M:%S"),
+        "date_int": date_int,
+        "chain_size": len(chain),
+        "quotes_fetched": sum(1 for v in live.values() if v and (v[0] > 0 or v[1] > 0)),
+        "s_ask": u_ask,
+        "s_bid": u_bid,
+        "trade_count": len(trades),
+        "trades": trades,
+    }
+
+
+# --------------------------------------------------------------------------- #
 #  ورودیِ اصلی                                                                  #
 # --------------------------------------------------------------------------- #
 

@@ -1398,6 +1398,31 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .payoff-notes b { color:var(--txt); }
 .payoff-notes .pn-row { display:flex; gap:6px; }
 .payoff-notes .pn-ico { flex-shrink:0; width:18px; text-align:center; }
+/* Live scan section */
+#opt-live { flex-shrink:0; }
+.opt-live-hdr {
+  display:flex; align-items:center; gap:10px; padding:8px 0 4px;
+  font-size:var(--fs-sm); font-weight:700; color:var(--txt);
+}
+.opt-live-badge {
+  font-size:var(--fs-xs); background:rgba(239,83,80,.15); color:#ef5350;
+  border:1px solid rgba(239,83,80,.3); border-radius:12px; padding:1px 8px;
+}
+.opt-live-badge.ok { background:rgba(102,187,106,.15); color:#66BB6A;
+                     border-color:rgba(102,187,106,.3); }
+.opt-live-cards { display:flex; flex-direction:column; gap:12px; margin-top:8px; }
+.olc {
+  background:var(--surf); border:1px solid var(--brd); border-radius:8px;
+  padding:12px 14px; display:flex; flex-direction:column; gap:8px;
+}
+.olc-top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.olc-strat { font-weight:700; font-size:var(--fs-sm); color:var(--accent); }
+.olc-badges { display:flex; gap:6px; flex-wrap:wrap; }
+.olc-b { font-size:10px; border-radius:10px; padding:2px 8px; border:1px solid var(--brd2); }
+.olc-b.g { background:rgba(102,187,106,.12); color:#66BB6A; border-color:rgba(102,187,106,.3); }
+.olc-b.b { background:rgba(66,165,245,.10); color:#42A5F5; border-color:rgba(66,165,245,.3); }
+.olc-b.r { background:rgba(239,83,80,.10); color:#EF5350; border-color:rgba(239,83,80,.3); }
+.olc-payoff-wrap { overflow-x:auto; }
 
 /* ── Backtest / Optimizer history panel ────────────────────────────────── */
 #bbt-hist-wrap {
@@ -2241,9 +2266,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <option value="ann_pct">بازدهٔ سالانه</option><option value="arb_count">تعدادِ آربیتراژ</option></select></div>
       <button class="scan-btn" id="opt-opt-btn" onclick="optOptimize()" title="جستجوی شبکه‌ای روی نرخ/حداقل‌بازده/استراتژی/تناوب">🔧 بهینه‌سازی</button>
       <button class="scan-btn" id="opt-run" onclick="optBacktest()">🧪 اجرای بک‌تست</button>
+      <button class="scan-btn" id="opt-live-btn" onclick="optLiveScan()"
+              title="اسکنِ لحظه‌ای — قیمت‌های زنده از TSETMC BestLimits"
+              style="background:rgba(239,83,80,.18);border-color:rgba(239,83,80,.4);color:#ef5350">
+        🔴 اسکنِ زنده
+      </button>
     </div>
   </div>
 
+  <div id="opt-live" style="display:none"></div>
   <div id="opt-opt" style="display:none"></div>
   <div id="opt-cards"></div>
   <div id="opt-table-wrap">
@@ -6166,6 +6197,85 @@ function renderOptOptimize(res) {
     <th>نرخ</th><th>حداقل‌بازده</th><th>Box</th><th>تناوب</th><th>کهنگی</th>
     <th>آربیتراژ</th><th>بازده سالانه</th><th>سود</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function optLiveScan() {
+  const btn = document.getElementById('opt-live-btn');
+  const p = optParams();
+  if (!p.underlying) { showError('ابتدا یک دارایی پایه انتخاب کنید.'); return; }
+  btn.disabled = true; btn.textContent = '⏳ در حال دریافت قیمت‌های زنده ...';
+  const panel = document.getElementById('opt-live');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">⏳ در حال دریافت قیمت‌های لحظه‌ای از TSETMC ...</div>';
+  try {
+    const q = new URLSearchParams(p);
+    const r = await fetch('/api/opt/live?' + q).catch(() => null);
+    if (!r?.ok) { panel.innerHTML = '<div class="ob-p">خطای شبکه — سرور در دسترس نیست.</div>'; return; }
+    const res = await r.json();
+    renderOptLive(res);
+  } finally {
+    btn.disabled = false; btn.textContent = '🔴 اسکنِ زنده';
+  }
+}
+
+function renderOptLive(res) {
+  const panel = document.getElementById('opt-live');
+  const fmt = n => (+n||0).toLocaleString('en-US');
+  if (res.error) {
+    panel.innerHTML = `<div class="opt-live-hdr">
+      <span>🔴 اسکنِ زنده</span>
+      <span class="opt-live-badge">خطا</span></div>
+      <div class="ob-p" style="color:var(--red)">${res.error}</div>`;
+    return;
+  }
+  const params = _OPT_PARAMS && Object.keys(_OPT_PARAMS).length ? _OPT_PARAMS : {};
+  const trades = res.trades || [];
+  const badge = trades.length > 0
+    ? `<span class="opt-live-badge r">${trades.length} آربیتراژ یافت شد!</span>`
+    : `<span class="opt-live-badge ok">هیچ آربیتراژی در این لحظه نیست ✓</span>`;
+  const meta = `<span style="font-size:var(--fs-xs);color:var(--muted)">
+    ساعت ${res.scanned_at} · پایه: ${res.underlying} · ${res.chain_size} قرارداد · ${res.quotes_fetched} مظنهٔ دریافتی
+    · S=${fmt(res.s_ask)}﷼</span>`;
+
+  let cardsHtml = '';
+  if (trades.length === 0) {
+    cardsHtml = `<div class="ob-p" style="color:var(--muted);padding:12px 0">
+      بازار آپشن ${res.underlying} در این لحظه بدونِ آربیتراژِ قابلِ قفل‌کردن است
+      (پس از کسرِ کارمزد و تنزیل با نرخِ ${Math.round((params.annual_rate||0.3)*100)}٪).
+      <br>برای اسکنِ مجدد روی «🔴 اسکنِ زنده» کلیک کنید.
+    </div>`;
+  } else {
+    cardsHtml = '<div class="opt-live-cards">' + trades.map((t, i) => {
+      const strat = {conversion:'Conversion', reversal:'Reversal', box:'Box Spread'}[t.strategy]||t.strategy;
+      const K1 = t.strike||0, K2 = t.strike2||K1;
+      const strikeStr = t.strategy==='box' ? `K₁=${fmt(K1)} / K₂=${fmt(K2)}` : `K=${fmt(K1)}`;
+      const edgeTotal = fmt(t.profit);
+      const annPct = t.ann_pct || 0;
+      const svg = buildPayoffSVG(t, params);
+      return `<div class="olc">
+        <div class="olc-top">
+          <span class="olc-strat">${strat}</span>
+          <div class="olc-badges">
+            <span class="olc-b b">${strikeStr}</span>
+            <span class="olc-b b">DTE=${t.dte}</span>
+            <span class="olc-b b">سررسید ${t.expiry}</span>
+            <span class="olc-b g">edge/سهم: ${fmt(t.edge_per_share)} ﷼</span>
+            <span class="olc-b g">بازده: ${annPct}%/سال</span>
+            <span class="olc-b g">سود: ${edgeTotal} ﷼</span>
+            <span class="olc-b r">حجم: ${fmt(t.shares)} سهم</span>
+          </div>
+        </div>
+        <div class="olc-payoff-wrap">${svg}</div>
+      </div>`;
+    }).join('') + '</div>';
+  }
+
+  panel.innerHTML = `<div class="opt-live-hdr">
+    <span>🔴 اسکنِ لحظه‌ای آربیتراژِ آپشن</span>
+    ${badge}
+    ${meta}
+  </div>
+  ${cardsHtml}`;
 }
 
 function showOptPayoff(idx) {

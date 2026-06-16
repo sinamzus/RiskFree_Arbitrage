@@ -1524,6 +1524,22 @@ def create_app(db, scan_callback=None):
             return jsonify({"error": str(e)}), 500
         return jsonify(result)
 
+    @app.route("/api/opt/live")
+    def api_opt_live():
+        """اسکنِ لحظه‌ای آربیتراژِ آپشن با قیمت‌های زنده از TSETMC BestLimits."""
+        from options_backtest import scan_options_live
+        from data_fetcher import TSETMCFetcher
+        underlying = (request.args.get("underlying") or "").strip()
+        if not underlying:
+            return jsonify({"error": "underlying required"}), 400
+        params = _opt_params_from(request.args.get)
+        try:
+            result = scan_options_live(db, TSETMCFetcher(), underlying, params)
+        except Exception as e:
+            logger.exception("opt live scan failed")
+            return jsonify({"error": str(e)}), 500
+        return jsonify(result)
+
     _opt_opt_state = {"running": False, "progress": {}, "result": None}
     _opt_opt_lock = threading.Lock()
 
