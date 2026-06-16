@@ -291,6 +291,7 @@ def _try_conversion(date_int, t, expiry, dte, df, K, u_ask, u_av,
         "edge_per_share": round(edge, 2), "outlay_per_share": round(outlay, 2),
         "shares": shares, "profit": round(edge * shares, 0),
         "capital": round(outlay * shares, 0), "ann_pct": round(ann, 2),
+        "s_price": round(u_ask, 2), "c_price": round(cb, 2), "p_price": round(pa, 2),
     })
 
 
@@ -321,6 +322,7 @@ def _try_reversal(date_int, t, expiry, dte, df, K, u_bid, u_bv,
         "edge_per_share": round(edge, 2), "outlay_per_share": round(outlay, 2),
         "shares": shares, "profit": round(edge * shares, 0),
         "capital": round(outlay * shares, 0), "ann_pct": round(ann, 2),
+        "s_price": round(u_bid, 2), "c_price": round(ca, 2), "p_price": round(pb, 2),
     })
 
 
@@ -360,6 +362,8 @@ def _try_box(date_int, t, expiry, dte, df, K1, K2, c1, c2, p1, p2, cs,
         "edge_per_share": round(edge, 2), "outlay_per_share": round(cost, 2),
         "shares": shares, "profit": round(edge * shares, 0),
         "capital": round(cost * shares, 0), "ann_pct": round(ann, 2),
+        "c1_price": round(c1a, 2), "c2_price": round(c2b, 2),
+        "p1_price": round(p1b, 2), "p2_price": round(p2a, 2),
     })
 
 

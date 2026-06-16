@@ -1372,6 +1372,32 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 #opt-table th { color:var(--muted); font-weight:600; position:sticky; top:0;
                 background:var(--surf); }
 #opt-table td.pos { color:var(--green); font-weight:700; }
+#opt-table tbody tr { cursor:pointer; }
+#opt-table tbody tr:hover { background:rgba(255,255,255,.03); }
+#opt-table tbody tr.payoff-active { background:rgba(102,187,106,.07); outline:1px solid rgba(102,187,106,.25); }
+/* Payoff panel */
+#opt-payoff-panel {
+  background:#161b2b; border:1px solid var(--brd); border-radius:10px;
+  padding:12px 14px; flex-shrink:0; overflow:hidden;
+}
+.payoff-hdr {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:10px; font-size:var(--fs-sm); font-weight:700; color:var(--txt);
+}
+.payoff-close {
+  background:var(--surf2); border:1px solid var(--brd); border-radius:5px;
+  padding:3px 10px; cursor:pointer; color:var(--muted); font-size:var(--fs-xs);
+  font-family:var(--font);
+}
+.payoff-close:hover { color:var(--txt); }
+.payoff-svg-wrap { overflow-x:auto; }
+.payoff-notes {
+  margin-top:10px; padding-top:8px; border-top:1px solid var(--brd);
+  font-size:var(--fs-xs); color:var(--muted); line-height:1.8; direction:rtl;
+}
+.payoff-notes b { color:var(--txt); }
+.payoff-notes .pn-row { display:flex; gap:6px; }
+.payoff-notes .pn-ico { flex-shrink:0; width:18px; text-align:center; }
 
 /* ── Backtest / Optimizer history panel ────────────────────────────────── */
 #bbt-hist-wrap {
@@ -2223,6 +2249,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <div id="opt-table-wrap">
     <table id="opt-table">
       <thead><tr>
+        <th title="نمودار Payoff">📊</th>
         <th>تاریخ</th><th>زمان</th><th>استراتژی</th><th>سررسید</th><th>DTE</th>
         <th>اعمال</th><th>لِگ‌ها</th><th>edge/سهم</th><th>حجم</th>
         <th>بازده سالانه ٪</th><th>سود</th>
@@ -2230,6 +2257,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <tbody id="opt-tbody"></tbody>
     </table>
   </div>
+  <div id="opt-payoff-panel" style="display:none"></div>
 </div><!-- /#opt-app -->
 
 <!-- Backtest hover order-book popup (follows cursor over price cells) -->
@@ -5988,6 +6016,7 @@ function mmApplyOpt(bp) {
 //  Options Arbitrage (آربیتراژ اختيار معامله)
 // ══════════════════════════════════════════════════════════════════
 let optOptTimer = null;
+let _OPT_TRADES = [], _OPT_PARAMS = {};
 
 async function loadOptUnderlyings() {
   const sel = document.getElementById('opt-underlying');
@@ -6040,6 +6069,9 @@ async function optBacktest() {
 }
 
 function renderOptBacktest(res) {
+  _OPT_TRADES = res.trades || [];
+  _OPT_PARAMS = res.params || {};
+  document.getElementById('opt-payoff-panel').style.display = 'none';
   const s = res.summary || {};
   const fmt = n => (+n || 0).toLocaleString('en-US');
   const card = (k, v, cls) => `<div class="opt-mc"><div class="omk">${k}</div><div class="omv ${cls||''}">${v}</div></div>`;
@@ -6058,13 +6090,15 @@ function renderOptBacktest(res) {
   </div>`;
   const tb = document.getElementById('opt-tbody');
   const t2 = t => String(t).padStart(6,'0').replace(/(\d{2})(\d{2})(\d{2})/,'$1:$2:$3');
-  tb.innerHTML = (res.trades || []).slice(0, 1000).map(t => {
+  tb.innerHTML = _OPT_TRADES.slice(0, 1000).map((t, i) => {
     const strike = t.strategy === 'box' ? `${fmt(t.strike)}/${fmt(t.strike2)}` : fmt(t.strike);
-    return `<tr><td>${t.date}</td><td>${t2(t.time)}</td><td>${t.strategy}</td>
+    return `<tr onclick="showOptPayoff(${i})" title="کلیک برای نمودار Payoff">
+      <td style="color:var(--accent);font-size:11px">📊</td>
+      <td>${t.date}</td><td>${t2(t.time)}</td><td>${t.strategy}</td>
       <td>${t.expiry}</td><td>${t.dte}</td><td>${strike}</td><td>${t.legs}</td>
       <td>${fmt(t.edge_per_share)}</td><td>${fmt(t.shares)}</td>
       <td>${t.ann_pct}%</td><td class="pos">${fmt(t.profit)}</td></tr>`;
-  }).join('') || '<tr><td colspan="11" style="text-align:center;color:var(--muted)">آربیتراژی یافت نشد — پارامترها را شل‌تر کنید یا داده جمع کنید.</td></tr>';
+  }).join('') || '<tr><td colspan="12" style="text-align:center;color:var(--muted)">آربیتراژی یافت نشد — پارامترها را شل‌تر کنید یا داده جمع کنید.</td></tr>';
 }
 
 async function optOptimize() {
@@ -6132,6 +6166,232 @@ function renderOptOptimize(res) {
     <th>نرخ</th><th>حداقل‌بازده</th><th>Box</th><th>تناوب</th><th>کهنگی</th>
     <th>آربیتراژ</th><th>بازده سالانه</th><th>سود</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function showOptPayoff(idx) {
+  const trade = _OPT_TRADES[idx];
+  const params = _OPT_PARAMS;
+  const panel = document.getElementById('opt-payoff-panel');
+  // Highlight active row
+  document.querySelectorAll('#opt-tbody tr').forEach((r, i) => {
+    r.classList.toggle('payoff-active', i === idx);
+  });
+  // Check if we have price data
+  const hasData = trade.strategy === 'box'
+    ? (trade.c1_price || 0) > 0
+    : (trade.s_price || 0) > 0;
+  const stratNames = {conversion:'Conversion (تبدیل)', reversal:'Reversal (معکوس)', box:'Box Spread (جعبه)'};
+  const strat = stratNames[trade.strategy] || trade.strategy;
+  const K1 = trade.strike || 0, K2 = trade.strike2 || K1;
+  const strikeStr = trade.strategy === 'box' ? `K₁=${K1} / K₂=${K2}` : `K=${K1}`;
+  const dfVal = (1 / Math.pow(1 + (params.annual_rate || 0.30), (trade.dte || 1) / 365)).toFixed(4);
+  const exFeePct = ((params.exercise_fee || 0.0005) * 100).toFixed(3);
+  const optFeePct = ((params.opt_fee || 0.0005) * 100).toFixed(3);
+  const stFeePct = ((params.stock_fee || 0.0037) * 100).toFixed(3);
+
+  const svgContent = hasData
+    ? buildPayoffSVG(trade, params)
+    : `<div class="ob-p" style="padding:20px;text-align:center;color:var(--muted)">
+        ⚠ قیمت‌های leg در این نتیجه ذخیره نشده‌اند.<br>
+        بک‌تست را دوباره اجرا کنید تا نمودار نمایش داده شود.
+       </div>`;
+
+  const legNote = trade.strategy === 'conversion'
+    ? `سهم (پایه): <b>${(trade.s_price||'—')}</b> · کال bid: <b>${(trade.c_price||'—')}</b> · پوت ask: <b>${(trade.p_price||'—')}</b>`
+    : trade.strategy === 'reversal'
+    ? `سهم bid: <b>${(trade.s_price||'—')}</b> · کال ask: <b>${(trade.c_price||'—')}</b> · پوت bid: <b>${(trade.p_price||'—')}</b>`
+    : `C(K₁) ask: <b>${(trade.c1_price||'—')}</b> · C(K₂) bid: <b>${(trade.c2_price||'—')}</b> · P(K₂) ask: <b>${(trade.p2_price||'—')}</b> · P(K₁) bid: <b>${(trade.p1_price||'—')}</b>`;
+
+  panel.style.display = 'block';
+  panel.innerHTML = `
+    <div class="payoff-hdr">
+      <span>نمودار Payoff — ${strat} | ${strikeStr} | DTE=${trade.dte}</span>
+      <button class="payoff-close" onclick="document.getElementById('opt-payoff-panel').style.display='none';document.querySelectorAll('#opt-tbody tr').forEach(r=>r.classList.remove('payoff-active'))">✕ بستن</button>
+    </div>
+    <div class="payoff-svg-wrap">${svgContent}</div>
+    <div class="payoff-notes">
+      <div class="pn-row"><span class="pn-ico">💰</span><span>قیمت‌های ورودی: ${legNote}</span></div>
+      <div class="pn-row"><span class="pn-ico">📌</span><span>ضریب تنزیل (DF = 1/(1+r)^T): <b>${dfVal}</b> · نرخ سالانه: <b>${Math.round((params.annual_rate||0.3)*100)}%</b> · مدت: <b>${trade.dte} روز</b></span></div>
+      <div class="pn-row"><span class="pn-ico">💳</span><span>کارمزدها — آپشن: <b>${optFeePct}%</b> · سهم: <b>${stFeePct}%</b> · اعمال: <b>${exFeePct}%</b> از مبلغ اعمال</span></div>
+      <div class="pn-row"><span class="pn-ico">⚖</span><span>پایه‌ی قفل‌شده: ارزش کنونی لبه <b>${(trade.edge_per_share||0).toLocaleString('en-US')} ریال/سهم</b> · سود کل: <b>${(trade.profit||0).toLocaleString('en-US')} ریال</b></span></div>
+      <div class="pn-row"><span class="pn-ico">🔒</span><span><b>نکات اعمال:</b> آپشن‌های ایران اروپایی هستند — فقط در سررسید قابل اعمال‌اند. تسویه فیزیکی است: سهام واقعی تحویل داده می‌شود. در صورت توقف نماد در روز سررسید، اعمال به تأخیر می‌افتد.</span></div>
+      <div class="pn-row"><span class="pn-ico">⚠</span><span>ریسک اجرا: ورود به همهٔ leg‌ها باید همزمان (یا سریع) باشد. تأخیر در پرشدن یک leg می‌تواند لبهٔ محاسباتی را از بین ببرد. حجم اردربوک ممکن است در لحظهٔ اجرا تغییر کرده باشد.</span></div>
+    </div>`;
+  panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function buildPayoffSVG(trade, params) {
+  const W = 620, H = 320;
+  const L = 64, R = 14, T = 34, B = 56;
+  const pw = W - L - R, ph = H - T - B;
+
+  const strat = trade.strategy || 'conversion';
+  const K1 = parseFloat(trade.strike || 0);
+  const K2 = parseFloat(trade.strike2 || K1);
+  const cid = 'pc' + K1.toFixed(0) + '_' + K2.toFixed(0) + '_' + (trade.time||0);
+
+  const fK = n => {
+    n = +n;
+    if (Math.abs(n) >= 1e6) return (n/1e6).toFixed(2)+'M';
+    if (Math.abs(n) >= 1e3) return (n/1e3).toFixed(1)+'K';
+    return n.toFixed(0);
+  };
+  const fY = n => {
+    n = +n;
+    if (Math.abs(n) >= 1e6) return (n/1e6).toFixed(2)+'M';
+    if (Math.abs(n) >= 1e3) return (n/1e3).toFixed(0)+'K';
+    return n.toFixed(0);
+  };
+
+  const optFee = parseFloat(params.opt_fee  || 0.0005);
+  const stFee  = parseFloat(params.stock_fee|| 0.0037);
+  const exFee  = parseFloat(params.exercise_fee || 0.0005);
+
+  const xLo = K1 * (strat === 'box' ? 0.60 : 0.42);
+  const xHi = K2 * (strat === 'box' ? 1.40 : 1.58);
+
+  let legs = [], grossY, feesTotal, sCur;
+
+  if (strat === 'conversion') {
+    const sP = parseFloat(trade.s_price || 0);
+    const cP = parseFloat(trade.c_price || 0); // c_bid: received
+    const pP = parseFloat(trade.p_price || 0); // p_ask: paid
+    sCur = sP;
+    const outlay = sP - cP + pP;
+    grossY = K1 - outlay;
+    feesTotal = optFee*(cP+pP) + stFee*sP + K1*exFee;
+    legs = [
+      {label:'سهم (+)', color:'#42A5F5', pts:[[xLo, xLo-sP],[K1, K1-sP],[xHi, xHi-sP]]},
+      {label:'کال (−)', color:'#FFA726', pts:[[xLo, cP],[K1, cP],[xHi, cP-(xHi-K1)]]},
+      {label:'پوت (+)', color:'#CE93D8', pts:[[xLo, K1-xLo-pP],[K1, -pP],[xHi, -pP]]},
+    ];
+  } else if (strat === 'reversal') {
+    const sP = parseFloat(trade.s_price || 0);
+    const cP = parseFloat(trade.c_price || 0); // c_ask: paid
+    const pP = parseFloat(trade.p_price || 0); // p_bid: received
+    sCur = sP;
+    const proceeds = sP + pP - cP;
+    grossY = proceeds - K1;
+    feesTotal = optFee*(cP+pP) + stFee*sP + K1*exFee;
+    legs = [
+      {label:'سهم (−)', color:'#42A5F5', pts:[[xLo, sP-xLo],[K1, sP-K1],[xHi, sP-xHi]]},
+      {label:'کال (+)', color:'#FFA726', pts:[[xLo, -cP],[K1, -cP],[xHi, xHi-K1-cP]]},
+      {label:'پوت (−)', color:'#CE93D8', pts:[[xLo, pP-(K1-xLo)],[K1, pP],[xHi, pP]]},
+    ];
+  } else { // box
+    const c1 = parseFloat(trade.c1_price || 0); // c1_ask: paid
+    const c2 = parseFloat(trade.c2_price || 0); // c2_bid: received
+    const p1 = parseFloat(trade.p1_price || 0); // p1_bid: received
+    const p2 = parseFloat(trade.p2_price || 0); // p2_ask: paid
+    sCur = (K1 + K2) / 2;
+    const cost = (c1 - c2) + (p2 - p1);
+    grossY = K2 - K1 - cost;
+    feesTotal = optFee*(c1+c2+p2+p1) + (K2-K1)*exFee;
+    legs = [
+      {label:'C(K₁)+', color:'#42A5F5',
+       pts:[[xLo,-c1],[K1,-c1],[K2,K2-K1-c1],[xHi,xHi-K1-c1]]},
+      {label:'C(K₂)−', color:'#FFA726',
+       pts:[[xLo,c2],[K1,c2],[K2,c2],[xHi,c2-(xHi-K2)]]},
+      {label:'P(K₂)+', color:'#CE93D8',
+       pts:[[xLo,K2-xLo-p2],[K1,K2-K1-p2],[K2,-p2],[xHi,-p2]]},
+      {label:'P(K₁)−', color:'#4DB6AC',
+       pts:[[xLo,p1-(K1-xLo)],[K1,p1],[K2,p1],[xHi,p1]]},
+    ];
+  }
+
+  const netY = grossY - feesTotal;
+
+  // Y-axis range
+  const allY = legs.flatMap(l => l.pts.map(p => p[1])).concat([grossY, netY, 0]);
+  let yMin = Math.min(...allY), yMax = Math.max(...allY);
+  const ySpan = Math.max(yMax - yMin, 1);
+  yMin -= ySpan * 0.20; yMax += ySpan * 0.20;
+
+  const sx = x => L + (x - xLo) / (xHi - xLo) * pw;
+  const sy = y => T + (yMax - y) / (yMax - yMin) * ph;
+  const ppts = pts => pts.map(([x,y]) => `${sx(x).toFixed(1)},${sy(y).toFixed(1)}`).join(' ');
+
+  // Ticks
+  const xTks = Array.from({length:6}, (_,i) => xLo + (xHi-xLo)*i/5);
+  const yTks = Array.from({length:6}, (_,i) => yMin + (yMax-yMin)*i/5);
+
+  const y0px  = sy(0).toFixed(1);
+  const yGpx  = sy(grossY).toFixed(1);
+  const yNpx  = sy(netY).toFixed(1);
+  const x1px  = sx(K1).toFixed(1);
+  const x2px  = sx(K2).toFixed(1);
+  const xCpx  = sx(sCur);
+
+  // Fee shading (between gross and net flat lines)
+  const shadTop = Math.min(+yGpx, +yNpx).toFixed(1);
+  const shadH   = Math.abs(+yGpx - +yNpx).toFixed(1);
+
+  // Legend at bottom
+  const legData = [
+    ...legs.map(l => ({color:l.color, lbl:l.label, dash:'5,3', w:1.2})),
+    {color:'#00ACC1', lbl:'ناخالص', dash:'8,4', w:1.8},
+    {color:'#66BB6A', lbl:'خالص (−کارمزد)', dash:'', w:2.8},
+  ];
+  const legN = legData.length;
+  const legItemW = pw / legN;
+  const legY = H - 20;
+  const legendSVG = legData.map((d, i) => {
+    const lx = (L + i*legItemW + 2).toFixed(1);
+    const line = d.dash
+      ? `<line x1="${lx}" y1="${legY}" x2="${+lx+16}" y2="${legY}" stroke="${d.color}" stroke-width="${d.w}" stroke-dasharray="${d.dash}"/>`
+      : `<line x1="${lx}" y1="${legY}" x2="${+lx+16}" y2="${legY}" stroke="${d.color}" stroke-width="${d.w}"/>`;
+    return `${line}<text x="${+lx+19}" y="${legY+3.5}" font-size="8" fill="${d.color}">${d.lbl}</text>`;
+  }).join('\n  ');
+
+  // Strategy title
+  const stratLabel = {conversion:'Conversion (تبدیل)',reversal:'Reversal (معکوس)',box:'Box Spread (جعبه)'}[strat]||strat;
+  const strikeLabel = strat==='box' ? `K₁=${fK(K1)} / K₂=${fK(K2)}` : `K=${fK(K1)}`;
+
+  // Annotation Y-offsets (so text doesn't overlap with lines)
+  const annGY = (+yGpx - 7).toFixed(1);
+  const annNY = (+yNpx - 7).toFixed(1);
+  const midFeeY = ((+yGpx + +yNpx)/2 + 3.5).toFixed(1);
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" style="background:#161b2b;border-radius:8px;display:block;max-width:100%">
+  <defs><clipPath id="${cid}"><rect x="${L}" y="${T}" width="${pw}" height="${ph}"/></clipPath></defs>
+  <!-- Title -->
+  <text x="${L+pw/2}" y="18" text-anchor="middle" font-size="11" fill="#B0BEC5" font-weight="700">${stratLabel} · ${strikeLabel} · DTE=${trade.dte}</text>
+  <!-- Grid -->
+  ${yTks.map(y=>`<line x1="${L}" y1="${sy(y).toFixed(1)}" x2="${L+pw}" y2="${sy(y).toFixed(1)}" stroke="#202535" stroke-width="1"/>`).join('\n  ')}
+  ${xTks.map(x=>`<line x1="${sx(x).toFixed(1)}" y1="${T}" x2="${sx(x).toFixed(1)}" y2="${T+ph}" stroke="#202535" stroke-width="1"/>`).join('\n  ')}
+  <!-- Zero line -->
+  <line x1="${L}" y1="${y0px}" x2="${L+pw}" y2="${y0px}" stroke="#455A64" stroke-width="1.5"/>
+  <!-- Strike markers -->
+  <line x1="${x1px}" y1="${T}" x2="${x1px}" y2="${T+ph}" stroke="#EF5350" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.85"/>
+  <text x="${x1px}" y="${T-6}" text-anchor="middle" font-size="9" fill="#EF5350">${strat==='box'?'K₁':'K'}=${fK(K1)}</text>
+  ${strat==='box'?`<line x1="${x2px}" y1="${T}" x2="${x2px}" y2="${T+ph}" stroke="#EF5350" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.85"/>
+  <text x="${x2px}" y="${T-6}" text-anchor="middle" font-size="9" fill="#EF5350">K₂=${fK(K2)}</text>`:''}
+  <!-- Current stock price -->
+  ${xCpx>=L&&xCpx<=L+pw?`<line x1="${xCpx.toFixed(1)}" y1="${T}" x2="${xCpx.toFixed(1)}" y2="${T+ph}" stroke="#FF8F00" stroke-width="1" stroke-dasharray="6,4" opacity="0.7"/>
+  <text x="${xCpx.toFixed(1)}" y="${T+ph+12}" text-anchor="middle" font-size="8.5" fill="#FF8F00">S₀</text>`:''}
+  <!-- Fee shading -->
+  <rect clip-path="url(#${cid})" x="${L}" y="${shadTop}" width="${pw}" height="${shadH}" fill="#EF5350" opacity="0.12"/>
+  <!-- Individual legs -->
+  ${legs.map(l=>`<polyline clip-path="url(#${cid})" points="${ppts(l.pts)}" fill="none" stroke="${l.color}" stroke-width="1.3" stroke-dasharray="5,3" opacity="0.72"/>`).join('\n  ')}
+  <!-- Gross flat line -->
+  <line clip-path="url(#${cid})" x1="${L}" y1="${yGpx}" x2="${L+pw}" y2="${yGpx}" stroke="#00ACC1" stroke-width="1.8" stroke-dasharray="9,4"/>
+  <!-- Net flat line -->
+  <line clip-path="url(#${cid})" x1="${L}" y1="${yNpx}" x2="${L+pw}" y2="${yNpx}" stroke="#66BB6A" stroke-width="3"/>
+  <!-- Axes frame -->
+  <rect x="${L}" y="${T}" width="${pw}" height="${ph}" fill="none" stroke="#37474F" stroke-width="1.2"/>
+  <!-- X-axis labels -->
+  ${xTks.map(x=>`<text x="${sx(x).toFixed(1)}" y="${T+ph+13}" text-anchor="middle" font-size="8.5" fill="#546E7A">${fK(x)}</text>`).join('\n  ')}
+  <!-- Y-axis labels -->
+  ${yTks.map(y=>`<text x="${L-4}" y="${(sy(y)+3.5).toFixed(1)}" text-anchor="end" font-size="8.5" fill="#546E7A">${fY(y)}</text>`).join('\n  ')}
+  <!-- Axis title -->
+  <text x="${L+pw/2}" y="${T+ph+26}" text-anchor="middle" font-size="9" fill="#455A64">قیمت سهم در سررسید ﷼</text>
+  <!-- Value annotations -->
+  <text x="${L+pw-4}" y="${annNY}" text-anchor="end" font-size="10" fill="#66BB6A" font-weight="700">خالص: ${fK(netY)}</text>
+  <text x="${L+pw-4}" y="${annGY}" text-anchor="end" font-size="9" fill="#00ACC1">ناخالص: ${fK(grossY)}</text>
+  ${+shadH>4?`<text x="${L+pw/2}" y="${midFeeY}" text-anchor="middle" font-size="8.5" fill="#EF9A9A" font-style="italic">↕ کارمزد: ${fK(feesTotal)}</text>`:''}
+  <!-- Legend -->
+  ${legendSVG}
+</svg>`;
 }
 
 function optApplyOpt(bp) {
