@@ -1540,6 +1540,99 @@ def create_app(db, scan_callback=None):
             return jsonify({"error": str(e)}), 500
         return jsonify(result)
 
+    @app.route("/api/opt/status")
+    def api_opt_status():
+        """Chain stats + data coverage for the data-management panel."""
+        try:
+            rows = db.get_option_underlyings()
+        except Exception as e:
+            logger.exception("opt status failed")
+            return jsonify({"error": str(e)}), 500
+        try:
+            instr = {r["symbol"]: (r.get("ins_code") or "").strip()
+                     for r in db.get_instruments()}
+        except Exception:
+            instr = {}
+        result = []
+        for r in rows:
+            u = r["underlying"]
+            try:
+                und_ob = len(db.get_ob_dates(u))
+            except Exception:
+                und_ob = 0
+            try:
+                chain = db.get_option_series(underlying=u)
+                opt_ob_days = sum(
+                    len(db.get_ob_dates(o["symbol"])) for o in chain
+                    if (o.get("ins_code") or "").strip())
+                active_n = sum(1 for o in chain if o.get("active"))
+            except Exception:
+                opt_ob_days = 0; active_n = 0; chain = []
+            result.append({
+                "underlying": u,
+                "n": r["n"],
+                "watched": int(r.get("watched") or 0),
+                "active": active_n,
+                "has_ins_code": 1 if instr.get(u) else 0,
+                "und_ob_days": und_ob,
+                "opt_ob_days": opt_ob_days,
+            })
+        return jsonify({"underlyings": result, "count": len(result)})
+
+    @app.route("/api/opt/discover", methods=["POST"])
+    def api_opt_discover():
+        """Discover option contracts from TSETMC and save to DB.
+        Body JSON: {"underlyings": ["فولاد", "اهرم"]}  (empty = all listed)"""
+        from data_fetcher import TSETMCFetcher, _normalize, classify_instrument
+        from datetime import date as _date
+        body = request.get_json(silent=True) or {}
+        underlyings = [s.strip() for s in (body.get("underlyings") or []) if s.strip()]
+        fetcher = TSETMCFetcher()
+        today = int(_date.today().strftime("%Y%m%d"))
+        try:
+            rows = fetcher.discover_options(underlyings if underlyings else None)
+        except Exception as e:
+            logger.exception("discover_options failed")
+            return jsonify({"error": str(e)}), 500
+        if not rows:
+            return jsonify({"error": "هیچ قراردادی کشف نشد — شبکه یا endpoint؟"}), 404
+        norm_set = {_normalize(u) for u in underlyings} if underlyings else set()
+        for r in rows:
+            r["updated"] = today
+            if norm_set and r.get("underlying") in norm_set:
+                r["watch"] = 1
+        n = db.upsert_option_series(rows)
+        unds_found = sorted({r["underlying"] for r in rows if r.get("underlying")})
+        # Resolve ins_codes for requested (or all discovered) underlyings
+        resolve_list = underlyings if underlyings else unds_found[:10]
+        resolved = []
+        for u in resolve_list:
+            un = _normalize(u)
+            try:
+                hits = fetcher.search_instrument(u)
+            except Exception:
+                continue
+            match = next((h for h in hits if _normalize(h.get("symbol", "")) == un), None)
+            if not match or not (match.get("ins_code") or "").strip():
+                continue
+            nm = match.get("full_name", "")
+            try:
+                db.upsert_instruments([{
+                    "symbol": un, "ins_code": match["ins_code"].strip(),
+                    "name": nm, "type": classify_instrument(match["symbol"], nm),
+                    "market": "", "watch": 1, "updated": today,
+                }])
+                resolved.append(un)
+            except Exception:
+                pass
+        return jsonify({
+            "discovered": n,
+            "contracts": len(rows),
+            "underlyings_found": len(unds_found),
+            "ins_codes_resolved": len(resolved),
+            "resolved": resolved,
+        })
+
     _opt_opt_state = {"running": False, "progress": {}, "result": None}
     _opt_opt_lock = threading.Lock()
 
