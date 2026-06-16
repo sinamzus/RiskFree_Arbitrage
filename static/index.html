@@ -6114,7 +6114,7 @@ async function loadOptUnderlyings() {
   const cur = sel.value;
   const list = j.underlyings || [];
   sel.innerHTML = list.map(x =>
-    `<option value="${E(x.underlying)}">${x.underlying} (${x.n} قرارداد، ${x.ob_days||0} روز)</option>`).join('')
+    `<option value="${x.underlying}">${x.underlying} (${x.n} قرارداد، ${x.ob_days||0} روز)</option>`).join('')
     || '<option value="">— زنجیره‌ای ثبت نشده —</option>';
   if (cur) sel.value = cur;
 }
@@ -6145,7 +6145,7 @@ async function optDataRefresh() {
   }
   const ck = v => v ? '<span class="has">✓</span>' : '<span class="miss">✗</span>';
   const rowsHtml = rows.map(x => `<tr>
-    <td class="u-name">${E(x.underlying)}</td>
+    <td class="u-name">${x.underlying}</td>
     <td>${x.n}</td>
     <td>${x.active}</td>
     <td>${x.watched}</td>
