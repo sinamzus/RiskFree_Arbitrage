@@ -265,6 +265,27 @@ CREATE TABLE IF NOT EXISTS instruments (
 CREATE INDEX IF NOT EXISTS ix_instr_market ON instruments(market);
 CREATE INDEX IF NOT EXISTS ix_instr_type   ON instruments(type);
 CREATE INDEX IF NOT EXISTS ix_instr_watch  ON instruments(watch);
+
+-- ── Option series (اختيار معامله) registry for options arbitrage ──────────
+-- One row per option contract. call = ض-prefix, put = ط-prefix on TSETMC.
+-- strike/expiry/underlying parsed from the instrument name at discovery.
+CREATE TABLE IF NOT EXISTS option_series (
+    symbol         TEXT PRIMARY KEY,
+    ins_code       TEXT    DEFAULT '',
+    name           TEXT    DEFAULT '',
+    underlying     TEXT    DEFAULT '',   -- نمادِ دارایی پایه
+    underlying_ins TEXT    DEFAULT '',   -- ins_code دارایی پایه (اگر معلوم)
+    opt_type       TEXT    DEFAULT '',   -- call | put
+    strike         REAL    DEFAULT 0,    -- قیمت اعمال (ریال)
+    expiry         INTEGER DEFAULT 0,    -- YYYYMMDD گرگوری
+    contract_size  INTEGER DEFAULT 1000, -- اندازهٔ قرارداد (سهم در هر قرارداد)
+    active         INTEGER DEFAULT 1,    -- 1 = سررسیدنشده
+    watch          INTEGER DEFAULT 0,    -- 1 = جمع‌آوریِ درون‌روز
+    updated        INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_opt_underlying ON option_series(underlying);
+CREATE INDEX IF NOT EXISTS ix_opt_expiry     ON option_series(expiry);
+CREATE INDEX IF NOT EXISTS ix_opt_watch      ON option_series(watch);
 """
 
 
@@ -1208,6 +1229,76 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
             return 0
         with self._conn() as conn:
             conn.executemany("UPDATE instruments SET watch=? WHERE symbol=?",
+                             [(1 if watch else 0, s) for s in symbols])
+        return len(symbols)
+
+    # ------------------------------------------------------------------ #
+    #  Option series registry (options arbitrage)                         #
+    # ------------------------------------------------------------------ #
+
+    def upsert_option_series(self, rows: list[dict]) -> int:
+        """Insert/replace option contracts (keyed by symbol). Preserves the
+        existing `watch` flag unless a row explicitly sets it."""
+        if not rows:
+            return 0
+        with self._conn() as conn:
+            prev = {r[0]: r[1] for r in conn.execute(
+                "SELECT symbol, watch FROM option_series").fetchall()}
+            payload = []
+            for s in rows:
+                sym = (s.get("symbol") or "").strip()
+                if not sym:
+                    continue
+                watch = s.get("watch")
+                if watch is None:
+                    watch = prev.get(sym, 0)
+                payload.append((
+                    sym, s.get("ins_code", ""), s.get("name", ""),
+                    s.get("underlying", ""), s.get("underlying_ins", ""),
+                    s.get("opt_type", ""), float(s.get("strike", 0) or 0),
+                    int(s.get("expiry", 0) or 0),
+                    int(s.get("contract_size", 1000) or 1000),
+                    1 if s.get("active", True) else 0,
+                    1 if watch else 0, int(s.get("updated", 0) or 0)))
+            conn.executemany(
+                """INSERT OR REPLACE INTO option_series
+                   (symbol, ins_code, name, underlying, underlying_ins, opt_type,
+                    strike, expiry, contract_size, active, watch, updated)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", payload)
+        return len(payload)
+
+    def get_option_series(self, *, underlying: str | None = None,
+                          watch_only: bool = False,
+                          active_only: bool = False) -> list[dict]:
+        """Return option contracts, optionally filtered."""
+        q = "SELECT * FROM option_series WHERE 1=1"
+        args: list = []
+        if underlying:
+            q += " AND underlying=?"; args.append(underlying)
+        if watch_only:
+            q += " AND watch=1"
+        if active_only:
+            q += " AND active=1"
+        q += " ORDER BY underlying, expiry, strike, opt_type"
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+    def get_option_underlyings(self) -> list[dict]:
+        """Distinct underlyings that have option series, with contract counts
+        and how many have order-book data collected."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT underlying, COUNT(*) AS n,
+                          SUM(watch) AS watched
+                   FROM option_series WHERE underlying!=''
+                   GROUP BY underlying ORDER BY underlying""").fetchall()
+        return [dict(r) for r in rows]
+
+    def set_option_watch(self, symbols: list[str], watch: bool) -> int:
+        if not symbols:
+            return 0
+        with self._conn() as conn:
+            conn.executemany("UPDATE option_series SET watch=? WHERE symbol=?",
                              [(1 if watch else 0, s) for s in symbols])
         return len(symbols)
 

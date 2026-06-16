@@ -174,6 +174,61 @@ def classify_instrument(symbol: str, name: str) -> str:
     return "stock"
 
 
+def _parse_jalali_date_int(digits: str) -> int:
+    """Jalali date digits (YYYYMMDD or YYMMDD) → Gregorian YYYYMMDD int, else 0."""
+    if not digits or not digits.isdigit():
+        return 0
+    try:
+        import jdatetime
+    except ImportError:
+        return 0
+    if len(digits) == 8:
+        y, m, d = int(digits[:4]), int(digits[4:6]), int(digits[6:8])
+    elif len(digits) == 6:
+        yy, m, d = int(digits[:2]), int(digits[2:4]), int(digits[4:6])
+        y = 1300 + yy if yy >= 60 else 1400 + yy
+    else:
+        return 0
+    try:
+        g = jdatetime.date(y, m, d).togregorian()
+        return g.year * 10_000 + g.month * 100 + g.day
+    except Exception:
+        return 0
+
+
+def parse_option_name(symbol: str, name: str) -> dict:
+    """Parse an Iranian option instrument name into its contract spec.
+
+    Returns {opt_type, underlying, strike, expiry} — opt_type call|put,
+    underlying نمادِ پایه, strike (Rial), expiry Gregorian YYYYMMDD int.
+    Missing fields are '' / 0. Falls back to the ض/ط symbol prefix for type.
+
+    Typical name forms (after normalization):
+        "اختيارخ اهرم-12000-14031213"
+        "اختيارف خساپا-2000-1403/12/13"
+    """
+    import re
+    # NOTE: _normalize maps Arabic ي→ی, so match the normalized (Persian) form.
+    n = _normalize(name or "")
+    s = _normalize(symbol or "")
+    out = {"opt_type": "", "underlying": "", "strike": 0.0, "expiry": 0}
+
+    if "اختیارخ" in n or "اختیار خ" in n or s[:1] == "ض":
+        out["opt_type"] = "call"
+    elif "اختیارف" in n or "اختیار ف" in n or s[:1] == "ط":
+        out["opt_type"] = "put"
+
+    m = re.search(r"اختیار\s*[خف]\s*", n)
+    rest = n[m.end():].strip() if m else n
+    parts = [p.strip() for p in rest.split("-") if p.strip()]
+    if len(parts) >= 3:
+        u = re.sub(r"^ت\s+", "", parts[0]).strip()   # drop ETF marker "ت "
+        out["underlying"] = u.split()[0] if u else ""
+        out["strike"] = float(re.sub(r"[^\d]", "", parts[1]) or 0)
+        out["expiry"] = _parse_jalali_date_int(re.sub(r"[^\d]", "", parts[-1]))
+    return out
+
+
 # =========================================================================== #
 #  TSETMC fetcher                                                              #
 # =========================================================================== #
@@ -487,6 +542,48 @@ class TSETMCFetcher:
         logger.info("discover_stocks: %d common stocks (of %d instruments)",
                     len(stocks), len(rows))
         return stocks
+
+    def discover_options(self, underlyings: list[str] | None = None) -> list[dict]:
+        """Discover اختيار معامله (option) contracts from TSETMC.
+
+        Runs a broad "اختيار" search plus, for each underlying in *underlyings*,
+        an "اختيار <نماد>" search to pull that full chain (search is ~40-capped,
+        so per-underlying queries are how you get a complete chain). Parses each
+        contract's type/strike/expiry/underlying from the name.
+
+        Returns de-duplicated registry dicts:
+            {symbol, ins_code, name, opt_type, underlying, strike, expiry,
+             contract_size, active}
+        """
+        from datetime import datetime as _dt
+        today = int(_dt.now().strftime("%Y%m%d"))
+        queries = ["اختيار"]
+        if underlyings:
+            queries += [f"اختيار {u}" for u in underlyings]
+        by_code: dict[str, dict] = {}
+        for q in queries:
+            for r in self.search_instrument(q):
+                code = (r.get("ins_code") or "").strip()
+                sym = (r.get("symbol") or "").strip()
+                name = (r.get("full_name") or "").strip()
+                if not code or not sym or code in by_code:
+                    continue
+                if classify_instrument(sym, name) != "option":
+                    continue
+                spec = parse_option_name(sym, name)
+                by_code[code] = {
+                    "symbol": _normalize(sym), "ins_code": code, "name": name,
+                    "opt_type": spec["opt_type"], "underlying": spec["underlying"],
+                    "strike": spec["strike"], "expiry": spec["expiry"],
+                    "contract_size": 1000,
+                    "active": bool(spec["expiry"] and spec["expiry"] > today),
+                }
+        out = sorted(by_code.values(),
+                     key=lambda d: (d["underlying"], d["expiry"] or 0, d["strike"]))
+        n_act = sum(1 for d in out if d["active"])
+        logger.info("discover_options: %d contracts (%d active) from %d queries",
+                    len(out), n_act, len(queries))
+        return out
 
     # ------------------------------------------------------------------ #
     #  Price data                                                          #

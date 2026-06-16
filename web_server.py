@@ -1446,6 +1446,143 @@ def create_app(db, scan_callback=None):
                         "result": _mm_opt_state["result"]})
 
     # ──────────────────────────────────────────────────────────────────────
+    #  Options arbitrage (آربیتراژ اختيار معامله)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _opt_params_from(getter):
+        from options_backtest import OptionsParams
+
+        def _f(name, default):
+            v = getter(name, None)
+            try:
+                return float(v) if v not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
+
+        def _i(name, default):
+            return int(_f(name, default))
+
+        def _b(name, default):
+            v = getter(name, None)
+            if v in (None, ""):
+                return default
+            return str(v) == "1" or str(v).lower() == "true"
+
+        return OptionsParams(
+            capital=_f("capital", 100_000_000_000.0),
+            max_capital_per_trade=_f("max_capital_per_trade", 10_000_000_000.0),
+            annual_rate=_f("annual_rate", 0.30),
+            min_edge_ann_pct=_f("min_edge_ann_pct", 5.0),
+            do_conversion=_b("do_conversion", True),
+            do_reversal=_b("do_reversal", False),
+            do_box=_b("do_box", True),
+            allow_short=_b("allow_short", False),
+            opt_fee=_f("opt_fee", 0.0005),
+            stock_fee=_f("stock_fee", 0.0037),
+            exercise_fee=_f("exercise_fee", 0.0005),
+            step_secs=_i("step_secs", 60),
+            quote_max_age_secs=_i("quote_max_age_secs", 600),
+            min_days_to_expiry=_i("min_days_to_expiry", 1),
+        )
+
+    @app.route("/api/opt/underlyings")
+    def api_opt_underlyings():
+        """Underlyings that have option chains, with chain + OB-coverage counts."""
+        try:
+            rows = db.get_option_underlyings()
+        except Exception as e:
+            logger.exception("opt underlyings failed")
+            return jsonify({"error": str(e)}), 500
+        for r in rows:
+            try:
+                r["ob_days"] = len(db.get_ob_dates(r["underlying"]))
+            except Exception:
+                r["ob_days"] = 0
+        return jsonify({"underlyings": rows, "count": len(rows)})
+
+    @app.route("/api/opt/backtest")
+    def api_opt_backtest():
+        from options_backtest import run_options_backtest
+        underlying = (request.args.get("underlying") or "").strip()
+        if not underlying:
+            return jsonify({"error": "underlying required"}), 400
+
+        def _int(name):
+            v = request.args.get(name, "")
+            return int(v) if v else None
+
+        params = _opt_params_from(request.args.get)
+        try:
+            result = run_options_backtest(db, underlying, _int("start"),
+                                          _int("end"), params)
+        except Exception as e:
+            logger.exception("opt backtest failed")
+            return jsonify({"error": str(e)}), 500
+        return jsonify(result)
+
+    _opt_opt_state = {"running": False, "progress": {}, "result": None}
+    _opt_opt_lock = threading.Lock()
+
+    @app.route("/api/opt/optimize", methods=["GET", "POST"])
+    def api_opt_optimize():
+        from options_backtest import optimize_options_backtest
+        body = request.get_json(silent=True) or {}
+
+        def _get(name, default=None):
+            if name in body:
+                return body[name]
+            return request.args.get(name, default)
+
+        underlying = str(_get("underlying", "") or "").strip()
+        if not underlying:
+            return jsonify({"error": "underlying required"}), 400
+        base = _opt_params_from(_get)
+        opt_metric = str(_get("opt_metric", "total_profit"))
+        try:
+            n_jobs = int(float(_get("n_jobs", 0)))
+        except (ValueError, TypeError):
+            n_jobs = 0
+
+        def _int(name):
+            v = _get(name)
+            try:
+                return int(v) if v not in (None, "") else None
+            except (ValueError, TypeError):
+                return None
+        start, end = _int("start"), _int("end")
+
+        if _opt_opt_state["running"]:
+            return jsonify({"status": "already running",
+                            "progress": _opt_opt_state["progress"]}), 409
+
+        def _run():
+            with _opt_opt_lock:
+                _opt_opt_state["running"] = True
+                _opt_opt_state["progress"] = {"done": 0, "total": 0, "phase": "grid"}
+                _opt_opt_state["result"] = None
+            try:
+                res = optimize_options_backtest(
+                    db, underlying, start, end, base=base, opt_metric=opt_metric,
+                    progress=_opt_opt_state["progress"],
+                    progress_lock=_opt_opt_lock, n_jobs=n_jobs)
+                _opt_opt_state["result"] = res
+            except Exception:
+                logger.exception("opt optimize failed")
+                _opt_opt_state["result"] = {"error": "optimization failed"}
+            finally:
+                with _opt_opt_lock:
+                    _opt_opt_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="opt-optimize").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/opt/optimize/status")
+    def api_opt_optimize_status():
+        return jsonify({"running": _opt_opt_state["running"],
+                        "progress": _opt_opt_state["progress"],
+                        "result": _opt_opt_state["result"]})
+
+    # ──────────────────────────────────────────────────────────────────────
     #  Data coverage + on-demand collection (funds + اخزا)
     # ──────────────────────────────────────────────────────────────────────
 
