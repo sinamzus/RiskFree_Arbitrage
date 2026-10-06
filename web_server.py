@@ -1727,6 +1727,10 @@ def create_app(db, scan_callback=None):
             exit_discount_pct=_f("exit", d.exit_discount_pct),
             max_hold_days=int(_f("hold", d.max_hold_days)),
             stop_loss_pct=_f("stop", d.stop_loss_pct),
+            stop_mode=(str(get("stopmode") or d.stop_mode)
+                       if str(get("stopmode") or d.stop_mode) in ("nav_widen", "nav_level", "price")
+                       else d.stop_mode),
+            baseline_days=int(_f("base", d.baseline_days)),
             half_spread_pct=_f("spread", d.half_spread_pct),
             participation_pct=_f("part", d.participation_pct),
             require_fresh=_b("fresh", d.require_fresh),

@@ -33,10 +33,20 @@ be market movement; ``max_nav_age_days`` and the per-fund NAV-age statistics in
 
 Rules (all parameters)
 ----------------------
-entry : last ≤ NAV·(1 − entry_discount_pct/100)            → buy
-exit  : last ≥ NAV·(1 − exit_discount_pct/100)             → sell  ("signal")
+"fair value" F = NAV · (1 + baseline), where baseline is THIS fund's own typical
+discount/premium (median of its end-of-day price/NAV−1 over the previous
+``baseline_days`` trading days — past data only).  A fund that always trades 3 %
+below NAV therefore only signals when it is cheaper than its own norm, and a fund
+with a permanent +2 % premium can still signal on dips.  ``baseline_days = 0``
+turns this off (F = NAV).
+
+entry : last ≤ F·(1 − entry_discount_pct/100)              → buy
+exit  : last ≥ F·(1 − exit_discount_pct/100)               → sell  ("signal")
         held ≥ max_hold_days calendar days                  → sell  ("time")
-        bid  ≤ entry_price·(1 − stop_loss_pct/100)          → sell  ("stop")
+        NAV-based stop (stop_mode, stop_loss_pct = S):                 → sell  ("stop")
+          nav_widen : last/F − 1 ≤ (last/F − 1 at entry) − S/100   (discount widened by S points)
+          nav_level : last ≤ F·(1 − S/100)                          (discount reached S %)
+          price     : bid ≤ entry_price·(1 − S/100)                 (classic price stop)
         data ends while holding                             → sell  ("end")
 After any exit the same fund is not re-entered on the same calendar day.
 One shared capital pool: every fund is simulated at its maximum liquidity, then all
@@ -78,7 +88,9 @@ class DiscountParams:
     entry_discount_pct: float = 0.50    # buy when price ≤ NAV·(1−this/100)
     exit_discount_pct: float = 0.0      # sell when price ≥ NAV·(1−this/100); <0 = wait for premium
     max_hold_days: int = 10             # calendar days; 0 = no limit
-    stop_loss_pct: float = 0.0          # 0 = off
+    stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
+    stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
+    baseline_days: int = 20             # per-fund typical discount window (trading days); 0 = off
     half_spread_pct: float = 0.05       # assumed half bid-ask spread (each side)
     participation_pct: float = 5.0      # max share of the day's volume we can trade; 0 = unlimited
     require_fresh: bool = True          # only trade on snapshots where volume grew
@@ -111,6 +123,9 @@ class Trade:
     hold_days: int
     exit_reason: str            # signal | time | stop | end
     scale: float = 1.0          # share of the maximum-liquidity position actually taken
+    rel_entry_pct: float = 0.0  # entry price vs the fund's own fair value (NAV·(1+baseline))
+    rel_exit_pct: float = 0.0
+    base_pct: float = 0.0       # the fund's typical discount used at entry (baseline, %)
 
 
 # --------------------------------------------------------------------------- #
@@ -160,11 +175,14 @@ def _universe(db, cats: list[str] | None, symbols: list[str] | None) -> list[tup
 def _prep(raw: list[tuple], p: DiscountParams):
     """Raw DB rows -> (rows, day_vol).
 
-    rows: [(ordinal, date, time, nav, last, fresh)] — only in-session snapshots
-    with a positive price/NAV and a NAV no older than ``max_nav_age_days``.
+    rows: [(ordinal, date, time, fair, last, fresh, nav_raw)] — only in-session
+    snapshots with a positive price/NAV and a NAV no older than ``max_nav_age_days``.
+    ``fair`` = NAV·(1+baseline) where baseline is the fund's median discount over the
+    previous ``baseline_days`` trading days (past data only; snapshots during the
+    warm-up, before enough history exists, are dropped).  baseline_days = 0 → fair = NAV.
     day_vol: {date: total volume traded that day}.
     """
-    rows = []
+    base_rows = []
     day_vol: dict[int, int] = {}
     prev_vol = 0
     prev_date = 0
@@ -183,7 +201,31 @@ def _prep(raw: list[tuple], p: DiscountParams):
         o = _ord(d)
         if nav_d and p.max_nav_age_days >= 0 and o - _ord(nav_d) > p.max_nav_age_days:
             continue
-        rows.append((o, d, t, nav, last, fresh))
+        base_rows.append((o, d, t, nav, last, fresh))
+
+    if p.baseline_days <= 0:
+        return [(o, d, t, nav, last, fr, nav) for o, d, t, nav, last, fr in base_rows], day_vol
+
+    # per-day typical discount (median of the day's fresh snapshots), then a causal
+    # rolling median over the previous baseline_days trading days
+    per_day: dict[int, list[float]] = {}
+    for o, d, t, nav, last, fr in base_rows:
+        if fr:
+            per_day.setdefault(d, []).append(last / nav - 1.0)
+    days = sorted(per_day)
+    daily = [statistics.median(per_day[d]) for d in days]
+    min_hist = max(3, p.baseline_days // 3)
+    base_of: dict[int, float] = {}
+    for i, d in enumerate(days):
+        window = daily[max(0, i - p.baseline_days):i]
+        if len(window) >= min_hist:
+            base_of[d] = statistics.median(window)
+    rows = []
+    for o, d, t, nav, last, fr in base_rows:
+        b = base_of.get(d)
+        if b is None:
+            continue
+        rows.append((o, d, t, nav * (1.0 + b), last, fr, nav))
     return rows, day_vol
 
 
@@ -204,16 +246,19 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
     pos = 0
     cost = 0.0           # cost basis (excl. fees) of the units held
     e_ord = e_date = e_time = 0
-    e_nav = 0.0
+    e_nav = 0.0          # raw NAV at entry
+    e_fair = 0.0         # fair value (NAV·(1+baseline)) at entry
+    e_rel = 0.0          # last/fair − 1 at the entry signal
     e_px = 0.0
     blocked_date = 0
+    stop_s = p.stop_loss_pct / 100.0
 
     def _cap(date_int: int) -> int:
         if p.participation_pct <= 0:
             return big
         return int(day_vol.get(date_int, 0) * p.participation_pct / 100.0)
 
-    def _close(units: int, px: float, d: int, t: int, nav: float, reason: str):
+    def _close(units: int, px: float, d: int, t: int, nav: float, fair: float, reason: str):
         nonlocal pos, cost
         frac = units / pos
         cost_part = cost * frac
@@ -229,6 +274,9 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
             nav_entry=round(e_nav, 2), nav_exit=round(nav, 2),
             disc_entry_pct=round((cost_part / units / e_nav - 1) * 100, 4) if e_nav else 0,
             disc_exit_pct=round((px / nav - 1) * 100, 4) if nav else 0,
+            rel_entry_pct=round((cost_part / units / e_fair - 1) * 100, 4) if e_fair else 0,
+            rel_exit_pct=round((px / fair - 1) * 100, 4) if fair else 0,
+            base_pct=round((e_fair / e_nav - 1) * 100, 4) if e_nav else 0,
             buy_notional=round(cost_part, 0), sell_notional=round(sell_notional, 0),
             fees=round(buy_fee + sell_fee, 0), net_pnl=round(net, 0),
             net_pct=round(net / invested * 100, 4) if invested else 0,
@@ -237,7 +285,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
         cost -= cost_part
 
     last_i = len(rows) - 1
-    for i, (o, d, t, nav, last, fresh) in enumerate(rows):
+    for i, (o, d, t, nav, last, fresh, nav_raw) in enumerate(rows):
         if p.require_fresh and not fresh:
             continue
         if pos == 0:
@@ -250,26 +298,31 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
             if units <= 0:
                 continue
             pos, cost = units, units * ask
-            e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav, ask
+            e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
+            e_fair, e_rel = nav, last / nav - 1.0
         else:
             bid = last * (1 - hs)
             reason = None
             if p.max_hold_days > 0 and o - e_ord >= p.max_hold_days:
                 reason = "time"
-            elif p.stop_loss_pct > 0 and bid <= e_px * stop_mult:
+            elif stop_s > 0 and (
+                    (p.stop_mode == "price" and bid <= e_px * stop_mult)
+                    or (p.stop_mode == "nav_level" and last <= nav * (1.0 - stop_s))
+                    or (p.stop_mode not in ("price", "nav_level")
+                        and last / nav - 1.0 <= e_rel - stop_s)):
                 reason = "stop"
             elif last >= nav * ex_mult:
                 reason = "signal"
             if reason:
                 units = min(pos, _cap(d))
                 if units > 0:
-                    _close(units, bid, d, t, nav, reason)
+                    _close(units, bid, d, t, nav_raw, nav, reason)
                     if pos == 0:
                         blocked_date = d
 
     if pos > 0:                       # data ended while holding
-        o, d, t, nav, last, _ = rows[-1]
-        _close(pos, last * (1 - hs), d, t, nav, "end")
+        o, d, t, nav, last, _, nav_raw = rows[-1]
+        _close(pos, last * (1 - hs), d, t, nav_raw, nav, "end")
     return trades
 
 
@@ -722,11 +775,11 @@ def discount_stats(db, cats: list[str] | None = None, symbols: list[str] | None 
         raw = db.get_nav_intraday(sid, start, end)
         if not raw:
             continue
-        rows, _ = _prep(raw, replace(p, max_nav_age_days=-1))
+        rows, _ = _prep(raw, replace(p, max_nav_age_days=-1, baseline_days=0))
         rows = [r for r in rows if r[5]]                      # fresh only
         if len(rows) < 20:
             continue
-        disc = sorted((last / nav - 1) * 100 for _, _, _, nav, last, _ in rows)
+        disc = sorted((last / nav - 1) * 100 for _, _, _, nav, last, _, _ in rows)
         # NAV freshness: age of the NAV at each raw snapshot, NAV changes per day
         ages, changes, days = [], 0, set()
         prev = None

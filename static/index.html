@@ -2360,8 +2360,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-exit" type="number" step="0.05" value="0" style="width:70px"></div>
       <div class="bbt-field" title="بیشینهٔ روزهای تقویمیِ نگه‌داری؛ ۰ = بدون سقف"><label>حداکثر نگه‌داری (روز)</label>
         <input id="disc-hold" type="number" step="1" value="10" style="width:70px"></div>
-      <div class="bbt-field" title="فروش اگر قیمت فروش از قیمت ورود این‌قدر پایین‌تر رفت؛ ۰ = خاموش"><label>حد ضرر ٪</label>
+      <div class="bbt-field" title="مبنای حد ضرر. «عمیق‌تر شدن تخفیف»: فروش وقتی تخفیف نسبت به لحظهٔ ورود این‌قدر واحد درصد بازتر شد. «رسیدن تخفیف به»: فروش وقتی قیمت به NAV·(1−این٪) رسید. «افت قیمت»: کلاسیک، نسبت به قیمت خرید. دو مورد اول نسبت به NAVِ تعدیل‌شدهٔ همان صندوق‌اند."><label>نوع حد ضرر</label>
+        <select id="disc-stopmode" style="width:230px">
+          <option value="nav_widen">NAV: عمیق‌تر شدن تخفیف (واحد درصد)</option>
+          <option value="nav_level">NAV: رسیدن تخفیف به ٪</option>
+          <option value="price">قیمت: افت از قیمت خرید ٪</option></select></div>
+      <div class="bbt-field" title="مقدار حد ضرر (٪ یا واحد درصد، طبق نوع انتخابی)؛ ۰ = خاموش"><label>حد ضرر</label>
         <input id="disc-stop" type="number" step="0.5" value="0" style="width:70px"></div>
+      <div class="bbt-field" title="هر صندوق ممکن است دائماً بالا یا پایین NAV معامله شود (حباب دائمی). با این گزینه سیگنال‌ها نسبت به «حباب معمول همان صندوق» سنجیده می‌شوند: NAV × (1 + میانهٔ تخفیف همین چند روز گذشتهٔ صندوق). فقط از روزهای قبل استفاده می‌شود. ۰ = خاموش (مقایسه مستقیم با NAV)."><label>تعدیل حباب دائمی: میانهٔ چند روز قبل</label>
+        <input id="disc-base" type="number" step="1" min="0" value="20" style="width:80px"></div>
     </div>
 
     <div class="bbt-group-h">۳) اجرا، کارمزد و فیلتر NAV</div>
@@ -6321,7 +6328,7 @@ function discParams() {
     start: document.getElementById('disc-start').dataset.greg || '',
     end:   document.getElementById('disc-end').dataset.greg || '',
     initial: String((+v('disc-capital') || 0) * 1e6), pos: v('disc-pos'), entry: v('disc-entry'), exit: v('disc-exit'),
-    hold: v('disc-hold'), stop: v('disc-stop'),
+    hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
     navage: v('disc-navage'),
@@ -6546,16 +6553,16 @@ function renderDiscBacktest(res, p) {
     const c = discCls(t.net_pnl);
     const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[t.exit_reason] || t.exit_reason;
     return `<tr><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
-      <td>${t.disc_entry_pct}%</td><td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
-      <td>${t.disc_exit_pct}%</td><td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
+      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td><td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
+      <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td><td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
       <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td></tr>`;
   }).join('');
   document.getElementById('disc-trades').innerHTML = `<div class="disc-h">معاملات${tr.length > LIM ? ` (${LIM} مورد اول از ${tr.length})` : ` (${tr.length})`}</div>
     <div class="disc-tblwrap" style="max-height:480px"><table class="disc-tbl"><thead><tr>
-      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود</th>
-      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
+      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>
+      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th><th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
       <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="16" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
+    </tr></thead><tbody>${rows || '<tr><td colspan="19" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
   document.getElementById('disc-note').textContent = '';
 }
 
