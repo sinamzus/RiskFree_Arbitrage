@@ -20,7 +20,7 @@ Profit is ALWAYS computed from traded prices, never from NAV:
 
 * buy  at  last · (1 + half_spread)      (assumed spread — no order book here)
 * sell at  last · (1 − half_spread)
-* fees:    BUYER_COMMISSION on the buy, SELLER_COMMISSION + SELLER_TAX on the sell
+* fees:    0.12% on the buy and 0.12% on the sell (DiscountParams.buy_fee / sell_fee, editable in the UI)
 * size:    position_pct % of the CURRENT capital (cash + cost of open positions),
            limited by cash, and by participation% of that day's total volume
 * a quote is only used when the cumulative volume grew since the previous
@@ -127,8 +127,8 @@ class DiscountParams:
     session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
     session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
     session_end: int = 123000
-    buy_fee: float = BUYER_COMMISSION
-    sell_fee: float = SELLER_COMMISSION + SELLER_TAX
+    buy_fee: float = 0.0012             # 0.12% each side (all-in broker + exchange fee for these ETFs)
+    sell_fee: float = 0.0012
 
 
 @dataclass
