@@ -683,6 +683,16 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
                 conn.execute("INSERT OR REPLACE INTO nav_symbol_category VALUES (?,?,'manual',?)",
                              (symbol_id, category, old[0] if old else 0))
 
+    def get_nav_dup_ids(self) -> set[int]:
+        """symbol_ids flagged as duplicates of another id (same instrument)."""
+        with self._conn() as conn:
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nav_symbol_category'"
+            ).fetchone() is None:
+                return set()
+            return {int(r[0]) for r in conn.execute(
+                "SELECT symbol_id FROM nav_symbol_category WHERE source='dup'")}
+
     def get_nav_intraday_ids(self) -> list[int]:
         with self._conn() as conn:
             return [int(r[0]) for r in conn.execute(

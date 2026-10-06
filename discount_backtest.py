@@ -144,8 +144,10 @@ def _universe(db, cats: list[str] | None, symbols: list[str] | None) -> list[tup
         raise ValueError("جدول nav_intraday وجود ندارد — اول tools/import_nav_dump.py را اجرا کنید.")
     names = db.get_nav_symbol_map()
     kinds = db.get_nav_symbol_category()
-    ids = db.get_nav_intraday_ids()
-    label = {i: names.get(i, f"#{i}") for i in ids}
+    dups = db.get_nav_dup_ids()
+    all_ids = db.get_nav_intraday_ids()
+    ids = [i for i in all_ids if i not in dups] if not symbols else all_ids
+    label = {i: names.get(i, f"#{i}") for i in all_ids}
     if symbols:
         want = {s.strip() for s in symbols if s.strip()}
         return [(i, label[i]) for i in ids if label[i] in want or str(i) in want]
@@ -447,6 +449,142 @@ def _per_symbol(trades: list[Trade], capital: float) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+#  Passive benchmark: equal-weight index of the selected funds                 #
+# --------------------------------------------------------------------------- #
+
+TRADING_DAYS = 240          # Tehran market: ~240 trading days a year
+
+
+def _daily_series(raw: list[tuple], p: DiscountParams) -> tuple[dict, dict]:
+    """Raw snapshots -> ({date: end-of-day traded price}, {date: end-of-day NAV})."""
+    price: dict[int, float] = {}
+    nav: dict[int, float] = {}
+    for d, t, n, nav_d, last, vol in raw:             # rows arrive in time order
+        if n and n > 0:
+            nav[d] = n
+        if last and last > 0 and (vol or 0) > 0 and p.session_start <= t <= p.session_end:
+            price[d] = last
+    return price, nav
+
+
+def _equal_weight_index(series: list[dict]) -> tuple[list[tuple[int, float]], list[int]]:
+    """Daily-rebalanced equal-weight index (level 1.0 at the first observation).
+
+    Each day's index return is the mean return of every fund observed that day
+    (vs its own previous observation).  Returns beyond ±30% or across >10-day
+    gaps are treated as data errors and ignored.  Returns ([(date, level)], [n_funds/day]).
+    """
+    by_date: dict[int, list[float]] = {}
+    first = None
+    for ser in series:
+        ds = sorted(ser)
+        if not ds:
+            continue
+        first = ds[0] if first is None else min(first, ds[0])
+        for a, b in zip(ds, ds[1:]):
+            r = ser[b] / ser[a] - 1.0
+            if abs(r) <= 0.30 and (_ord(b) - _ord(a)) <= 10:
+                by_date.setdefault(b, []).append(r)
+    if first is None:
+        return [], []
+    level = 1.0
+    out = [(first, 1.0)]
+    counts = []
+    for d in sorted(by_date):
+        rs = by_date[d]
+        level *= 1.0 + sum(rs) / len(rs)
+        out.append((d, level))
+        counts.append(len(rs))
+    return out, counts
+
+
+def _level_stats(levels: list[tuple[int, float]], daily: bool = True) -> dict:
+    if len(levels) < 2:
+        return {}
+    d0, d1 = levels[0][0], levels[-1][0]
+    total = levels[-1][1] / levels[0][1] - 1.0
+    years = max(1, _ord(d1) - _ord(d0)) / 365.0
+    cagr = ((1 + total) ** (1 / years) - 1) * 100 if years >= 30 / 365.0 and total > -1 else None
+    rets = [b[1] / a[1] - 1.0 for a, b in zip(levels, levels[1:]) if a[1] > 0]
+    vol = statistics.pstdev(rets) * (TRADING_DAYS ** 0.5) * 100 if len(rets) > 2 else 0.0
+    peak, dd = levels[0][1], 0.0
+    for _, v in levels:
+        peak = max(peak, v)
+        dd = max(dd, (peak - v) / peak if peak > 0 else 0.0)
+    return {"total_return_pct": round(total * 100, 3),
+            "cagr_pct": round(cagr, 2) if cagr is not None else None,
+            "vol_pct": round(vol, 2), "max_dd_pct": round(dd * 100, 3),
+            "up_days_pct": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1) if rets else 0}
+
+
+def _buy_and_hold(series: list[dict], initial: float, bf: float, sf: float) -> dict:
+    """Equal-weight buy-and-hold of the funds that already trade on the first date.
+
+    ``initial`` capital buys equally (incl. buy fee) on day 1; a fund whose data
+    ends is held at its last price; everything is sold (sell fee) at the end.
+    """
+    series = [s for s in series if s]
+    if not series:
+        return {}
+    d_first = min(min(s) for s in series)
+    start = [s for s in series if d_first in s]
+    if not start:
+        return {}
+    all_dates = sorted({d for s in series for d in s})
+    per = initial / (1 + bf) / len(start)
+    units = [per / s[d_first] for s in start]
+    ptr = [d_first] * len(start)                       # last known price per fund
+    last_px = [s[d_first] for s in start]
+    curve = []
+    for d in all_dates:
+        tot = 0.0
+        for k, s in enumerate(start):
+            if d in s:
+                last_px[k] = s[d]
+            tot += units[k] * last_px[k]
+        curve.append((d, tot))
+    final = curve[-1][1] * (1 - sf)
+    d1 = curve[-1][0]
+    years = max(1, _ord(d1) - _ord(d_first)) / 365.0
+    ret = final / initial - 1.0
+    cagr = ((1 + ret) ** (1 / years) - 1) * 100 if years >= 30 / 365.0 and ret > -1 else None
+    peak, dd = curve[0][1], 0.0
+    for _, v in curve:
+        peak = max(peak, v)
+        dd = max(dd, (peak - v) / peak if peak > 0 else 0.0)
+    return {"funds": len(start), "final_capital": round(final, 0),
+            "return_pct": round(ret * 100, 3),
+            "cagr_pct": round(cagr, 2) if cagr is not None else None,
+            "max_dd_pct": round(dd * 100, 3)}
+
+
+def build_benchmark(price_series: list[dict], nav_series: list[dict],
+                    p: DiscountParams) -> dict | None:
+    """Passive alternatives over the same funds and period (see module docstring)."""
+    levels, counts = _equal_weight_index(price_series)
+    if len(levels) < 2:
+        return None
+    st = _level_stats(levels)
+    init = p.initial_capital
+    st["final_capital"] = round(init * levels[-1][1], 0)
+    st["avg_funds"] = round(sum(counts) / len(counts), 1) if counts else 0
+    nav_levels, _ = _equal_weight_index(nav_series)
+    nav_st = _level_stats(nav_levels)
+    curve = [[d, round(init * lv, 0)] for d, lv in levels]
+    if len(curve) > 400:
+        step = len(curve) / 400.0
+        curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
+    return {
+        "first": levels[0][0], "last": levels[-1][0],
+        "funds": sum(1 for s in price_series if len(s) >= 2),
+        "index": st,
+        "buyhold": _buy_and_hold(price_series, init, p.buy_fee, p.sell_fee),
+        "nav_index": nav_st,
+        "curve": curve,
+    }
+
+
+# --------------------------------------------------------------------------- #
 #  Public: single backtest                                                     #
 # --------------------------------------------------------------------------- #
 
@@ -457,8 +595,14 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     funds = _universe(db, cats, symbols)
     raw_trades: list[Trade] = []
     tested = skipped_funds = 0
+    price_series: list[dict] = []
+    nav_series: list[dict] = []
     for sid, label in funds:
-        rows, day_vol = _prep(db.get_nav_intraday(sid, start, end), p)
+        raw = db.get_nav_intraday(sid, start, end)
+        ps, ns = _daily_series(raw, p)
+        price_series.append(ps)
+        nav_series.append(ns)
+        rows, day_vol = _prep(raw, p)
         if not rows:
             skipped_funds += 1
             continue
@@ -481,6 +625,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "trades": [asdict(t) for t in accepted],
         "per_symbol": _per_symbol(accepted, p.initial_capital),
         "equity_curve": curve,
+        "benchmark": build_benchmark(price_series, nav_series, p),
         "summary": summary,
     }
 
