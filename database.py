@@ -594,6 +594,60 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
                 out[int(str(r["date"]).replace("-", ""))] = _pick(r)
         return out
 
+    # ------------------------------------------------------------------ #
+    #  Intraday NAV (imported by tools/import_nav_dump.py)                #
+    # ------------------------------------------------------------------ #
+
+    def nav_intraday_available(self) -> bool:
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nav_intraday'"
+            ).fetchone() is not None
+
+    def get_nav_symbol_map(self) -> dict[int, str]:
+        """{symbol_id: ticker} from nav_symbol_map ({} if the table is absent)."""
+        with self._conn() as conn:
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nav_symbol_map'"
+            ).fetchone() is None:
+                return {}
+            return {int(r["symbol_id"]): r["symbol"] for r in conn.execute(
+                "SELECT symbol_id, symbol FROM nav_symbol_map")}
+
+    def get_nav_symbol_category(self) -> dict[int, str]:
+        """{symbol_id: fi|equity|gold|other} ({} if not classified yet)."""
+        with self._conn() as conn:
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nav_symbol_category'"
+            ).fetchone() is None:
+                return {}
+            return {int(r["symbol_id"]): r["category"] for r in conn.execute(
+                "SELECT symbol_id, category FROM nav_symbol_category")}
+
+    def get_nav_intraday_ids(self) -> list[int]:
+        with self._conn() as conn:
+            return [int(r[0]) for r in conn.execute(
+                "SELECT DISTINCT symbol_id FROM nav_intraday ORDER BY symbol_id")]
+
+    def get_nav_intraday_dates(self, start: Optional[int] = None,
+                               end: Optional[int] = None) -> list[int]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT date FROM nav_intraday "
+                "WHERE date >= ? AND date <= ? ORDER BY date",
+                (start or 0, end or 99999999)).fetchall()
+        return [int(r[0]) for r in rows]
+
+    def get_nav_intraday(self, symbol_id: int, start: Optional[int] = None,
+                         end: Optional[int] = None) -> list[tuple]:
+        """Rows (date, time, nav, nav_date, last, vol) in chronological order."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT date, time, nav, nav_date, last, vol FROM nav_intraday "
+                "WHERE symbol_id=? AND date >= ? AND date <= ? ORDER BY date, time",
+                (symbol_id, start or 0, end or 99999999)).fetchall()
+        return [tuple(r) for r in rows]
+
     def get_symbols(self) -> list[str]:
         """Return all distinct symbols stored in the DB."""
         with self._conn() as conn:

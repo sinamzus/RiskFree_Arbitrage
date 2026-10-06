@@ -1696,6 +1696,158 @@ def create_app(db, scan_callback=None):
                         "result": _opt_opt_state["result"]})
 
     # ──────────────────────────────────────────────────────────────────────
+    #  NAV-discount strategy (خرید زیر NAV و تغییر پوزیشن)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _disc_params_from(get):
+        """Build DiscountParams from a getter (query-string or JSON body).
+
+        Percent fields arrive as plain percents (0.5 = 0.5%); fees too.
+        """
+        from discount_backtest import DiscountParams
+        d = DiscountParams()
+
+        def _f(name, default):
+            v = get(name)
+            try:
+                return float(v) if v not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
+
+        def _b(name, default):
+            v = get(name)
+            if v in (None, ""):
+                return default
+            return str(v).lower() not in ("0", "false", "no", "off")
+
+        return DiscountParams(
+            capital=_f("capital", d.capital),
+            entry_discount_pct=_f("entry", d.entry_discount_pct),
+            exit_discount_pct=_f("exit", d.exit_discount_pct),
+            max_hold_days=int(_f("hold", d.max_hold_days)),
+            stop_loss_pct=_f("stop", d.stop_loss_pct),
+            half_spread_pct=_f("spread", d.half_spread_pct),
+            participation_pct=_f("part", d.participation_pct),
+            require_fresh=_b("fresh", d.require_fresh),
+            max_nav_age_days=int(_f("navage", d.max_nav_age_days)),
+            buy_fee=_f("buyfee", d.buy_fee * 100) / 100.0,
+            sell_fee=_f("sellfee", d.sell_fee * 100) / 100.0,
+        )
+
+    def _disc_sel(get):
+        """(cats, symbols, start, end) from a getter."""
+        cats = [c for c in str(get("cats") or "").split(",") if c.strip()]
+        syms = [c for c in str(get("symbols") or "").split(",") if c.strip()]
+
+        def _int(name):
+            v = get(name)
+            try:
+                return int(v) if v not in (None, "") else None
+            except (ValueError, TypeError):
+                return None
+        return cats, syms, _int("start"), _int("end")
+
+    @app.route("/api/disc/categories")
+    def api_disc_categories():
+        """Fund counts per category + date coverage of the intraday-NAV table."""
+        from discount_backtest import CATEGORIES
+        if not db.nav_intraday_available():
+            return jsonify({"available": False, "categories": {}, "error":
+                            "nav_intraday missing — run tools/import_nav_dump.py"})
+        kinds = db.get_nav_symbol_category()
+        names = db.get_nav_symbol_map()
+        counts = {k: {"label": v, "funds": 0, "named": 0} for k, v in CATEGORIES.items()}
+        for sid in db.get_nav_intraday_ids():
+            k = kinds.get(sid, "other")
+            counts[k]["funds"] += 1
+            if sid in names:
+                counts[k]["named"] += 1
+        dates = db.get_nav_intraday_dates()
+        return jsonify({"available": True, "categories": counts,
+                        "first": dates[0] if dates else None,
+                        "last": dates[-1] if dates else None, "days": len(dates)})
+
+    @app.route("/api/disc/backtest")
+    def api_disc_backtest():
+        from discount_backtest import run_discount_backtest
+        cats, syms, start, end = _disc_sel(request.args.get)
+        try:
+            res = run_discount_backtest(db, cats, syms, start, end,
+                                        _disc_params_from(request.args.get))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            logger.exception("disc backtest failed")
+            return jsonify({"error": str(e)}), 500
+        return jsonify(res)
+
+    @app.route("/api/disc/stats")
+    def api_disc_stats():
+        from discount_backtest import discount_stats
+        cats, syms, start, end = _disc_sel(request.args.get)
+        try:
+            res = discount_stats(db, cats, syms, start, end,
+                                 _disc_params_from(request.args.get))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            logger.exception("disc stats failed")
+            return jsonify({"error": str(e)}), 500
+        return jsonify(res)
+
+    _disc_opt_state = {"running": False, "progress": {}, "result": None}
+    _disc_opt_lock = threading.Lock()
+
+    @app.route("/api/disc/optimize", methods=["GET", "POST"])
+    def api_disc_optimize():
+        from discount_backtest import optimize_discount
+        body = request.get_json(silent=True) or {}
+
+        def _get(name, default=None):
+            return body[name] if name in body else request.args.get(name, default)
+
+        cats, syms, start, end = _disc_sel(_get)
+        base = _disc_params_from(_get)
+        metric = str(_get("opt_metric", "annualized_pct"))
+        try:
+            min_trades = int(float(_get("min_trades", 30)))
+            test_frac = float(_get("test_frac", 0.3))
+        except (ValueError, TypeError):
+            min_trades, test_frac = 30, 0.3
+
+        if _disc_opt_state["running"]:
+            return jsonify({"status": "already running",
+                            "progress": _disc_opt_state["progress"]}), 409
+
+        def _run():
+            with _disc_opt_lock:
+                _disc_opt_state["running"] = True
+                _disc_opt_state["progress"] = {"done": 0, "total": 0, "phase": "grid"}
+                _disc_opt_state["result"] = None
+            try:
+                _disc_opt_state["result"] = optimize_discount(
+                    db, cats, syms, start, end, base=base, opt_metric=metric,
+                    min_trades=min_trades, test_frac=test_frac,
+                    progress=_disc_opt_state["progress"], progress_lock=_disc_opt_lock)
+            except ValueError as e:
+                _disc_opt_state["result"] = {"error": str(e)}
+            except Exception:
+                logger.exception("disc optimize failed")
+                _disc_opt_state["result"] = {"error": "optimization failed"}
+            finally:
+                with _disc_opt_lock:
+                    _disc_opt_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="disc-optimize").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/disc/optimize/status")
+    def api_disc_optimize_status():
+        return jsonify({"running": _disc_opt_state["running"],
+                        "progress": _disc_opt_state["progress"],
+                        "result": _disc_opt_state["result"]})
+
+    # ──────────────────────────────────────────────────────────────────────
     #  Data coverage + on-demand collection (funds + اخزا)
     # ──────────────────────────────────────────────────────────────────────
 

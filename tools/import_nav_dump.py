@@ -84,6 +84,14 @@ CREATE TABLE nav_intraday (
 _INDEXES = """
 CREATE INDEX IF NOT EXISTS ix_navi_sid_date ON nav_intraday(symbol_id, date, time);
 """
+_CAT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS nav_symbol_category (
+    symbol_id INTEGER PRIMARY KEY,
+    category  TEXT NOT NULL,          -- fi | equity | gold | other
+    source    TEXT DEFAULT 'auto',    -- config | auto | manual
+    score     REAL DEFAULT 0
+);
+"""
 _MAP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS nav_symbol_map (
     symbol_id INTEGER PRIMARY KEY,
@@ -292,8 +300,112 @@ def map_symbols(db_path: Path, min_score: int = 6, margin: float = 1.5) -> None:
               + ", ".join(missing))
     except Exception:
         pass
+    classify(conn)
     _report_unmatched(conn, [i for i in all_ids if i not in mapped], db_path)
     conn.close()
+
+
+def _pearson(a: list[float], b: list[float]) -> float:
+    n = len(a)
+    ma, mb = sum(a) / n, sum(b) / n
+    sa = sum((x - ma) ** 2 for x in a)
+    sb = sum((y - mb) ** 2 for y in b)
+    if sa <= 0 or sb <= 0:
+        return 0.0
+    return sum((x - ma) * (y - mb) for x, y in zip(a, b)) / (sa * sb) ** 0.5
+
+
+def classify(conn, gold_corr: float = 0.97, fi_vol_pct: float = 0.2,
+             min_days: int = 60) -> None:
+    """Assign every symbol_id to fi / gold / equity (manual rows are kept).
+
+    * fi     : mapped to a fund of config.FIXED_INCOME_ETFS, or the daily NAV
+               return is almost flat (std < fi_vol_pct %).
+    * gold   : the biggest group of funds whose daily NAV returns are almost
+               identical (pairwise correlation >= gold_corr) — they all track
+               the same underlying.
+    * equity : everything else with a NAV.
+    """
+    import statistics
+    conn.executescript(_CAT_SCHEMA)
+    manual = {r[0]: r[1] for r in conn.execute(
+        "SELECT symbol_id, category FROM nav_symbol_category WHERE source='manual'")}
+    names = {r[0]: r[1] for r in conn.execute(
+        "SELECT symbol_id, symbol FROM nav_symbol_map")}
+    try:
+        from config import FIXED_INCOME_ETFS
+        fi_names = {f["symbol"] for f in FIXED_INCOME_ETFS}
+    except Exception:
+        fi_names = set()
+
+    # last NAV of each (symbol_id, date)
+    nav: dict[int, dict[int, float]] = {}
+    for sid, d, v in conn.execute(
+            "SELECT symbol_id, date, nav FROM nav_intraday ORDER BY symbol_id, date, time"):
+        nav.setdefault(sid, {})[d] = v
+    dates = sorted({d for m in nav.values() for d in m})
+    prev = {d: dates[i - 1] for i, d in enumerate(dates) if i}
+    rets: dict[int, dict[int, float]] = {}
+    for sid, m in nav.items():
+        rets[sid] = {d: m[d] / m[prev[d]] - 1 for d in m
+                     if d in prev and prev[d] in m and m[prev[d]] > 0}
+
+    cat: dict[int, tuple[str, str, float]] = {}
+    pool: list[int] = []
+    for sid, r in rets.items():
+        vol = statistics.pstdev(r.values()) * 100 if len(r) > 5 else 0.0
+        if names.get(sid) in fi_names:
+            cat[sid] = ("fi", "config", vol)
+        elif len(r) >= min_days and vol < fi_vol_pct:
+            cat[sid] = ("fi", "auto", vol)
+        elif len(r) >= min_days:
+            pool.append(sid)
+        else:
+            cat[sid] = ("other", "auto", vol)     # too little history
+
+    # --- gold: largest cluster of near-identical NAV return series -----------
+    corr: dict[tuple[int, int], float] = {}
+    nbrs: dict[int, set[int]] = {s: set() for s in pool}
+    for i, a in enumerate(pool):
+        ra = rets[a]
+        for b in pool[i + 1:]:
+            rb = rets[b]
+            common = [d for d in ra if d in rb]
+            if len(common) < min_days:
+                continue
+            c = _pearson([ra[d] for d in common], [rb[d] for d in common])
+            corr[(a, b)] = c
+            if c >= gold_corr:
+                nbrs[a].add(b)
+                nbrs[b].add(a)
+    gold: set[int] = set()
+    if pool:
+        seed = max(pool, key=lambda s: len(nbrs[s]))
+        if len(nbrs[seed]) >= 2:
+            gold = {seed} | nbrs[seed]
+    for sid in pool:
+        vol = statistics.pstdev(rets[sid].values()) * 100
+        cat[sid] = ("gold", "auto", vol) if sid in gold else ("equity", "auto", vol)
+
+    for sid, c in manual.items():
+        cat[sid] = (c, "manual", cat.get(sid, ("", "", 0))[2])
+    conn.execute("DELETE FROM nav_symbol_category")
+    conn.executemany("INSERT INTO nav_symbol_category VALUES (?,?,?,?)",
+                     [(sid, c, src, round(v, 3)) for sid, (c, src, v) in cat.items()])
+    conn.commit()
+
+    counts: dict[str, int] = {}
+    for c, _, _ in cat.values():
+        counts[c] = counts.get(c, 0) + 1
+    print("categories: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    if gold:
+        vols = sorted(cat[s][2] for s in gold)
+        print(f"gold cluster: {len(gold)} funds, daily NAV vol "
+              f"{vols[0]:.2f}-{vols[-1]:.2f}%  (corr>={gold_corr}); "
+              + ", ".join(names.get(s, f"#{s}") for s in sorted(gold)[:20]))
+    else:
+        print("gold cluster: none found at corr>=%.2f — set categories by hand "
+              "in data/nav_unmatched.csv and use --import-map" % gold_corr)
 
 
 def _report_unmatched(conn, miss: list[int], db_path: Path) -> None:
@@ -320,13 +432,16 @@ def _report_unmatched(conn, miss: list[int], db_path: Path) -> None:
         maxvol = conn.execute(
             "SELECT MAX(vol) FROM nav_intraday WHERE symbol_id=?", (sid,)).fetchone()[0]
         kind = ("fixed-income?" if nav_vol < 0.2 and len(rets) > 5 else "equity/other?")
+        crow = conn.execute("SELECT category FROM nav_symbol_category WHERE symbol_id=?",
+                            (sid,)).fetchone()
         rows.append({
             "symbol_id": sid, "days": len(per_day),
             "first": min(per_day), "last": max(per_day),
             "median_nav": round(statistics.median(seq), 0),
             "nav_daily_vol_pct": round(nav_vol, 3),
             "median_price_vs_nav_pct": round(statistics.median(prem), 3) if prem else 0,
-            "max_day_volume": maxvol or 0, "guess": kind, "symbol": "",
+            "max_day_volume": maxvol or 0, "guess": kind,
+            "category": crow[0] if crow else "", "symbol": "",
         })
     rows.sort(key=lambda r: (-r["days"], r["symbol_id"]))
     out = db_path.parent / "nav_unmatched.csv"
@@ -346,21 +461,35 @@ def _report_unmatched(conn, miss: list[int], db_path: Path) -> None:
 
 
 def import_manual_map(db_path: Path, csv_path: Path) -> None:
-    """Load hand-filled ``symbol_id,symbol`` rows (e.g. from nav_unmatched.csv)."""
+    """Load hand-filled rows: ``symbol_id`` + ``symbol`` (ticker) and/or
+    ``category`` (fi | equity | gold | other) from e.g. nav_unmatched.csv."""
     import csv
     conn = sqlite3.connect(db_path, timeout=60)
-    conn.executescript(_MAP_SCHEMA)
-    n = 0
+    conn.executescript(_MAP_SCHEMA + _CAT_SCHEMA)
+    n_sym = n_cat = 0
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         for r in csv.DictReader(f):
+            sid = (r.get("symbol_id") or "").strip()
+            if not sid.isdigit():
+                continue
             sym = (r.get("symbol") or "").strip()
-            if sym and (r.get("symbol_id") or "").strip().isdigit():
+            cat = (r.get("category") or "").strip().lower()
+            if sym:
                 conn.execute("INSERT OR REPLACE INTO nav_symbol_map VALUES (?,?,-1)",
-                             (int(r["symbol_id"]), sym))
-                n += 1
+                             (int(sid), sym))
+                n_sym += 1
+            if cat in ("fi", "equity", "gold", "other"):
+                row = conn.execute("SELECT category, source FROM nav_symbol_category "
+                                   "WHERE symbol_id=?", (int(sid),)).fetchone()
+                # a pre-filled auto value is not an edit — only store real changes
+                if row is None or row[1] == "manual" or row[0] != cat:
+                    conn.execute("INSERT OR REPLACE INTO nav_symbol_category "
+                                 "VALUES (?,?, 'manual', 0)", (int(sid), cat))
+                    n_cat += 1
     conn.commit()
     conn.close()
-    print(f"imported {n} manual mappings")
+    print(f"imported {n_sym} manual names, {n_cat} manual categories "
+          f"(run --map to re-classify the rest)")
 
 
 def stats(db_path: Path) -> None:
@@ -386,6 +515,8 @@ def main() -> None:
     ap.add_argument("--db", default=str(DEFAULT_DB), help="target SQLite db")
     ap.add_argument("--map", action="store_true", help="match symbol_id -> ticker")
     ap.add_argument("--stats", action="store_true", help="print table summary")
+    ap.add_argument("--classify", action="store_true",
+                    help="(re)assign fi / gold / equity categories")
     ap.add_argument("--import-map", metavar="CSV",
                     help="load hand-filled symbol_id,symbol rows (see nav_unmatched.csv)")
     a = ap.parse_args()
@@ -396,9 +527,14 @@ def main() -> None:
         import_manual_map(db, Path(a.import_map))
     if a.map:
         map_symbols(db)
+    if a.classify and not a.map:
+        conn = sqlite3.connect(db, timeout=60)
+        conn.executescript(_MAP_SCHEMA)
+        classify(conn)
+        conn.close()
     if a.stats:
         stats(db)
-    if not (a.dump or a.map or a.stats):
+    if not (a.dump or a.map or a.stats or a.classify or a.import_map):
         ap.print_help()
 
 
