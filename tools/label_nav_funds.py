@@ -69,8 +69,33 @@ def _looks_like_fund(name: str) -> bool:
     return any(h in n for h in FUND_NAME_HINTS)
 
 
+def _market_watch_extended(fetcher) -> list[dict]:
+    """Market-watch with a wider paperTypes list (new instrument types the stock
+    project call may not request).  Returns [] if the fetcher has no raw _get."""
+    if not hasattr(fetcher, "_get"):
+        return []
+    try:
+        from data_fetcher import TSETMC_CDN
+        pt = "&".join(f"paperTypes%5B{i}%5D={i}" for i in range(0, 16))
+        data = fetcher._get(
+            f"{TSETMC_CDN}/ClosingPrice/GetMarketWatch?market=0&industrialGroup=&{pt}"
+            "&showTraded=false&withBestLimits=false&hEven=0&refID=0", silent=True)
+        rows = (data or {}).get("marketwatch") or (data or {}).get("marketWatch") or []
+        out = []
+        for r in rows:
+            code = str(r.get("insCode") or "").strip()
+            sym = (r.get("lva") or r.get("lVal18AFC") or "").strip()
+            if code and sym:
+                out.append({"ins_code": code, "symbol": _fa(sym),
+                            "name": (r.get("lvc") or r.get("lVal30") or "").strip(),
+                            "market": "", "type": "other"})
+        return out
+    except Exception:                                        # noqa: BLE001
+        return []
+
+
 def discover(fetcher, conn: sqlite3.Connection, min_funds: int = 150,
-             include_all: bool = False) -> int:
+             include_all: bool = False, everything: bool = False) -> int:
     """Fill nav_fund_meta with every tradeable fund (ticker + full name).
 
     include_all=True also stores every other tradeable instrument (stocks, ...) —
@@ -78,10 +103,18 @@ def discover(fetcher, conn: sqlite3.Connection, min_funds: int = 150,
     """
     found: dict[str, dict] = {}
     try:
-        for r in fetcher.get_market_watch():
+        rows = list(fetcher.get_market_watch())
+        if include_all:
+            seen = {r["ins_code"] for r in rows}
+            ext = [r for r in _market_watch_extended(fetcher) if r["ins_code"] not in seen]
+            if ext:
+                print(f"  extended paperTypes returned {len(ext)} more instruments")
+            rows += ext
+        for r in rows:
             nm = _fa(r.get("name", ""))
             real_option = "اختیار" in nm
             if (r.get("type") == "fund" or _looks_like_fund(r.get("name", ""))
+                    or (include_all and everything)
                     or (include_all and not real_option and r.get("type") != "bond")):
                 found[r["ins_code"]] = {"symbol": r["symbol"], "name": r.get("name", ""),
                                         "market": r.get("market", "")}
@@ -366,6 +399,8 @@ def main() -> None:
     ap.add_argument("--db", default=str(DEFAULT_DB))
     ap.add_argument("--match", action="store_true", help="only re-match from stored history (no network)")
     ap.add_argument("--refresh", action="store_true", help="re-download every fund's history")
+    ap.add_argument("--everything", action="store_true",
+                    help="when widening, also try options and bonds (slow: several thousand downloads)")
     ap.add_argument("--no-widen", action="store_true",
                     help="do not search non-fund instruments for still-unnamed ids")
     ap.add_argument("--min-funds", type=int, default=150,
@@ -406,7 +441,7 @@ def main() -> None:
     if not a.match and not a.no_widen and _significant_left():
         print(f"  {_significant_left()} active ids still unnamed — widening the search to "
               f"ALL TSETMC instruments (names may lack the word 'صندوق') ...")
-        discover(fetcher, conn, 0, include_all=True)
+        discover(fetcher, conn, 0, include_all=True, everything=a.everything)
         fetch_history(fetcher, conn, span)
         res = match(conn)
         print(f"  matched {res['matched']} symbol_ids after widening")
