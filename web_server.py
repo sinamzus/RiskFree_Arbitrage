@@ -1731,6 +1731,11 @@ def create_app(db, scan_callback=None):
                        if str(get("stopmode") or d.stop_mode) in ("nav_widen", "nav_level", "price")
                        else d.stop_mode),
             baseline_days=int(_f("base", d.baseline_days)),
+            entry_mode=(str(get("entrymode") or d.entry_mode)
+                        if str(get("entrymode") or d.entry_mode) in ("fund", "index", "both")
+                        else d.entry_mode),
+            index_entry_pct=_f("ientry", d.index_entry_pct),
+            index_exit_pct=_f("iexit", d.index_exit_pct),
             half_spread_pct=_f("spread", d.half_spread_pct),
             participation_pct=_f("part", d.participation_pct),
             require_fresh=_b("fresh", d.require_fresh),

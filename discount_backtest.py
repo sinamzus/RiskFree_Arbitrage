@@ -40,8 +40,18 @@ below NAV therefore only signals when it is cheaper than its own norm, and a fun
 with a permanent +2 % premium can still signal on dips.  ``baseline_days = 0``
 turns this off (F = NAV).
 
-entry : last ≤ F·(1 − entry_discount_pct/100)              → buy
-exit  : last ≥ F·(1 − exit_discount_pct/100)               → sell  ("signal")
+Bubble index B(t) = simple average, over the active funds, of each fund's current bubble
+last/F − 1 (so each fund's own permanent premium/discount is already removed; with
+baseline_days = 0 it is the raw price/NAV − 1).  Only data up to time t is used, funds
+without a fresh quote today are ignored, and B is undefined until at least
+``index_min_share`` of the funds have quoted that day.
+
+entry_mode = "fund"  (default) : the fund itself is cheap (rule below)
+           = "index"           : B(t) ≤ −index_entry_pct/100  → buy EVERY active fund
+           = "both"            : the fund is cheap AND B(t) ≤ −index_entry_pct/100
+entry : last ≤ F·(1 − entry_discount_pct/100)              → buy   (mode "fund"/"both")
+exit  : last ≥ F·(1 − exit_discount_pct/100)               → sell  ("signal"; mode "fund"/"both")
+        B(t) ≥ −index_exit_pct/100                          → sell  ("signal"; mode "index")
         held ≥ max_hold_days calendar days                  → sell  ("time")
         NAV-based stop (stop_mode, stop_loss_pct = S):                 → sell  ("stop")
           nav_widen : last/F − 1 ≤ (last/F − 1 at entry) − S/100   (discount widened by S points)
@@ -88,6 +98,10 @@ class DiscountParams:
     entry_discount_pct: float = 0.50    # buy when price ≤ NAV·(1−this/100)
     exit_discount_pct: float = 0.0      # sell when price ≥ NAV·(1−this/100); <0 = wait for premium
     max_hold_days: int = 10             # calendar days; 0 = no limit
+    entry_mode: str = "fund"            # fund | index | both
+    index_entry_pct: float = 0.30       # enter (index modes) when the bubble index ≤ −this %
+    index_exit_pct: float = 0.0         # exit  (mode "index") when the bubble index ≥ −this %
+    index_min_share: float = 0.5        # share of the funds that must have quoted today
     stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
     baseline_days: int = 20             # per-fund typical discount window (trading days); 0 = off
@@ -126,6 +140,8 @@ class Trade:
     rel_entry_pct: float = 0.0  # entry price vs the fund's own fair value (NAV·(1+baseline))
     rel_exit_pct: float = 0.0
     base_pct: float = 0.0       # the fund's typical discount used at entry (baseline, %)
+    idx_entry_pct: float | None = None   # bubble index at entry / exit (None = undefined)
+    idx_exit_pct: float | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -256,10 +272,60 @@ def _prep(raw: list[tuple], p: DiscountParams):
 
 
 # --------------------------------------------------------------------------- #
+#  Bubble index (simple average of the funds' bubbles)                         #
+# --------------------------------------------------------------------------- #
+
+def _bubble_index(rows_by_fund: list[list[tuple]], p: DiscountParams):
+    """Index value at every snapshot of every fund.
+
+    Returns (idx, curve, share_below): idx[k][i] is B at fund k's row i (None while
+    fewer than ``index_min_share`` of the funds have quoted that day); curve is
+    [[date, mean B in %]] per day; share_below = share of snapshots with
+    B <= −index_entry_pct.
+    """
+    n_funds = sum(1 for r in rows_by_fund if r)
+    need = max(1, min(n_funds, int(-(-n_funds * p.index_min_share // 1)))) if n_funds else 1
+    events = []
+    for k, rows in enumerate(rows_by_fund):
+        for i, (o, d, t, nav, last, fresh, _raw) in enumerate(rows):
+            events.append((d, t, k, i, last / nav - 1.0, fresh))
+    events.sort(key=lambda e: (e[0], e[1], e[2]))
+    idx = [[None] * len(r) for r in rows_by_fund]
+    cur: dict[int, float] = {}
+    total = 0.0
+    day = None
+    per_day: dict[int, list[float]] = {}
+    n_all = n_below = 0
+    thr = -p.index_entry_pct / 100.0
+    j = 0
+    while j < len(events):
+        d, t = events[j][0], events[j][1]
+        if d != day:                                   # new day: forget yesterday's quotes
+            day, cur, total = d, {}, 0.0
+        group = []
+        while j < len(events) and events[j][0] == d and events[j][1] == t:
+            group.append(events[j]); j += 1
+        for _d, _t, k, i, rel, fresh in group:         # all quotes up to and incl. this instant
+            if fresh:
+                total += rel - cur.get(k, 0.0)
+                cur[k] = rel
+        val = total / len(cur) if len(cur) >= need else None
+        for _d, _t, k, i, rel, fresh in group:
+            idx[k][i] = val
+        if val is not None:
+            per_day.setdefault(d, []).append(val)
+            n_all += 1
+            n_below += 1 if val <= thr else 0
+    curve = [[d, round(sum(v) / len(v) * 100, 4)] for d, v in sorted(per_day.items())]
+    return idx, curve, (n_below / n_all if n_all else 0.0)
+
+
+# --------------------------------------------------------------------------- #
 #  Simulation (one fund)                                                       #
 # --------------------------------------------------------------------------- #
 
-def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -> list[Trade]:
+def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
+              idx: list | None = None) -> list[Trade]:
     trades: list[Trade] = []
     if not rows:
         return trades
@@ -278,13 +344,20 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
     e_px = 0.0
     blocked_date = 0
     stop_s = p.stop_loss_pct / 100.0
+    mode = p.entry_mode if p.entry_mode in ("fund", "index", "both") else "fund"
+    if mode != "fund" and idx is None:
+        mode = "fund"                      # no index available (caller did not build it)
+    ix_entry = -p.index_entry_pct / 100.0
+    ix_exit = -p.index_exit_pct / 100.0
+    e_idx = None
 
     def _cap(date_int: int) -> int:
         if p.participation_pct <= 0:
             return big
         return int(day_vol.get(date_int, 0) * p.participation_pct / 100.0)
 
-    def _close(units: int, px: float, d: int, t: int, nav: float, fair: float, reason: str):
+    def _close(units: int, px: float, d: int, t: int, nav: float, fair: float, reason: str,
+               x_idx: float | None = None):
         nonlocal pos, cost
         frac = units / pos
         cost_part = cost * frac
@@ -303,6 +376,8 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
             rel_entry_pct=round((cost_part / units / e_fair - 1) * 100, 4) if e_fair else 0,
             rel_exit_pct=round((px / fair - 1) * 100, 4) if fair else 0,
             base_pct=round((e_fair / e_nav - 1) * 100, 4) if e_nav else 0,
+            idx_entry_pct=round(e_idx * 100, 4) if e_idx is not None else None,
+            idx_exit_pct=round(x_idx * 100, 4) if x_idx is not None else None,
             buy_notional=round(cost_part, 0), sell_notional=round(sell_notional, 0),
             fees=round(buy_fee + sell_fee, 0), net_pnl=round(net, 0),
             net_pct=round(net / invested * 100, 4) if invested else 0,
@@ -317,7 +392,13 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
         if pos == 0:
             if i == last_i:
                 continue                  # never open a position on the final snapshot
-            if d == blocked_date or last > nav * ent_mult:
+            if d == blocked_date:
+                continue
+            ix = idx[i] if idx is not None else None
+            fund_ok = last <= nav * ent_mult
+            idx_ok = ix is not None and ix <= ix_entry
+            if not ((mode == "fund" and fund_ok) or (mode == "index" and idx_ok)
+                    or (mode == "both" and fund_ok and idx_ok)):
                 continue
             ask = last * (1 + hs)
             units = min(int(_SIM_CAPITAL // ask), _cap(d))
@@ -326,6 +407,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
             pos, cost = units, units * ask
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
             e_fair, e_rel = nav, last / nav - 1.0
+            e_idx = ix
         else:
             bid = last * (1 - hs)
             reason = None
@@ -337,18 +419,21 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
                     or (p.stop_mode not in ("price", "nav_level")
                         and last / nav - 1.0 <= e_rel - stop_s)):
                 reason = "stop"
-            elif last >= nav * ex_mult:
+            elif ((mode == "index" and idx is not None and idx[i] is not None and idx[i] >= ix_exit)
+                  or (mode != "index" and last >= nav * ex_mult)):
                 reason = "signal"
             if reason:
                 units = min(pos, _cap(d))
                 if units > 0:
-                    _close(units, bid, d, t, nav_raw, nav, reason)
+                    _close(units, bid, d, t, nav_raw, nav, reason,
+                           idx[i] if idx is not None else None)
                     if pos == 0:
                         blocked_date = d
 
     if pos > 0:                       # data ended while holding
         o, d, t, nav, last, _, nav_raw = rows[-1]
-        _close(pos, last * (1 - hs), d, t, nav_raw, nav, "end")
+        _close(pos, last * (1 - hs), d, t, nav_raw, nav, "end",
+               idx[-1] if idx is not None else None)
     return trades
 
 
@@ -417,11 +502,12 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
         groups.setdefault((t.symbol, t.entry_date, t.entry_time), []).append(t)
     events = []
     for key, chunks in groups.items():
-        events.append((key[1], key[2], 1, key[0], key, -1))
+        events.append((key[1], key[2], 1, groups[key][0].rel_entry_pct, key[0], key, -1))
         for i, t in enumerate(chunks):
             same = (t.exit_date, t.exit_time) == (key[1], key[2])
-            events.append((t.exit_date, t.exit_time, 2 if same else 0, key[0], key, i))
-    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))     # at a tie: other exits, then entries, then own-instant exits
+            events.append((t.exit_date, t.exit_time, 2 if same else 0, 0.0, key[0], key, i))
+    # at a tie: other exits, then entries (deepest discount vs own norm first), then own-instant exits
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3], e[4]))
 
     cash = float(p.initial_capital)
     invested = 0.0                         # book cost of open positions
@@ -435,7 +521,7 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
     peak_exp = 0.0
     last_ord = _ord(d0)
     first_ord = last_ord
-    for d, t, kind, _sym, key, i in events:
+    for d, t, kind, _tie, _sym, key, i in events:
         o = _ord(d)
         eq = cash + invested
         if eq > 0 and o > last_ord:
@@ -743,10 +829,12 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
                           params: DiscountParams | None = None) -> dict:
     p = params or DiscountParams()
     funds = _universe(db, cats, symbols)
+    use_index = p.entry_mode in ("index", "both")
     raw_trades: list[Trade] = []
     tested = skipped_funds = 0
     price_series: list[dict] = []
     nav_series: list[dict] = []
+    held: list[tuple] = []                       # (label, rows, day_vol) — only for index modes
     for sid, label in funds:
         raw, rows, day_vol = _load(db, sid, start, end, p)
         ps, ns = _daily_series(raw, p)
@@ -756,7 +844,17 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
             skipped_funds += 1
             continue
         tested += 1
-        raw_trades.extend(_simulate(label, rows, day_vol, p))
+        if use_index:
+            held.append((label, rows, day_vol))
+        else:
+            raw_trades.extend(_simulate(label, rows, day_vol, p))
+    bubble = None
+    if use_index and held:
+        idx, curve_b, share = _bubble_index([h[1] for h in held], p)
+        for (label, rows, day_vol), ix in zip(held, idx):
+            raw_trades.extend(_simulate(label, rows, day_vol, p, ix))
+        bubble = {"curve": curve_b, "share_below_entry_pct": round(share * 100, 1),
+                  "entry_pct": p.index_entry_pct, "exit_pct": p.index_exit_pct}
     dates = db.get_nav_intraday_dates(start, end)
     d0 = dates[0] if dates else (start or 0)
     d1 = dates[-1] if dates else (end or 0)
@@ -775,6 +873,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "per_symbol": _per_symbol(accepted, p.initial_capital),
         "equity_curve": curve,
         "benchmark": build_benchmark(price_series, nav_series, p),
+        "bubble_index": bubble,
         "summary": summary,
     }
 
@@ -843,6 +942,13 @@ GRID_DEFAULT = {
     "stop_loss_pct":      [0.0, 1.5, 3.0],
 }
 
+GRID_INDEX = {
+    "index_entry_pct":    [0.1, 0.2, 0.3, 0.5, 1.0],
+    "index_exit_pct":     [0.2, 0.1, 0.0, -0.1],
+    "max_hold_days":      [3, 7, 15, 30],
+    "stop_loss_pct":      [0.0, 1.5, 3.0],
+}
+
 METRICS = {
     "portfolio_return_pct": "بازده کل پرتفوی ٪ (سرمایهٔ نهایی)",
     "cagr_pct":             "بازده سالانهٔ مرکب ٪",
@@ -857,7 +963,10 @@ def _combos(base: DiscountParams, grid: dict) -> list[DiscountParams]:
     out = []
     for vals in itertools.product(*(grid[k] for k in keys)):
         c = replace(base, **dict(zip(keys, vals)))
-        if c.exit_discount_pct >= c.entry_discount_pct - 0.05:
+        if c.entry_mode == "index":
+            if c.index_exit_pct >= c.index_entry_pct - 0.02:
+                continue                  # index exit must be meaningfully above its entry
+        elif c.exit_discount_pct >= c.entry_discount_pct - 0.05:
             continue                      # exit must be meaningfully above entry
         out.append(c)
     return out
@@ -874,7 +983,9 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
     base = base or DiscountParams()
     if opt_metric not in METRICS:
         opt_metric = "portfolio_return_pct"
-    combos = _combos(base, grid or GRID_DEFAULT)
+    use_index = base.entry_mode in ("index", "both")
+    default_grid = GRID_INDEX if base.entry_mode == "index" else GRID_DEFAULT
+    combos = _combos(base, grid or default_grid)
     funds = _universe(db, cats, symbols)
     dates = db.get_nav_intraday_dates(start, end)
     if len(dates) < 10 or not funds:
@@ -886,18 +997,41 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
         with (progress_lock or threading.Lock()):
             progress.update(done=0, total=len(funds), combos=len(combos), phase="grid")
 
-    for k, (sid, label) in enumerate(funds):
-        _, rows, day_vol = _load(db, sid, start, end, base)
-        if rows:
-            tr_rows = [r for r in rows if r[1] <= cut]
-            te_rows = [r for r in rows if r[1] > cut]
-            for ci, c in enumerate(combos):
-                train_tr[ci].extend(_simulate(label, tr_rows, day_vol, c))
-                if te_rows and test_frac > 0:
-                    test_tr[ci].extend(_simulate(label, te_rows, day_vol, c))
-        if progress is not None:
-            with (progress_lock or threading.Lock()):
-                progress["done"] = k + 1
+    def _run_fund(label, rows, day_vol, idx):
+        tr_pairs = [(r, (idx[i] if idx is not None else None)) for i, r in enumerate(rows) if r[1] <= cut]
+        te_pairs = [(r, (idx[i] if idx is not None else None)) for i, r in enumerate(rows) if r[1] > cut]
+        tr_rows = [x[0] for x in tr_pairs]
+        te_rows = [x[0] for x in te_pairs]
+        tr_idx = [x[1] for x in tr_pairs] if idx is not None else None
+        te_idx = [x[1] for x in te_pairs] if idx is not None else None
+        for ci, c in enumerate(combos):
+            train_tr[ci].extend(_simulate(label, tr_rows, day_vol, c, tr_idx))
+            if te_rows and test_frac > 0:
+                test_tr[ci].extend(_simulate(label, te_rows, day_vol, c, te_idx))
+
+    if use_index:
+        loaded = []
+        for k, (sid, label) in enumerate(funds):
+            _, rows, day_vol = _load(db, sid, start, end, base)
+            if rows:
+                loaded.append((label, rows, day_vol))
+            if progress is not None:
+                with (progress_lock or threading.Lock()):
+                    progress["done"] = (k + 1) // 2          # first half: loading
+        idx_all, _, _ = _bubble_index([x[1] for x in loaded], base)
+        for k, ((label, rows, day_vol), ix) in enumerate(zip(loaded, idx_all)):
+            _run_fund(label, rows, day_vol, ix)
+            if progress is not None:
+                with (progress_lock or threading.Lock()):
+                    progress["done"] = len(funds) // 2 + (k + 1) * (len(funds) - len(funds) // 2) // max(len(loaded), 1)
+    else:
+        for k, (sid, label) in enumerate(funds):
+            _, rows, day_vol = _load(db, sid, start, end, base)
+            if rows:
+                _run_fund(label, rows, day_vol, None)
+            if progress is not None:
+                with (progress_lock or threading.Lock()):
+                    progress["done"] = k + 1
 
     nxt = next((d for d in dates if d > cut), dates[-1])
     scored = []
@@ -914,6 +1048,7 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
         r.pop("_score", None)
     return {
         "cats": cats or [], "funds": len(funds), "opt_metric": opt_metric,
+        "entry_mode": base.entry_mode,
         "tested_combos": len(combos), "qualified_combos": len(scored),
         "min_trades": min_trades, "test_frac": test_frac,
         "train_range": [dates[0], cut], "test_range": [nxt, dates[-1]],

@@ -2369,6 +2369,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-exit" type="number" step="0.05" value="0" style="width:70px"></div>
       <div class="bbt-field" title="بیشینهٔ روزهای تقویمیِ نگه‌داری؛ ۰ = بدون سقف"><label>حداکثر نگه‌داری (روز)</label>
         <input id="disc-hold" type="number" step="1" value="10" style="width:70px"></div>
+      <div class="bbt-field" title="«بر اساس صندوق»: هر صندوق نسبت به حباب معمول خودش ارزان باشد. «بر اساس شاخص حباب»: میانگین ساده حباب همهٔ صندوق‌های فعال (تعدیل‌شده با حباب معمول هر صندوق) زیر آستانه برود؛ آن‌وقت همهٔ صندوق‌های فعال خریده می‌شوند و خروج وقتی شاخص برگشت. «هر دو»: هم خودِ صندوق ارزان باشد هم شاخص."><label>حالت ورود</label>
+        <select id="disc-entrymode" style="width:260px">
+          <option value="fund">بر اساس حباب هر صندوق (حالت فعلی)</option>
+          <option value="index">بر اساس شاخص حباب (میانگین همهٔ صندوق‌ها)</option>
+          <option value="both">هر دو (صندوق ارزان و شاخص ارزان)</option></select></div>
+      <div class="bbt-field" title="فقط حالت شاخص / هر دو: خرید وقتی شاخص حباب ≤ منفیِ این درصد"><label>ورود: شاخص حباب ≤ −٪</label>
+        <input id="disc-ientry" type="number" step="0.05" value="0.3" style="width:80px"></div>
+      <div class="bbt-field" title="فقط حالت شاخص: فروش وقتی شاخص حباب ≥ منفیِ این درصد (۰ = برگشت شاخص به حباب معمول)"><label>خروج: شاخص حباب ≥ −٪</label>
+        <input id="disc-iexit" type="number" step="0.05" value="0" style="width:80px"></div>
       <div class="bbt-field" title="مبنای حد ضرر. «عمیق‌تر شدن تخفیف»: فروش وقتی تخفیف نسبت به لحظهٔ ورود این‌قدر واحد درصد بازتر شد. «رسیدن تخفیف به»: فروش وقتی قیمت به NAV·(1−این٪) رسید. «افت قیمت»: کلاسیک، نسبت به قیمت خرید. دو مورد اول نسبت به NAVِ تعدیل‌شدهٔ همان صندوق‌اند."><label>نوع حد ضرر</label>
         <select id="disc-stopmode" style="width:230px">
           <option value="nav_widen">NAV: عمیق‌تر شدن تخفیف (واحد درصد)</option>
@@ -6488,6 +6497,7 @@ function discParams() {
     end:   document.getElementById('disc-end').dataset.greg || '',
     initial: String((+v('disc-capital') || 0) * 1e6), pos: v('disc-pos'), entry: v('disc-entry'), exit: v('disc-exit'),
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
+    entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
     navage: v('disc-navage'),
@@ -6667,6 +6677,24 @@ function discCompareHtml(res) {
       «سرمایهٔ همان لحظه» = نقد + بهای پوزیشن‌های باز. پوزیشن‌های ردشده یعنی نقد برای حداقل یک‌چهارم اندازهٔ هدف کافی نبود.</div>`;
 }
 
+function discBubbleHtml(res) {
+  const b = res.bubble_index;
+  if (!b || !b.curve || b.curve.length < 2) return '';
+  const W = 760, H = 110, L = 6, R = 6, T = 8, B = 8;
+  const xs = b.curve.map(c => discDay(c[0])), ys = b.curve.map(c => c[1]).concat([-b.entry_pct, -b.exit_pct, 0]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let lo = Math.min(...ys), hi = Math.max(...ys); const pad = (hi - lo) * 0.1 || 0.1; lo -= pad; hi += pad;
+  const sx = d => L + (W - L - R) * (x1 === x0 ? 0 : (discDay(d) - x0) / (x1 - x0));
+  const sy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const pts = b.curve.map(c => sx(c[0]).toFixed(1) + ',' + sy(c[1]).toFixed(1)).join(' ');
+  const hl = (v, col) => `<line x1="${L}" x2="${W - R}" y1="${sy(v).toFixed(1)}" y2="${sy(v).toFixed(1)}" stroke="${col}" stroke-dasharray="4 4" stroke-width="1"/>`;
+  return `<div class="disc-h" style="margin-top:8px">شاخص حباب (میانگین ساده حباب صندوق‌های فعال، میانگین روزانه) — آستانهٔ ورود ${discLtr('-' + b.entry_pct + '%')}، خروج ${discLtr('-' + b.exit_pct + '%')} · ${discLtr(b.share_below_entry_pct + '%')} از لحظه‌ها زیر آستانهٔ ورود بوده</div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
+    ${hl(0, 'var(--muted)')}${hl(-b.entry_pct, 'var(--red)')}${hl(-b.exit_pct, 'var(--green)')}
+    <polyline points="${pts}" fill="none" stroke="#e0a030" stroke-width="1.6"/></svg>
+    <div style="font-size:10px;color:var(--muted);margin-top:2px">خط قرمز = آستانهٔ ورود، خط سبز = آستانهٔ خروج، خط خاکستری = صفر (حباب معمول)</div>`;
+}
+
 function renderDiscBacktest(res, p) {
   const s = res.summary || {};
   const cls = discCls(s.net_profit);
@@ -6695,6 +6723,7 @@ function renderDiscBacktest(res, p) {
     ${discCard('نوع خروج', reasonTxt)}
   </div>
   ${discCompareHtml(res)}
+  ${discBubbleHtml(res)}
 `;
 
   const ps = (res.per_symbol || []).slice(0, 40);
@@ -6707,22 +6736,23 @@ function renderDiscBacktest(res, p) {
       <td class="${discCls(r.total_net_pnl)}">${discFmt(r.total_net_pnl)}</td><td>${r.total_return_pct}</td>
       <td>${r.annualized_pct}</td><td>${r.avg_hold_days}</td></tr>`).join('')}</tbody></table></div>` : '';
 
+  const showIdx = (res.params || {}).entry_mode && res.params.entry_mode !== 'fund';
   const tr = res.trades || [];
   const LIM = 600;
   const rows = tr.slice(0, LIM).map(t => {
     const c = discCls(t.net_pnl);
     const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[t.exit_reason] || t.exit_reason;
     return `<tr><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
-      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td><td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
-      <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td><td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
+      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
+      <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td>${showIdx ? `<td>${t.idx_exit_pct == null ? '—' : t.idx_exit_pct + '%'}</td>` : ''}<td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
       <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td></tr>`;
   }).join('');
   document.getElementById('disc-trades').innerHTML = `<div class="disc-h">معاملات${tr.length > LIM ? ` (${LIM} مورد اول از ${tr.length})` : ` (${tr.length})`}</div>
     <div class="disc-tblwrap" style="max-height:480px"><table class="disc-tbl"><thead><tr>
-      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>
-      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th><th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
+      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (ورود)</th>' : ''}
+      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (خروج)</th>' : ''}<th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
       <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="19" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
+    </tr></thead><tbody>${rows || '<tr><td colspan="21" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
   document.getElementById('disc-note').textContent = '';
 }
 
@@ -6795,14 +6825,14 @@ function renderDiscOptimize(res, p) {
   const row = (r, i) => {
     const q = r.params, tr = r.train, te = r.test;
     return `<tr class="${i === 0 ? 'best' : ''}">
-      <td>${q.entry_discount_pct}</td><td>${q.exit_discount_pct}</td><td>${q.max_hold_days}</td><td>${q.stop_loss_pct}</td>
+      <td>${res.entry_mode === 'index' ? q.index_entry_pct : q.entry_discount_pct}</td><td>${res.entry_mode === 'index' ? q.index_exit_pct : q.exit_discount_pct}</td><td>${q.max_hold_days}</td><td>${q.stop_loss_pct}</td>
       <td>${tr.trade_count}</td><td>${tr.win_rate}%</td><td class="${discCls(tr.net_profit)}">${discM(tr.final_capital)}</td><td>${tr.portfolio_return_pct}%</td>
       <td>${te.trade_count}</td><td>${te.win_rate}%</td><td class="${discCls(te.net_profit)}">${discM(te.final_capital)}</td><td>${te.portfolio_return_pct}%</td></tr>`;
   };
   panel.innerHTML = `<div id="bbt-opt-best">
     <div class="ob-h">🏆 بهترین ترکیب — ${discScopeText(p.cats, p.symbols)} · ${res.funds} صندوق (معیار: ${res.opt_metric})</div>
     <div class="ob-p">
-      ورود <b>${bp.entry_discount_pct}%</b> · خروج <b>${bp.exit_discount_pct}%</b> · نگه‌داری <b>${bp.max_hold_days}</b> روز · حد ضرر <b>${bp.stop_loss_pct}%</b><br>
+      ${res.entry_mode === 'index' ? `ورود (شاخص) <b>${bp.index_entry_pct}%</b> · خروج (شاخص) <b>${bp.index_exit_pct}%</b>` : `ورود <b>${bp.entry_discount_pct}%</b> · خروج <b>${bp.exit_discount_pct}%</b>`} · نگه‌داری <b>${bp.max_hold_days}</b> روز · حد ضرر <b>${bp.stop_loss_pct}%</b><br>
       آموزش (${gregIntToJalaliStr(res.train_range[0])} تا ${gregIntToJalaliStr(res.train_range[1])}): سرمایه از <b>${discM(b.train.initial_capital)}</b> به <b>${discM(b.train.final_capital)}</b> میلیون ﷼ (<b>${b.train.portfolio_return_pct}%</b>) · ${b.train.trade_count} معامله<br>
       <b>خارج از نمونه</b> (${gregIntToJalaliStr(res.test_range[0])} تا ${gregIntToJalaliStr(res.test_range[1])}): سرمایه از <b>${discM(b.test.initial_capital)}</b> به <b>${discM(b.test.final_capital)}</b> میلیون ﷼ (<b>${b.test.portfolio_return_pct}%</b>) · ${b.test.trade_count} معامله
     </div>
@@ -6820,6 +6850,8 @@ function renderDiscOptimize(res, p) {
 function discApplyOpt(bp) {
   document.getElementById('disc-entry').value = bp.entry_discount_pct;
   document.getElementById('disc-exit').value = bp.exit_discount_pct;
+  document.getElementById('disc-ientry').value = bp.index_entry_pct;
+  document.getElementById('disc-iexit').value = bp.index_exit_pct;
   document.getElementById('disc-hold').value = bp.max_hold_days;
   document.getElementById('disc-stop').value = bp.stop_loss_pct;
   discBacktest();
