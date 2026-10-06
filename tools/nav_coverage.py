@@ -52,9 +52,59 @@ def hhmm(t: int) -> str:
     return f"{x[:2]}:{x[2:4]}:{x[4:]}"
 
 
+def hours_report(con, days: int, end_s) -> int:
+    """Histogram (30-minute buckets) of ALL snapshots and of snapshots where the day's
+    cumulative volume grew, over every fund.  Trading happens where volume grows: its
+    first/last bucket is the real session, so open-time minus 09:00 is any time-zone shift."""
+    last = con.execute("SELECT MAX(date) FROM nav_intraday").fetchone()[0]
+    end = parse_day(end_s) if end_s else last
+    e = dt.date(end // 10000, end // 100 % 100, end % 100)
+    s0 = e - dt.timedelta(days=days - 1)
+    start = s0.year * 10000 + s0.month * 100 + s0.day
+    rows = con.execute("SELECT symbol_id, date, time, vol FROM nav_intraday "
+                       "WHERE date BETWEEN ? AND ? ORDER BY symbol_id, date, time", (start, end)).fetchall()
+    if not rows:
+        print("دادهای در این بازه نیست.")
+        return 1
+    allc, grow = Counter(), Counter()
+    first_grow, last_grow = [], []
+    key, prev, fg, lg = None, 0, None, None
+    for sid, d, t, vol in rows:
+        k = (sid, d)
+        if k != key:
+            if fg is not None:
+                first_grow.append(fg); last_grow.append(lg)
+            key, prev, fg, lg = k, 0, None, None
+        b = int(t) // 10000 * 60 + int(t) // 100 % 100 // 30 * 30
+        allc[b] += 1
+        v = vol or 0
+        if v > prev:
+            grow[b] += 1
+            if fg is None:
+                fg = int(t)
+            lg = int(t)
+        prev = max(prev, v)
+    if fg is not None:
+        first_grow.append(fg); last_grow.append(lg)
+    print(f"\n{jal(start)} تا {jal(end)} — {len(rows)} نقطه، همهٔ صندوق‌ها (بازه‌های ۳۰ دقیقه‌ای)")
+    print(f"{'ساعت':<8}{'همهٔ نقطه‌ها':>14}{'حجم رشد کرده':>14}")
+    mx = max(grow.values()) if grow else 1
+    for b in sorted(allc):
+        print(f"{b // 60:02d}:{b % 60:02d}   {allc[b]:>12}{grow[b]:>14}  {'█' * (grow[b] * 40 // mx)}")
+    if first_grow:
+        fgs, lgs = sorted(first_grow), sorted(last_grow)
+        pick = lambda xs, q: xs[min(len(xs) - 1, int(len(xs) * q))]
+        print("\nاولین رشد حجم در هر (صندوق، روز): میانه", hhmm(pick(fgs, .5)), "· صدک ۱۰", hhmm(pick(fgs, .1)), "· صدک ۹۰", hhmm(pick(fgs, .9)))
+        print("آخرین رشد حجم در هر (صندوق، روز): میانه", hhmm(pick(lgs, .5)), "· صدک ۱۰", hhmm(pick(lgs, .1)), "· صدک ۹۰", hhmm(pick(lgs, .9)))
+    print("\nبازار معمولاً ~۰۹:۰۰ باز و ~۱۲:۳۰ بسته می‌شود؛ اگر ساعت‌های بالا جابه‌جاست، خطای ساعت در وارد کردن داده است.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("fund", help="ticker (e.g. کهربا) or #symbol_id")
+    ap.add_argument("fund", nargs="?", help="ticker (e.g. کهربا) or #symbol_id")
+    ap.add_argument("--hours", action="store_true",
+                    help="all funds: when does the traded volume really grow? (finds the true trading hours / time-zone shift)")
     ap.add_argument("--days", type=int, default=7, help="window length in calendar days (default 7)")
     ap.add_argument("--from", dest="start", help="start day, Jalali 1405/05/10 or 20260801")
     ap.add_argument("--to", dest="end", help="end day (default: last day with data)")
@@ -63,6 +113,10 @@ def main() -> int:
     a = ap.parse_args()
 
     con = sqlite3.connect(a.db)
+    if a.hours:
+        return hours_report(con, a.days if a.days != 7 else 20, a.end)
+    if not a.fund:
+        ap.error("fund name is required (or use --hours)")
     q = a.fund.strip()
     if q.startswith("#") or q.isdigit():
         ids = [(int(q.lstrip("#")), q)]

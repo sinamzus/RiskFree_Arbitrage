@@ -1095,7 +1095,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
 def bubble_series(db, cats: list[str] | None = None, symbols: list[str] | None = None,
                   start: int | None = None, end: int | None = None,
                   show: list[str] | None = None, min_share: float = 0.5,
-                  max_show: int = 12) -> dict:
+                  max_show: int = 12, params: DiscountParams | None = None) -> dict:
     """Intraday bubble (price vs NAV, %) for charting.
 
     ``symbols`` / ``cats`` pick the universe that the simple-average index is built
@@ -1106,7 +1106,8 @@ def bubble_series(db, cats: list[str] | None = None, symbols: list[str] | None =
     fund that has quoted so far (needs ``min_share`` of the funds, like the backtest).
     Points are [date, HHMMSS, bubble %].
     """
-    p = DiscountParams(baseline_days=0, require_fresh=True)
+    base = params or DiscountParams()
+    p = replace(base, baseline_days=0, require_fresh=True)
     funds = _universe(db, cats, symbols)
     want = {s.strip() for s in (show or []) if s.strip()}
     rows_by_fund, labels = [], []

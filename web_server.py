@@ -1720,6 +1720,17 @@ def create_app(db, scan_callback=None):
                 return default
             return str(v).lower() not in ("0", "false", "no", "off")
 
+        def _hhmmss(v, default):
+            """'09:00' / '0900' / '9' -> 90000 (HHMMSS)."""
+            if v in (None, ""):
+                return default
+            try:
+                digits = str(v).strip().replace(":", "")
+                hh, mm = (int(digits[:-2]), int(digits[-2:])) if len(digits) > 2 else (int(digits), 0)
+                return hh * 10000 + mm * 100 if 0 <= hh <= 23 and 0 <= mm <= 59 else default
+            except ValueError:
+                return default
+
         return DiscountParams(
             initial_capital=_f("initial", d.initial_capital),
             position_pct=_f("pos", d.position_pct),
@@ -1740,6 +1751,8 @@ def create_app(db, scan_callback=None):
             mr_window_days=max(5, int(_f("mrwin", d.mr_window_days))),
             mr_min_score=_f("mrmin", d.mr_min_score),
             mr_horizon_days=max(1, int(_f("mrhor", d.mr_horizon_days))),
+            session_start=_hhmmss(get("sstart"), d.session_start),
+            session_end=_hhmmss(get("send"), d.session_end),
             index_entry_pct=_f("ientry", d.index_entry_pct),
             index_exit_pct=_f("iexit", d.index_exit_pct),
             half_spread_pct=_f("spread", d.half_spread_pct),
@@ -1895,7 +1908,8 @@ def create_app(db, scan_callback=None):
         cats, syms, start, end = _disc_sel(request.args.get)
         show = [c for c in str(request.args.get("show") or "").split(",") if c.strip()]
         try:
-            return jsonify(bubble_series(db, cats, syms, start, end, show))
+            return jsonify(bubble_series(db, cats, syms, start, end, show,
+                                         params=_disc_params_from(request.args.get)))
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
