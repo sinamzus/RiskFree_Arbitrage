@@ -1734,6 +1734,12 @@ def create_app(db, scan_callback=None):
             entry_mode=(str(get("entrymode") or d.entry_mode)
                         if str(get("entrymode") or d.entry_mode) in ("fund", "index", "both")
                         else d.entry_mode),
+            mr_center=(str(get("mrcenter") or d.mr_center)
+                       if str(get("mrcenter") or d.mr_center) in ("off", "zero", "category", "self")
+                       else d.mr_center),
+            mr_window_days=max(5, int(_f("mrwin", d.mr_window_days))),
+            mr_min_score=_f("mrmin", d.mr_min_score),
+            mr_horizon_days=max(1, int(_f("mrhor", d.mr_horizon_days))),
             index_entry_pct=_f("ientry", d.index_entry_pct),
             index_exit_pct=_f("iexit", d.index_exit_pct),
             half_spread_pct=_f("spread", d.half_spread_pct),
@@ -1881,6 +1887,20 @@ def create_app(db, scan_callback=None):
             logger.exception("disc backtest failed")
             return jsonify({"error": str(e)}), 500
         return jsonify(res)
+
+    @app.route("/api/disc/bubble")
+    def api_disc_bubble():
+        """Intraday bubble series (per fund + simple-average index) for the chart."""
+        from discount_backtest import bubble_series
+        cats, syms, start, end = _disc_sel(request.args.get)
+        show = [c for c in str(request.args.get("show") or "").split(",") if c.strip()]
+        try:
+            return jsonify(bubble_series(db, cats, syms, start, end, show))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            logger.exception("disc bubble failed")
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/disc/stats")
     def api_disc_stats():

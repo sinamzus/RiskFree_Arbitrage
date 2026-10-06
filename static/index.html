@@ -2401,6 +2401,18 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-stop" type="number" step="0.5" value="0" style="width:70px"></div>
       <div class="bbt-field" title="هر صندوق ممکن است دائماً بالا یا پایین NAV معامله شود (حباب دائمی). با این گزینه سیگنال‌ها نسبت به «حباب معمول همان صندوق» سنجیده می‌شوند: NAV × (1 + میانهٔ تخفیف همین چند روز گذشتهٔ صندوق). فقط از روزهای قبل استفاده می‌شود. ۰ = خاموش (مقایسه مستقیم با NAV)."><label>تعدیل حباب دائمی: میانهٔ چند روز قبل</label>
         <input id="disc-base" type="number" step="1" min="0" value="20" style="width:80px"></div>
+      <div class="bbt-field" title="فیلتر شایستگی: امتیاز بازگشت به میانگینِ سری حباب هر صندوق در N روز گذشته محاسبه می‌شود (۰ تا ۱۰۰ = درصدِ شکافی که انتظار می‌رود در افق مشخص بسته شود). صندوقی که امتیازش کمتر از حداقل باشد تا وقتی دوباره بالا بیاید معامله نمی‌شود. مرکز: صفر، میانگین حباب همان دسته، یا میانگین حبابِ خود صندوق (از N روز قبل از پنجرهٔ امتیازدهی)."><label>فیلتر بازگشت به میانگین</label>
+        <select id="disc-mrcenter" style="width:260px">
+          <option value="off">خاموش</option>
+          <option value="zero">بازگشت حول صفر (NAV)</option>
+          <option value="category">بازگشت حول میانگین حبابِ دستهٔ صندوق</option>
+          <option value="self">بازگشت حول میانگین حبابِ خود صندوق</option></select></div>
+      <div class="bbt-field" title="تعداد روزهای معاملاتیِ اخیر که امتیاز از آن‌ها ساخته می‌شود"><label>پنجرهٔ امتیاز (روز)</label>
+        <input id="disc-mrwin" type="number" step="1" min="5" value="20" style="width:70px"></div>
+      <div class="bbt-field" title="حداقل امتیاز (۰–۱۰۰) برای مجاز بودن صندوق. روی دادهٔ قدم‌زدن تصادفی حدود ۱۰٪ لحظه‌ها در ۷۰ و حدود ۶٪ در ۸۰ پذیرفته می‌شوند."><label>حداقل امتیاز</label>
+        <input id="disc-mrmin" type="number" step="5" min="0" max="100" value="70" style="width:70px"></div>
+      <div class="bbt-field" title="امتیاز یعنی چند درصد از شکافِ حباب تا مرکز، در این تعداد روز بسته می‌شود"><label>افق بازگشت (روز)</label>
+        <input id="disc-mrhor" type="number" step="1" min="1" value="5" style="width:70px"></div>
     </div>
 
     <div class="bbt-group-h">۳) اجرا، کارمزد و فیلتر NAV</div>
@@ -2432,6 +2444,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="این کسر از آخرِ تاریخ‌ها فقط برای آزمون خارج از نمونه کنار گذاشته می‌شود"><label>آزمون خارج از نمونه</label>
         <input id="disc-testfrac" type="number" step="0.05" value="0.3" style="width:64px"></div>
       <button class="scan-btn" id="disc-funds-btn" onclick="discToggleFunds()" title="فهرست همهٔ صندوق‌ها، نمادِ مچ‌شده و دسته‌شان — قابل‌ویرایش">📋 فهرست صندوق‌ها</button>
+      <button class="scan-btn" id="disc-bub-btn" onclick="discBubToggle()" title="نمودار حباب هر صندوق و شاخص میانگین ساده بر حسب تاریخ و ساعت">📈 نمودار حباب</button>
       <button class="scan-btn" id="disc-stats-btn" onclick="discStats()" title="توزیع تخفیف و تازگی NAV هر صندوق — برای انتخاب آستانه‌ها">📊 آمار تخفیف</button>
       <div class="bbt-field" title="تعداد دنیاهای جایگشتی برای p-value (بیشتر = دقیق‌تر ولی کندتر؛ سقف زمان ۶۰ ثانیه)"><label>جایگشت‌ها</label>
         <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
@@ -2447,6 +2460,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <div id="disc-stats" style="display:none"></div>
   <div id="disc-opt" style="display:none"></div>
   <div id="disc-val" style="display:none"></div>
+  <div id="disc-bub" style="display:none"></div>
   <div id="disc-cards"></div>
   <div id="disc-persym" style="display:none"></div>
   <div id="disc-trades"></div>
@@ -6517,6 +6531,7 @@ function discParams() {
     initial: String((+v('disc-capital') || 0) * 1e6), pos: v('disc-pos'), entry: v('disc-entry'), exit: v('disc-exit'),
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
+    mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
     navage: v('disc-navage'),
@@ -6841,6 +6856,223 @@ function discBubbleHtml(res) {
     <div style="font-size:10px;color:var(--muted);margin-top:2px">خط قرمز = آستانهٔ ورود، خط سبز = آستانهٔ خروج، خط خاکستری = صفر (حباب معمول)</div>`;
 }
 
+function discMrHtml(res) {
+  const mi = res.mr_info;
+  if (!mi) return '';
+  const cn = {zero: 'حول صفر (NAV)', category: 'حول میانگین حباب دستهٔ صندوق', self: 'حول میانگین حباب خود صندوق'}[(res.params || {}).mr_center] || '';
+  const rows = mi.map(r => `<tr><td>${r.symbol}</td><td>${r.scored_days}</td>
+    <td>${r.avg_score == null ? '—' : r.avg_score}</td><td>${r.last_score == null ? '—' : r.last_score}</td>
+    <td>${r.eligible_days_pct}%</td>
+    <td class="${r.eligible_now ? 'pos' : 'neg'}">${r.eligible_now ? 'مجاز' : 'حذف‌شده'}</td></tr>`).join('');
+  return `<div class="disc-h" style="margin-top:8px">فیلتر بازگشت به میانگین (${cn}) — فقط صندوق‌هایی که امتیازشان از ${discLtr((res.params || {}).mr_min_score)} کمتر نیست معامله می‌شوند</div>
+    <div class="disc-tblwrap" style="max-height:260px"><table class="disc-tbl"><thead><tr>
+      <th>نماد</th><th>روزهای امتیازدارا</th><th>میانگین امتیاز</th><th>آخرین امتیاز</th><th>سهم روزهای مجاز</th><th>وضعیت امروز</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// ---------------------------------------------------------------------------
+//  Bubble chart: per-fund bubble + simple-average index by date and hour
+// ---------------------------------------------------------------------------
+let _discBub = null;
+const DISC_BUB_COLORS = ['#4fa3ff', '#ff7a59', '#9b6bff', '#2fbf71', '#e0a030', '#ff5fa2', '#20c5c5', '#b0b0b0', '#c9d44a', '#7a8cff', '#d98a4e', '#5fbf9f'];
+
+function discBubToggle() {
+  const el = document.getElementById('disc-bub');
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  discBubInit();
+}
+
+function discBubInit() {
+  const el = document.getElementById('disc-bub');
+  const fs = discSelFunds.filter(f => discSel.cats[f.category] && discSel.funds[f.symbol_id]);
+  const old = (_discBub && _discBub.pick) || new Set();
+  el.innerHTML = `<div class="disc-h">نمودار حباب (قیمت نسبت به NAV) بر حسب تاریخ و ساعت — بازه و دسته‌ها طبق همین فرم؛ «شاخص» = میانگین ساده حباب همهٔ صندوق‌های فعال</div>
+    <div class="bbt-group" style="align-items:flex-end">
+      <div class="bbt-field"><label>نمایش</label>
+        <select id="bub-view" onchange="discBubDraw()">
+          <option value="line">خط زمانی (تاریخ + ساعت)</option>
+          <option value="heat">نقشهٔ حرارتی: روز × ساعت</option>
+          <option value="hour">میانگین حباب بر حسب ساعتِ روز</option></select></div>
+      <div class="bbt-field"><label>مبنا برای نقشهٔ حرارتی</label><select id="bub-heatsrc" onchange="discBubDraw()"></select></div>
+      <label class="chk"><input id="bub-idx" type="checkbox" checked onchange="discBubDraw()"> شاخص میانگین ساده</label>
+      <button class="scan-btn" id="bub-go" onclick="discBubLoad()">🔄 بارگذاری</button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0" id="bub-chips">${fs.map(f =>
+      `<label class="chk" style="border:1px solid var(--brd);border-radius:12px;padding:2px 8px"><input type="checkbox" class="bub-f" value="${f.symbol}" ${old.has(f.symbol) ? 'checked' : ''}> ${f.symbol}</label>`).join('') || '<span style="color:var(--muted);font-size:11px">صندوقی فعال نیست</span>'}</div>
+    <div id="bub-msg" style="font-size:11px;color:var(--muted)">صندوق‌ها را تیک بزنید و «بارگذاری» را بزنید (فقط شاخص هم کافی است).</div>
+    <div id="bub-chart"></div>`;
+}
+
+async function discBubLoad() {
+  const p = discParams();
+  if (!p.symbols) { showError('حداقل یک صندوق را فعال کنید.'); return; }
+  const pick = [...document.querySelectorAll('.bub-f:checked')].map(x => x.value);
+  const q = {cats: p.cats, symbols: p.symbols, show: pick.join(',')};
+  if (p.start) q.start = p.start;
+  if (p.end) q.end = p.end;
+  const btn = document.getElementById('bub-go'), msg = document.getElementById('bub-msg');
+  btn.disabled = true; msg.textContent = '⏳ در حال خواندن ...';
+  const r = await fetch('/api/disc/bubble?' + new URLSearchParams(q)).catch(() => null);
+  btn.disabled = false;
+  if (!r) { msg.textContent = 'سرور در دسترس نیست'; return; }
+  const res = await r.json();
+  if (res.error) { msg.textContent = 'خطا: ' + res.error; return; }
+  _discBub = {res, pick: new Set(pick)};
+  const src = document.getElementById('bub-heatsrc');
+  src.innerHTML = '<option value="__idx">شاخص</option>' + res.funds.map(f => `<option value="${f.symbol}">${f.symbol}</option>`).join('');
+  msg.textContent = `${res.funds_in_index} صندوق در شاخص · ${res.index.length.toLocaleString('en-US')} لحظه`;
+  discBubDraw();
+}
+
+function discBubSeries() {
+  const res = _discBub.res, out = [];
+  if (document.getElementById('bub-idx').checked && res.index.length) out.push({name: 'شاخص', pts: res.index, col: '#e0a030', w: 2});
+  res.funds.forEach((f, i) => out.push({name: f.symbol, pts: f.points, col: DISC_BUB_COLORS[i % DISC_BUB_COLORS.length], w: 1.3}));
+  return out;
+}
+
+function discBubDraw() {
+  if (!_discBub) return;
+  const view = document.getElementById('bub-view').value;
+  document.getElementById('bub-heatsrc').parentElement.style.display = view === 'heat' ? '' : 'none';
+  const ser = discBubSeries();
+  const box = document.getElementById('bub-chart');
+  if (!ser.length) { box.innerHTML = '<div style="color:var(--muted);font-size:12px">چیزی برای نمایش نیست — شاخص یا یک صندوق را انتخاب کنید.</div>'; return; }
+  box.innerHTML = view === 'heat' ? discBubHeat() : view === 'hour' ? discBubHour(ser) : discBubLine(ser);
+  if (view === 'line') discBubHover(ser);
+}
+
+const discTkey = (d, t) => d * 1e6 + t;
+const discTfmt = (d, t) => `${gregIntToJalaliStr(d)} ${discTime(t)}`;
+
+function discBubLine(ser) {
+  // x = position on the shared trading timeline (nights/holidays collapsed)
+  const keys = new Set();
+  ser.forEach(s => s.pts.forEach(p => keys.add(discTkey(p[0], p[1]))));
+  const tl = [...keys].sort((a, b) => a - b);
+  const pos = new Map(tl.map((k, i) => [k, i]));
+  _discBub.tl = tl;
+  const W = 900, H = 300, L = 46, R = 10, T = 10, B = 26;
+  let lo = 0, hi = 0;
+  ser.forEach(s => s.pts.forEach(p => { if (p[2] < lo) lo = p[2]; if (p[2] > hi) hi = p[2]; }));
+  const pad = (hi - lo) * 0.06 || 0.1; lo -= pad; hi += pad;
+  const n = Math.max(1, tl.length - 1);
+  const sx = i => L + (W - L - R) * i / n;
+  const sy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  _discBub.geo = {W, H, L, R, T, B, n, lo, hi};
+  const lines = ser.map(s => `<polyline points="${s.pts.map(p => sx(pos.get(discTkey(p[0], p[1]))).toFixed(1) + ',' + sy(p[2]).toFixed(1)).join(' ')}" fill="none" stroke="${s.col}" stroke-width="${s.w}" stroke-linejoin="round"/>`).join('');
+  // y grid
+  const step = (() => { const r = (hi - lo) / 5, m = Math.pow(10, Math.floor(Math.log10(r))); return [1, 2, 5, 10].map(x => x * m).find(x => x >= r); })();
+  let grid = '';
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    grid += `<line x1="${L}" x2="${W - R}" y1="${sy(v).toFixed(1)}" y2="${sy(v).toFixed(1)}" stroke="${Math.abs(v) < 1e-9 ? 'var(--muted)' : 'var(--brd)'}" stroke-width="${Math.abs(v) < 1e-9 ? 1.2 : .5}"${Math.abs(v) < 1e-9 ? ' stroke-dasharray="4 4"' : ''}/>
+      <text x="${L - 4}" y="${(sy(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--sub)">${(+v.toFixed(3))}%</text>`;
+  }
+  // x ticks: first trading day of each Jalali month
+  let ticks = '', lastM = null, lastX = -99;
+  tl.forEach((k, i) => {
+    const d = Math.floor(k / 1e6);
+    const jm = gregIntToJalaliStr(d).slice(0, 7);
+    if (jm !== lastM) {
+      lastM = jm;
+      const x = sx(i);
+      if (x - lastX > 44) { ticks += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--brd)" stroke-width=".4"/><text x="${x.toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="9" fill="var(--sub)">${jm}</text>`; lastX = x; }
+    }
+  });
+  const legend = ser.map(s => `<span><span style="color:${s.col}">━</span> ${s.name}</span>`).join('');
+  return `<div style="font-size:11px;color:var(--sub);display:flex;gap:14px;flex-wrap:wrap;margin:4px 0">${legend}
+      <span style="color:var(--muted)">محور افقی: زمانِ معاملاتی (شب و تعطیلی فشرده شده) · زیر صفر = تخفیف نسبت به NAV</span></div>
+    <div style="position:relative;max-width:${W}px">
+    <svg id="bub-svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
+      ${grid}${ticks}${lines}<line id="bub-cur" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--sub)" stroke-width=".6" style="display:none"/></svg>
+    <div id="bub-tip" style="position:absolute;display:none;pointer-events:none;background:var(--surf);border:1px solid var(--brd);border-radius:6px;padding:4px 8px;font-size:11px;direction:ltr;white-space:nowrap"></div></div>`;
+}
+
+function discBubHover(ser) {
+  const svg = document.getElementById('bub-svg'); if (!svg) return;
+  const g = _discBub.geo, tl = _discBub.tl;
+  // per-series lookup by timeline key
+  const maps = ser.map(s => new Map(s.pts.map(p => [discTkey(p[0], p[1]), p[2]])));
+  const tip = document.getElementById('bub-tip'), cur = document.getElementById('bub-cur');
+  svg.onmousemove = e => {
+    const r = svg.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width * g.W;
+    const i = Math.max(0, Math.min(tl.length - 1, Math.round((x - g.L) / (g.W - g.L - g.R) * g.n)));
+    const k = tl[i], d = Math.floor(k / 1e6), t = k % 1e6;
+    const cx = g.L + (g.W - g.L - g.R) * i / g.n;
+    cur.setAttribute('x1', cx); cur.setAttribute('x2', cx); cur.style.display = '';
+    tip.innerHTML = `<b>${discTfmt(d, t)}</b>` + ser.map((s, j) => {
+      const v = maps[j].get(k);
+      return `<div><span style="color:${s.col}">●</span> ${s.name}: ${v == null ? '—' : v.toFixed(2) + '%'}</div>`;
+    }).join('');
+    tip.style.display = '';
+    const left = Math.min(r.width - 150, Math.max(0, cx / g.W * r.width + 10));
+    tip.style.left = left + 'px'; tip.style.top = '8px';
+  };
+  svg.onmouseleave = () => { tip.style.display = 'none'; cur.style.display = 'none'; };
+}
+
+// slot = HH:MM bucket of the snapshot time
+const discSlot = t => { const x = String(Math.round(t)).padStart(6, '0'); return x.slice(0, 2) + ':' + x.slice(2, 4); };
+
+function discBubHeat() {
+  const res = _discBub.res;
+  const srcName = document.getElementById('bub-heatsrc').value || '__idx';
+  const pts = srcName === '__idx' ? res.index : ((res.funds.find(f => f.symbol === srcName) || {}).points || []);
+  if (!pts.length) return '<div style="color:var(--muted)">دادهای نیست.</div>';
+  const days = [...new Set(pts.map(p => p[0]))].sort((a, b) => a - b);
+  const slots = [...new Set(pts.map(p => discSlot(p[1])))].sort();
+  const cell = new Map();
+  pts.forEach(p => cell.set(p[0] + '|' + discSlot(p[1]), p[2]));   // later snapshot in the same minute wins
+  const vals = pts.map(p => Math.abs(p[2])).sort((a, b) => a - b);
+  const m = Math.max(0.05, vals[Math.floor(vals.length * 0.95)] || 0.05);
+  const cw = Math.max(18, Math.min(46, Math.floor(760 / slots.length))), ch = days.length > 120 ? 6 : 12;
+  const L = 78, T = 18, W = L + cw * slots.length + 6, H = T + ch * days.length + 6;
+  const col = v => {
+    if (v == null) return 'transparent';
+    const a = Math.min(1, Math.abs(v) / m);
+    return v < 0 ? `rgba(79,163,255,${(0.12 + 0.88 * a).toFixed(2)})` : `rgba(255,122,89,${(0.12 + 0.88 * a).toFixed(2)})`;
+  };
+  let rects = '', ylab = '';
+  days.forEach((d, i) => {
+    slots.forEach((s, j) => {
+      const v = cell.get(d + '|' + s);
+      if (v != null) rects += `<rect x="${L + j * cw}" y="${T + i * ch}" width="${cw - 1}" height="${ch - 1}" fill="${col(v)}"><title>${gregIntToJalaliStr(d)} ${s}  ${v.toFixed(2)}%</title></rect>`;
+    });
+    if (ch >= 12 || i % 5 === 0) ylab += `<text x="${L - 4}" y="${T + i * ch + ch - 2}" text-anchor="end" font-size="8" fill="var(--sub)">${gregIntToJalaliStr(d)}</text>`;
+  });
+  const xlab = slots.map((s, j) => `<text x="${L + j * cw + cw / 2}" y="${T - 6}" text-anchor="middle" font-size="8" fill="var(--sub)">${s}</text>`).join('');
+  return `<div style="font-size:11px;color:var(--sub);margin:4px 0">آبی = تخفیف (زیر NAV)، نارنجی = حباب مثبت · پررنگ‌ترین رنگ ≈ ${discLtr('±' + m.toFixed(2) + '%')} (صدک ۹۵ام قدر مطلق) · هر ردیف یک روز، هر ستون یک ساعت</div>
+    <div style="overflow:auto;max-height:520px;max-width:100%"><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="direction:ltr;background:var(--surf);border:1px solid var(--brd);border-radius:6px">${xlab}${ylab}${rects}</svg></div>`;
+}
+
+function discBubHour(ser) {
+  const prof = ser.map(s => {
+    const acc = new Map();
+    s.pts.forEach(p => { const k = discSlot(p[1]); const a = acc.get(k) || [0, 0]; a[0] += p[2]; a[1]++; acc.set(k, a); });
+    return {s, m: new Map([...acc].map(([k, a]) => [k, a[0] / a[1]]))};
+  });
+  const slots = [...new Set(ser.flatMap(s => s.pts.map(p => discSlot(p[1]))))].sort();
+  const W = 900, H = 240, L = 46, R = 10, T = 10, B = 26;
+  let lo = 0, hi = 0;
+  prof.forEach(o => o.m.forEach(v => { lo = Math.min(lo, v); hi = Math.max(hi, v); }));
+  const pad = (hi - lo) * 0.1 || 0.05; lo -= pad; hi += pad;
+  const sx = i => L + (W - L - R) * (slots.length > 1 ? i / (slots.length - 1) : 0.5);
+  const sy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const lines = prof.map(o => {
+    const pts = slots.map((k, i) => o.m.has(k) ? sx(i).toFixed(1) + ',' + sy(o.m.get(k)).toFixed(1) : null).filter(Boolean);
+    return `<polyline points="${pts.join(' ')}" fill="none" stroke="${o.s.col}" stroke-width="${o.s.w}"/>` +
+      slots.map((k, i) => o.m.has(k) ? `<circle cx="${sx(i).toFixed(1)}" cy="${sy(o.m.get(k)).toFixed(1)}" r="2.4" fill="${o.s.col}"><title>${o.s.name} ${k}: ${o.m.get(k).toFixed(3)}%</title></circle>` : '').join('');
+  }).join('');
+  const xl = slots.map((k, i) => `<text x="${sx(i).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="9" fill="var(--sub)">${k}</text>`).join('');
+  const yl = [lo, (lo + hi) / 2, hi].map(v => `<text x="${L - 4}" y="${(sy(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--sub)">${v.toFixed(2)}%</text>`).join('');
+  const legend = ser.map(s => `<span><span style="color:${s.col}">━</span> ${s.name}</span>`).join('');
+  return `<div style="font-size:11px;color:var(--sub);display:flex;gap:14px;flex-wrap:wrap;margin:4px 0">${legend}<span style="color:var(--muted)">میانگین حباب در هر ساعت، روی همهٔ روزهای بازه</span></div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
+    <line x1="${L}" x2="${W - R}" y1="${sy(0).toFixed(1)}" y2="${sy(0).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4"/>${yl}${xl}${lines}</svg>`;
+}
+
 function renderDiscBacktest(res, p) {
   const s = res.summary || {};
   const cls = discCls(s.net_profit);
@@ -6870,6 +7102,7 @@ function renderDiscBacktest(res, p) {
   </div>
   ${discCompareHtml(res)}
   ${discBubbleHtml(res)}
+  ${discMrHtml(res)}
 `;
 
   const ps = (res.per_symbol || []).slice(0, 40);
@@ -6883,22 +7116,23 @@ function renderDiscBacktest(res, p) {
       <td>${r.annualized_pct}</td><td>${r.avg_hold_days}</td></tr>`).join('')}</tbody></table></div>` : '';
 
   const showIdx = (res.params || {}).entry_mode && res.params.entry_mode !== 'fund';
+  const showMr = !!res.mr_info;
   const tr = res.trades || [];
   const LIM = 600;
   const rows = tr.slice(0, LIM).map(t => {
     const c = discCls(t.net_pnl);
     const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[t.exit_reason] || t.exit_reason;
     return `<tr><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
-      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
+      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}${showMr ? `<td>${t.mr_score == null ? '—' : t.mr_score}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
       <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td>${showIdx ? `<td>${t.idx_exit_pct == null ? '—' : t.idx_exit_pct + '%'}</td>` : ''}<td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
       <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td></tr>`;
   }).join('');
   document.getElementById('disc-trades').innerHTML = `<div class="disc-h">معاملات${tr.length > LIM ? ` (${LIM} مورد اول از ${tr.length})` : ` (${tr.length})`}</div>
     <div class="disc-tblwrap" style="max-height:480px"><table class="disc-tbl"><thead><tr>
-      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (ورود)</th>' : ''}
+      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (ورود)</th>' : ''}${showMr ? '<th>امتیاز بازگشت</th>' : ''}
       <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (خروج)</th>' : ''}<th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
       <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="21" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
+    </tr></thead><tbody>${rows || '<tr><td colspan="23" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
   document.getElementById('disc-note').textContent = '';
 }
 

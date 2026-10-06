@@ -108,11 +108,15 @@ def _decorate(it: dict) -> None:
 
 def load_universe(db, cats, symbols, start, end, p: DiscountParams) -> dict:
     funds = D._universe(db, cats, symbols)
-    items = []
+    loaded = []
     for sid, label in funds:
-        _raw, rows, day_vol = D._load(db, sid, start, end, p)
-        if rows:
-            items.append({"label": label, "rows": rows, "day_vol": day_vol})
+        d = D._load_ex(db, sid, start, end, p)
+        if d["rows"]:
+            d["label"] = label
+            loaded.append(d)
+    D._compute_mr(db, loaded, p, start, end)
+    items = [{"label": d["label"], "rows": d["rows"], "day_vol": d["day_vol"], "mr": d.get("mr")}
+             for d in loaded]
     if p.entry_mode in ("index", "both") and items:
         idx_all, _curve, _share = D._bubble_index([it["rows"] for it in items], p)
         for it, ix in zip(items, idx_all):
@@ -151,6 +155,7 @@ def _sim_all(U: dict, p: DiscountParams, lo: int | None = None, hi: int | None =
         rows = it["rows"][a:b]
         rel = it["rel"][a:b]
         idx = it["idx"][a:b] if it.get("idx") is not None else None
+        mr = it["mr"][a:b] if it.get("mr") is not None else None
         if rng is not None:
             n = len(rows)
             o = int(n * (0.1 + 0.8 * rng.random()))
@@ -158,7 +163,7 @@ def _sim_all(U: dict, p: DiscountParams, lo: int | None = None, hi: int | None =
             if idx is not None:
                 o2 = int(n * (0.1 + 0.8 * rng.random()))
                 idx = idx[o2:] + idx[:o2]
-        trades.extend(D._simulate(it["label"], rows, it["day_vol"], p, idx, rel))
+        trades.extend(D._simulate(it["label"], rows, it["day_vol"], p, idx, rel, mr))
     return trades
 
 
@@ -648,6 +653,30 @@ def self_test() -> dict:
         share_mr <= 0.30, f"{round(share_mr * 100)}٪ از {len(pv_mr)} دنیا")
     add("کالیبراسیون: آزمون مزیت رویداد (افق ۳ روز) هم بیش از حدِ تصادف «معنادار» نمی‌گوید",
         share_ev <= 0.35, f"{round(share_ev * 100)}٪ از {len(pv_ev)} دنیا")
+
+    # --- mean-reversion score: discriminates + causal ----------------------
+    pm = DiscountParams(mr_center="zero", mr_window_days=20, mr_horizon_days=5, mr_lag=4)
+    sc_rev, sc_rw = [], []
+    for sd in range(20):
+        for kind, acc_ in (("revert", sc_rev), ("noise", sc_rw)):
+            rws = _synthetic_rows(kind, n_days=120, seed=50 + sd)
+            dev = [r[4] / r[6] - 1.0 for r in rws]
+            acc_.extend(x for x in D._mr_scores(rws, dev, pm, centered=False) if x is not None)
+    m_rev = sum(sc_rev) / len(sc_rev)
+    m_rw = sum(sc_rw) / len(sc_rw)
+    add("امتیاز بازگشت به میانگین: صندوق برگشت‌پذیر امتیاز بالا و قدم‌زدن تصادفی امتیاز پایین می‌گیرد",
+        m_rev >= 90 and m_rw <= 40, f"برگشت‌پذیر {round(m_rev, 1)} / قدم‌زدن تصادفی {round(m_rw, 1)}")
+    share_fp = sum(1 for x in sc_rw if x >= 70) / len(sc_rw)
+    add("پذیرش اشتباهیِ قدم‌زدن تصادفی در آستانهٔ ۷۰ کم است (≤ ۲۰٪)", share_fp <= 0.20,
+        f"{round(share_fp * 100, 1)}٪ از لحظه‌ها")
+    rws = _synthetic_rows("revert", n_days=120, seed=77)
+    for centered in (False, True):
+        dev = [r[4] / r[6] - 1.0 for r in rws]
+        full_sc = D._mr_scores(rws, dev, pm, centered=centered)
+        cutn = int(len(rws) * 0.6)
+        part_sc = D._mr_scores(rws[:cutn], dev[:cutn], pm, centered=centered)
+        add(f"امتیاز بازگشت علّی است ({'مرکز خود صندوق' if centered else 'مرکز صفر'}): فقط روزهای قبل را می‌بیند",
+            full_sc[:cutn] == part_sc, "امتیاز با دادهٔ ناقص = امتیاز با دادهٔ کامل")
 
     # --- causality (no look-ahead) -----------------------------------------
     rows = _synthetic_rows("revert", seed=9)

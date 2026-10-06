@@ -46,6 +46,14 @@ baseline_days = 0 it is the raw price/NAV − 1).  Only data up to time t is use
 without a fresh quote today are ignored, and B is undefined until at least
 ``index_min_share`` of the funds have quoted that day.
 
+Mean-reversion eligibility filter (optional, ``mr_center`` != "off"): a fund may be bought on a
+day only if its bubble has been mean-reverting over the PREVIOUS ``mr_window_days`` trading days.
+Score = expected share (0-100) of a deviation from the centre that closes within
+``mr_horizon_days``, from the AR(1) coefficient of the intraday bubble series (lag ``mr_lag``
+snapshots).  Centre: "zero" (raw price/NAV−1), "category" (simple average bubble of all funds
+of the same category at that moment), "self" (the fund's own mean over the window).  A fund
+below ``mr_min_score`` is excluded until its score recovers; open positions are not touched.
+
 entry_mode = "fund"  (default) : the fund itself is cheap (rule below)
            = "index"           : B(t) ≤ −index_entry_pct/100  → buy EVERY active fund
            = "both"            : the fund is cheap AND B(t) ≤ −index_entry_pct/100
@@ -68,9 +76,11 @@ skipped when less than a quarter of the intended size is affordable).
 
 from __future__ import annotations
 
+import bisect
 import datetime as _dt
 import itertools
 import logging
+import math
 import statistics
 import threading
 from dataclasses import dataclass, asdict, replace
@@ -102,6 +112,11 @@ class DiscountParams:
     index_entry_pct: float = 0.30       # enter (index modes) when the bubble index ≤ −this %
     index_exit_pct: float = 0.0         # exit  (mode "index") when the bubble index ≥ −this %
     index_min_share: float = 0.5        # share of the funds that must have quoted today
+    mr_center: str = "off"              # off | zero | category | self  (mean-reversion eligibility filter)
+    mr_window_days: int = 20            # trading days of history the score is computed from
+    mr_min_score: float = 70.0          # 0-100; below this the fund is not tradable that day
+    mr_horizon_days: int = 5            # score = share of the gap expected to close within this
+    mr_lag: int = 4                     # snapshots between the AR(1) pairs (≈ 1 hour)
     stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
     baseline_days: int = 20             # per-fund typical discount window (trading days); 0 = off
@@ -140,6 +155,7 @@ class Trade:
     rel_entry_pct: float = 0.0  # entry price vs the fund's own fair value (NAV·(1+baseline))
     rel_exit_pct: float = 0.0
     base_pct: float = 0.0       # the fund's typical discount used at entry (baseline, %)
+    mr_score: float | None = None        # mean-reversion score of the fund at entry (None = filter off)
     idx_entry_pct: float | None = None   # bubble index at entry / exit (None = undefined)
     idx_exit_pct: float | None = None
 
@@ -191,9 +207,11 @@ def _universe(db, cats: list[str] | None, symbols: list[str] | None) -> list[tup
 def _warmup_start(start: int | None, p: DiscountParams) -> int | None:
     """Date to start LOADING from so the per-fund baseline already has history on
     ``start`` (≈ 2 calendar days per trading day + a week of slack)."""
-    if not start or p.baseline_days <= 0:
+    need = max(p.baseline_days, (p.mr_window_days * (2 if p.mr_center == "self" else 1))
+               if p.mr_center != "off" else 0)
+    if not start or need <= 0:
         return start
-    o = _ord(start) - (p.baseline_days * 2 + 7)
+    o = _ord(start) - (need * 2 + 7)
     try:
         d = _dt.date.fromordinal(max(o, 1))
     except ValueError:
@@ -201,17 +219,192 @@ def _warmup_start(start: int | None, p: DiscountParams) -> int | None:
     return d.year * 10000 + d.month * 100 + d.day
 
 
+def _load_ex(db, sid: int, start: int | None, end: int | None, p: DiscountParams) -> dict:
+    """Like _load but also returns the warm-up rows and the offset of the first kept row."""
+    raw_all = db.get_nav_intraday(sid, _warmup_start(start, p), end)
+    rows_all, day_vol = _prep(raw_all, p)
+    if start:
+        off = next((i for i, r in enumerate(rows_all) if r[1] >= start), len(rows_all))
+        raw = [r for r in raw_all if r[0] >= start]
+    else:
+        off, raw = 0, raw_all
+    return {"sid": sid, "raw": raw, "rows": rows_all[off:], "day_vol": day_vol,
+            "rows_all": rows_all, "off": off}
+
+
 def _load(db, sid: int, start: int | None, end: int | None, p: DiscountParams):
     """(raw_in_range, rows, day_vol): rows are built from the warm-up-extended raw data
     (so the baseline is ready on day one) but only rows with date >= start are kept."""
-    raw_all = db.get_nav_intraday(sid, _warmup_start(start, p), end)
-    rows, day_vol = _prep(raw_all, p)
-    if start:
-        rows = [r for r in rows if r[1] >= start]
-        raw = [r for r in raw_all if r[0] >= start]
-    else:
-        raw = raw_all
-    return raw, rows, day_vol
+    d = _load_ex(db, sid, start, end, p)
+    return d["raw"], d["rows"], d["day_vol"]
+
+
+# --------------------------------------------------------------------------- #
+#  Mean-reversion eligibility score                                            #
+# --------------------------------------------------------------------------- #
+
+def _mr_scores(rows_all: list[tuple], dev: list, p: DiscountParams, centered: bool) -> list:
+    """Score (0-100) for every row = score of that row's DAY, computed only from the
+    previous ``mr_window_days`` trading days of this fund (causal).
+
+    dev[i] is the deviation of the bubble from its centre at row i (None = unusable).
+    AR(1) coefficient phi of consecutive-by-``mr_lag`` snapshots of the same day; the
+    score is the share of a deviation expected to close within ``mr_horizon_days``:
+        100·(1 − phi_day^horizon),  phi_day = phi^(snapshots_per_day / lag)
+    (phi <= 0 → 100, phi >= 1 → 0).  ``centered`` ("self") measures the deviation from the
+    fund's mean bubble over the N days before the scoring window."""
+    L = max(1, int(p.mr_lag))
+    by_day: dict[int, list[float]] = {}
+    for i, r in enumerate(rows_all):
+        if r[5] and dev[i] is not None:
+            by_day.setdefault(r[1], []).append(dev[i])
+    days = sorted(by_day)
+    st = []
+    for d in days:
+        v = by_day[d]
+        n = 0
+        sa = sb = saa = sbb = sab = 0.0
+        for k in range(len(v) - L):
+            a, b = v[k], v[k + L]
+            n += 1
+            sa += a
+            sb += b
+            saa += a * a
+            sbb += b * b
+            sab += a * b
+        st.append((n, sa, sb, saa, sbb, sab, len(v), sum(v)))
+    N = max(3, int(p.mr_window_days))
+    H = max(1, int(p.mr_horizon_days))
+    score_of: dict[int, float] = {}
+    for j, d in enumerate(days):
+        lo = max(0, j - N)
+        win = st[lo:j]                                   # previous days only
+        if len(win) < max(3, N // 3):
+            continue
+        n = sum(w[0] for w in win)
+        if n < 8:
+            continue
+        sa = sum(w[1] for w in win)
+        sb = sum(w[2] for w in win)
+        saa = sum(w[3] for w in win)
+        sbb = sum(w[4] for w in win)
+        sab = sum(w[5] for w in win)
+        m = 0.0
+        if centered:
+            # the centre is the fund's mean bubble over the N days BEFORE the scoring window.
+            # (Centering on the scoring window itself makes any short random walk look
+            #  mean-reverting — measured score 57-65 for pure random walks.)
+            older = st[max(0, lo - N):lo]
+            if len(older) < max(3, N // 3):
+                continue
+            cnt = sum(w[6] for w in older)
+            if cnt < 8:
+                continue
+            m = sum(w[7] for w in older) / cnt
+        num = sab - m * (sa + sb) + n * m * m
+        den = 0.5 * ((saa - 2 * m * sa + n * m * m) + (sbb - 2 * m * sb + n * m * m))
+        if den <= 1e-18:
+            continue
+        phi = num / den
+        spd = sum(w[6] for w in win) / len(win)
+        if phi <= 0:
+            score = 100.0
+        elif phi >= 1:
+            score = 0.0
+        else:
+            score = 100.0 * (1.0 - math.exp((spd * H / L) * math.log(phi)))
+        score_of[d] = max(0.0, min(100.0, score))
+    return [score_of.get(r[1]) for r in rows_all]
+
+
+def _timeline(rows_by_fund: list[list[tuple]], min_share: float):
+    """Simple-average RAW bubble (price/NAV−1) of the funds at every instant, causal
+    (same-day quotes up to that instant, carried forward).  Returns (keys, values)."""
+    n = len(rows_by_fund)
+    need = max(1, min(n, int(-(-n * min_share // 1)))) if n else 1
+    events = []
+    for k, rows in enumerate(rows_by_fund):
+        for r in rows:
+            if r[5]:
+                events.append((r[1], r[2], k, r[4] / r[6] - 1.0))
+    events.sort()
+    keys, vals = [], []
+    cur: dict[int, float] = {}
+    total = 0.0
+    day = None
+    j = 0
+    while j < len(events):
+        d, t = events[j][0], events[j][1]
+        if d != day:
+            day, cur, total = d, {}, 0.0
+        while j < len(events) and events[j][0] == d and events[j][1] == t:
+            _d, _t, k, b = events[j]
+            total += b - cur.get(k, 0.0)
+            cur[k] = b
+            j += 1
+        keys.append((d, t))
+        vals.append(total / len(cur) if len(cur) >= need else None)
+    return keys, vals
+
+
+def _cat_at(keys: list, vals: list, d: int, t: int):
+    i = bisect.bisect_right(keys, (d, t)) - 1
+    if i < 0 or keys[i][0] != d:
+        return None
+    return vals[i]
+
+
+def _category_of(db) -> dict[int, str]:
+    kinds = db.get_nav_symbol_category()
+    return {i: kinds.get(i, "other") for i in db.get_nav_intraday_ids()}
+
+
+def _compute_mr(db, loaded: list[dict], p: DiscountParams, start, end) -> None:
+    """Fill ``l["mr"]`` (scores aligned to ``l["rows"]``) for every loaded fund."""
+    if p.mr_center == "off":
+        return
+    cat_tl: dict[str, tuple] = {}
+    if p.mr_center == "category":
+        cats_of = _category_of(db)
+        for c in {cats_of.get(l["sid"], "other") for l in loaded}:
+            rows_by = []
+            for sid, _lab in _universe(db, [c], None):
+                raw_all = db.get_nav_intraday(sid, _warmup_start(start, p), end)
+                rr, _ = _prep(raw_all, replace(p, baseline_days=0))
+                if rr:
+                    rows_by.append(rr)
+            cat_tl[c] = _timeline(rows_by, 0.3)
+        for l in loaded:
+            l["cat"] = cats_of.get(l["sid"], "other")
+    for l in loaded:
+        rows_all = l["rows_all"]
+        if p.mr_center == "category":
+            keys, vals = cat_tl.get(l["cat"], ([], []))
+            dev = []
+            for r in rows_all:
+                cv = _cat_at(keys, vals, r[1], r[2])
+                dev.append(None if cv is None else r[4] / r[6] - 1.0 - cv)
+        else:
+            dev = [r[4] / r[6] - 1.0 for r in rows_all]
+        sc = _mr_scores(rows_all, dev, p, centered=(p.mr_center == "self"))
+        l["mr"] = sc[l["off"]:]
+
+
+def _mr_summary(label: str, rows: list[tuple], mr: list, p: DiscountParams) -> dict:
+    by_day: dict[int, float] = {}
+    for r, sc in zip(rows, mr):
+        if sc is not None:
+            by_day[r[1]] = sc
+    days = sorted(by_day)
+    if not days:
+        return {"symbol": label, "scored_days": 0, "eligible_days_pct": 0.0, "avg_score": None,
+                "last_score": None, "eligible_now": False}
+    elig = sum(1 for d in days if by_day[d] >= p.mr_min_score)
+    return {"symbol": label, "scored_days": len(days),
+            "eligible_days_pct": round(elig / len(days) * 100, 1),
+            "avg_score": round(sum(by_day.values()) / len(days), 1),
+            "last_score": round(by_day[days[-1]], 1), "last_date": days[-1],
+            "eligible_now": by_day[days[-1]] >= p.mr_min_score}
 
 
 def _prep(raw: list[tuple], p: DiscountParams):
@@ -325,7 +518,8 @@ def _bubble_index(rows_by_fund: list[list[tuple]], p: DiscountParams):
 # --------------------------------------------------------------------------- #
 
 def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
-              idx: list | None = None, rel: list | None = None) -> list[Trade]:
+              idx: list | None = None, rel: list | None = None,
+              mr: list | None = None) -> list[Trade]:
     """``rel`` (optional) replaces last/fair − 1 as the fund-level signal — used by the
     validation placebo test to feed the same rules a signal that is unrelated to prices."""
     trades: list[Trade] = []
@@ -352,6 +546,8 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     ix_entry = -p.index_entry_pct / 100.0
     ix_exit = -p.index_exit_pct / 100.0
     e_idx = None
+    mr_on = p.mr_center != "off" and mr is not None
+    e_mr = None
 
     def _cap(date_int: int) -> int:
         if p.participation_pct <= 0:
@@ -378,6 +574,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             rel_entry_pct=round((cost_part / units / e_fair - 1) * 100, 4) if e_fair else 0,
             rel_exit_pct=round((px / fair - 1) * 100, 4) if fair else 0,
             base_pct=round((e_fair / e_nav - 1) * 100, 4) if e_nav else 0,
+            mr_score=round(e_mr, 1) if e_mr is not None else None,
             idx_entry_pct=round(e_idx * 100, 4) if e_idx is not None else None,
             idx_exit_pct=round(x_idx * 100, 4) if x_idx is not None else None,
             buy_notional=round(cost_part, 0), sell_notional=round(sell_notional, 0),
@@ -397,6 +594,8 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 continue                  # never open a position on the final snapshot
             if d == blocked_date:
                 continue
+            if mr_on and (mr[i] is None or mr[i] < p.mr_min_score):
+                continue                      # not mean-reverting enough lately: not tradable today
             ix = idx[i] if idx is not None else None
             fund_ok = r <= ent_thr
             idx_ok = ix is not None and ix <= ix_entry
@@ -411,6 +610,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
             e_fair, e_rel = nav, r
             e_idx = ix
+            e_mr = mr[i] if mr_on else None
         else:
             bid = last * (1 - hs)
             reason = None
@@ -837,27 +1037,33 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     tested = skipped_funds = 0
     price_series: list[dict] = []
     nav_series: list[dict] = []
-    held: list[tuple] = []                       # (label, rows, day_vol) — only for index modes
+    loaded: list[dict] = []
     for sid, label in funds:
-        raw, rows, day_vol = _load(db, sid, start, end, p)
-        ps, ns = _daily_series(raw, p)
+        d = _load_ex(db, sid, start, end, p)
+        ps, ns = _daily_series(d["raw"], p)
         price_series.append(ps)
         nav_series.append(ns)
-        if not rows:
+        if not d["rows"]:
             skipped_funds += 1
             continue
-        tested += 1
-        if use_index:
-            held.append((label, rows, day_vol))
-        else:
-            raw_trades.extend(_simulate(label, rows, day_vol, p))
+        d["label"] = label
+        loaded.append(d)
+    tested = len(loaded)
+    _compute_mr(db, loaded, p, start, end)
+    mr_info = None
+    if p.mr_center != "off":
+        mr_info = sorted((_mr_summary(l["label"], l["rows"], l["mr"], p) for l in loaded),
+                         key=lambda x: -(x["last_score"] if x["last_score"] is not None else -1))
     bubble = None
-    if use_index and held:
-        idx, curve_b, share = _bubble_index([h[1] for h in held], p)
-        for (label, rows, day_vol), ix in zip(held, idx):
-            raw_trades.extend(_simulate(label, rows, day_vol, p, ix))
+    if use_index and loaded:
+        idx, curve_b, share = _bubble_index([l["rows"] for l in loaded], p)
+        for l, ix in zip(loaded, idx):
+            raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, ix, None, l.get("mr")))
         bubble = {"curve": curve_b, "share_below_entry_pct": round(share * 100, 1),
                   "entry_pct": p.index_entry_pct, "exit_pct": p.index_exit_pct}
+    else:
+        for l in loaded:
+            raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, None, None, l.get("mr")))
     dates = db.get_nav_intraday_dates(start, end)
     d0 = dates[0] if dates else (start or 0)
     d1 = dates[-1] if dates else (end or 0)
@@ -877,6 +1083,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "equity_curve": curve,
         "benchmark": build_benchmark(price_series, nav_series, p),
         "bubble_index": bubble,
+        "mr_info": mr_info,
         "summary": summary,
     }
 
@@ -884,6 +1091,54 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
 # --------------------------------------------------------------------------- #
 #  Public: discount statistics (calibrate thresholds, spot stale NAVs)         #
 # --------------------------------------------------------------------------- #
+
+def bubble_series(db, cats: list[str] | None = None, symbols: list[str] | None = None,
+                  start: int | None = None, end: int | None = None,
+                  show: list[str] | None = None, min_share: float = 0.5,
+                  max_show: int = 12) -> dict:
+    """Intraday bubble (price vs NAV, %) for charting.
+
+    ``symbols`` / ``cats`` pick the universe that the simple-average index is built
+    from (same selection as the backtest); ``show`` lists funds whose own series is
+    returned as well (labels or "#id").  Bubble = last / NAV − 1 against the raw NAV;
+    only snapshots with a fresh price and a usable NAV inside the session count.
+    The index at an instant is the plain mean of the latest same-day bubble of every
+    fund that has quoted so far (needs ``min_share`` of the funds, like the backtest).
+    Points are [date, HHMMSS, bubble %].
+    """
+    p = DiscountParams(baseline_days=0, require_fresh=True)
+    funds = _universe(db, cats, symbols)
+    want = {s.strip() for s in (show or []) if s.strip()}
+    rows_by_fund, labels = [], []
+    for sid, label in funds:
+        raw = db.get_nav_intraday(sid, start, end)
+        rows, _vol = _prep(raw, p)
+        rows = [r for r in rows if r[5]]
+        if rows:
+            rows_by_fund.append(rows)
+            labels.append((sid, label))
+    out_funds = []
+    if rows_by_fund:
+        idx, curve, _share = _bubble_index(rows_by_fund, DiscountParams(
+            baseline_days=0, index_min_share=min_share))
+    else:
+        idx, curve = [], []
+    # the index as a time series (one point per distinct instant)
+    pts: dict[tuple, float] = {}
+    for rows, ix in zip(rows_by_fund, idx):
+        for r, v in zip(rows, ix):
+            if v is not None:
+                pts[(r[1], r[2])] = v
+    index_pts = [[d, t, round(v * 100, 4)] for (d, t), v in sorted(pts.items())]
+    for (sid, label), rows in zip(labels, rows_by_fund):
+        if label in want or str(sid) in want:
+            out_funds.append({"symbol": label, "symbol_id": sid, "points": [
+                [r[1], r[2], round((r[4] / r[6] - 1.0) * 100, 4)] for r in rows]})
+    return {"funds_in_index": len(rows_by_fund), "index": index_pts,
+            "daily_index": curve, "funds": out_funds[:max_show],
+            "period": [min((r[0][1] for r in rows_by_fund), default=None),
+                       max((r[-1][1] for r in rows_by_fund), default=None)]}
+
 
 def _pct(sorted_vals: list[float], q: float) -> float:
     if not sorted_vals:
@@ -1000,41 +1255,34 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
         with (progress_lock or threading.Lock()):
             progress.update(done=0, total=len(funds), combos=len(combos), phase="grid")
 
-    def _run_fund(label, rows, day_vol, idx):
-        tr_pairs = [(r, (idx[i] if idx is not None else None)) for i, r in enumerate(rows) if r[1] <= cut]
-        te_pairs = [(r, (idx[i] if idx is not None else None)) for i, r in enumerate(rows) if r[1] > cut]
-        tr_rows = [x[0] for x in tr_pairs]
-        te_rows = [x[0] for x in te_pairs]
-        tr_idx = [x[1] for x in tr_pairs] if idx is not None else None
-        te_idx = [x[1] for x in te_pairs] if idx is not None else None
+    def _run_fund(label, rows, day_vol, idx, mr=None):
+        sel_tr = [i for i, r in enumerate(rows) if r[1] <= cut]
+        sel_te = [i for i, r in enumerate(rows) if r[1] > cut]
+        pick = lambda lst, sel: ([lst[i] for i in sel] if lst is not None else None)   # noqa: E731
+        tr_rows, te_rows = pick(rows, sel_tr), pick(rows, sel_te)
+        tr_idx, te_idx = pick(idx, sel_tr), pick(idx, sel_te)
+        tr_mr, te_mr = pick(mr, sel_tr), pick(mr, sel_te)
         for ci, c in enumerate(combos):
-            train_tr[ci].extend(_simulate(label, tr_rows, day_vol, c, tr_idx))
+            train_tr[ci].extend(_simulate(label, tr_rows, day_vol, c, tr_idx, None, tr_mr))
             if te_rows and test_frac > 0:
-                test_tr[ci].extend(_simulate(label, te_rows, day_vol, c, te_idx))
+                test_tr[ci].extend(_simulate(label, te_rows, day_vol, c, te_idx, None, te_mr))
 
-    if use_index:
-        loaded = []
-        for k, (sid, label) in enumerate(funds):
-            _, rows, day_vol = _load(db, sid, start, end, base)
-            if rows:
-                loaded.append((label, rows, day_vol))
-            if progress is not None:
-                with (progress_lock or threading.Lock()):
-                    progress["done"] = (k + 1) // 2          # first half: loading
-        idx_all, _, _ = _bubble_index([x[1] for x in loaded], base)
-        for k, ((label, rows, day_vol), ix) in enumerate(zip(loaded, idx_all)):
-            _run_fund(label, rows, day_vol, ix)
-            if progress is not None:
-                with (progress_lock or threading.Lock()):
-                    progress["done"] = len(funds) // 2 + (k + 1) * (len(funds) - len(funds) // 2) // max(len(loaded), 1)
-    else:
-        for k, (sid, label) in enumerate(funds):
-            _, rows, day_vol = _load(db, sid, start, end, base)
-            if rows:
-                _run_fund(label, rows, day_vol, None)
-            if progress is not None:
-                with (progress_lock or threading.Lock()):
-                    progress["done"] = k + 1
+    loaded = []
+    for k, (sid, label) in enumerate(funds):
+        d = _load_ex(db, sid, start, end, base)
+        if d["rows"]:
+            d["label"] = label
+            loaded.append(d)
+        if progress is not None:
+            with (progress_lock or threading.Lock()):
+                progress["done"] = (k + 1) // 2                      # first half: loading
+    _compute_mr(db, loaded, base, start, end)                         # independent of the grid
+    idx_all = _bubble_index([l["rows"] for l in loaded], base)[0] if use_index else [None] * len(loaded)
+    for k, (l, ix) in enumerate(zip(loaded, idx_all)):
+        _run_fund(l["label"], l["rows"], l["day_vol"], ix, l.get("mr"))
+        if progress is not None:
+            with (progress_lock or threading.Lock()):
+                progress["done"] = len(funds) // 2 + (k + 1) * (len(funds) - len(funds) // 2) // max(len(loaded), 1)
 
     nxt = next((d for d in dates if d > cut), dates[-1])
     scored = []
