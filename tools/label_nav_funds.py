@@ -79,8 +79,10 @@ def discover(fetcher, conn: sqlite3.Connection, min_funds: int = 150,
     found: dict[str, dict] = {}
     try:
         for r in fetcher.get_market_watch():
+            nm = _fa(r.get("name", ""))
+            real_option = "اختیار" in nm
             if (r.get("type") == "fund" or _looks_like_fund(r.get("name", ""))
-                    or (include_all and r.get("type") in ("stock", "other"))):
+                    or (include_all and not real_option and r.get("type") != "bond")):
                 found[r["ins_code"]] = {"symbol": r["symbol"], "name": r.get("name", ""),
                                         "market": r.get("market", "")}
     except Exception as e:                                   # noqa: BLE001
@@ -212,6 +214,33 @@ def match(conn: sqlite3.Connection, min_score: int = 6, margin: float = 1.5) -> 
         taken.add(code)
         best[sid] = (code, sc)
 
+    # Tier 3 — price series only (the dump's volume can differ from TSETMC's, the
+    # price cannot): a ticker whose closing price matches on >= 60% of the id's
+    # days and clearly beats the runner-up.
+    pscores: dict[int, list[tuple[int, str]]] = {}
+    left = [r[0] for r in conn.execute("SELECT DISTINCT symbol_id FROM _nd") if r[0] not in best]
+    if left:
+        conn.execute("DROP TABLE IF EXISTS temp._un")
+        conn.execute("CREATE TEMP TABLE _un(symbol_id INTEGER PRIMARY KEY)")
+        conn.executemany("INSERT INTO _un VALUES (?)", [(x,) for x in left])
+        ndays = dict(conn.execute("SELECT symbol_id, COUNT(*) FROM _nd GROUP BY symbol_id"))
+        for sid, code, c in conn.execute("""
+                SELECT n.symbol_id, r.ins_code, COUNT(*)
+                FROM _nd n JOIN _un u ON u.symbol_id = n.symbol_id
+                JOIN nav_ref_daily r ON r.date = n.date
+                WHERE r.close > 0
+                  AND (ABS(n.last / r.close - 1) < 0.003 OR ABS(n.close / r.close - 1) < 0.003)
+                GROUP BY n.symbol_id, r.ins_code"""):
+            pscores.setdefault(sid, []).append((c, code))
+        for sid, lst in pscores.items():
+            lst.sort(reverse=True)
+            top = lst[0]
+            second = lst[1][0] if len(lst) > 1 else 0
+            if (ndays.get(sid, 0) >= 20 and top[0] >= 0.6 * ndays[sid]
+                    and top[0] >= 2 * second and top[1] not in taken):
+                best[sid] = (top[1], top[0])
+                taken.add(top[1])
+
     meta = {r[0]: (r[1], r[2]) for r in conn.execute(
         "SELECT ins_code, symbol, name FROM nav_fund_meta")}
     manual = {r[0] for r in conn.execute(
@@ -247,7 +276,7 @@ def match(conn: sqlite3.Connection, min_score: int = 6, margin: float = 1.5) -> 
         print("  duplicate ids (same instrument under another symbol_id, excluded from "
               "default runs): " + ", ".join(f"{sid}→{meta[c][0]}(sid {o})" for sid, (c, o) in dups.items()))
     return {"matched": len(best), "scores": score, "best": best, "meta": meta,
-            "dups": dups}
+            "dups": dups, "pscores": pscores}
 
 
 # --------------------------------------------------------------------------- #
@@ -309,6 +338,10 @@ def diagnose(conn: sqlite3.Connection, res: dict) -> None:
         cand = sorted(((sc, code) for (s2, code), sc in res["scores"].items() if s2 == sid),
                       reverse=True)[:1]
         line = f"  sid={sid:>6} days={days:>3} {first}..{last} maxVol={mv:>12,}"
+        pc = res.get("pscores", {}).get(sid)
+        if pc:
+            line += "  price-closest: " + ", ".join(
+                f"{res['meta'].get(code, ('?', ''))[0]}[{c}/{days}d]" for c, code in pc[:2])
         if cand:
             sc, code = cand[0]
             tick = res["meta"].get(code, ("?", ""))[0]
