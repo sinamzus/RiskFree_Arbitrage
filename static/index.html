@@ -2461,6 +2461,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="تعداد دنیاهای جایگشتی برای p-value (بیشتر = دقیق‌تر ولی کندتر؛ سقف زمان ۶۰ ثانیه)"><label>جایگشت‌ها</label>
         <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
       <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
+      <button class="scan-btn" id="disc-ft-btn" onclick="discFullTest()" title="تست سراسری روی دنیای ساختگی: پارامتر مرده، سیم‌کشی فرم↔سرور↔موتور، پیش‌فرض‌ها، بهینه‌ساز، ناوردایی‌های حسابداری و آزمونِ خودِ آزمون‌ها (حدود ۲ دقیقه)">🧪 تست سراسری برنامه</button>
       <button class="scan-btn" id="disc-self-btn" onclick="discSelfTest()" title="آزمون خودِ شبیه‌ساز: دنیای با پاسخ معلوم، حسابداری، نگاه به آینده، کالیبراسیون">🧪 آزمون سلامت شبیه‌ساز</button>
       <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="مطالعهٔ جامعِ همهٔ پارامترهای مدل: جستجوی متوازن، اهمیت و رفتار هر پارامتر، آزمون خارج از نمونه، پایداری اطراف برنده، walk-forward و حساسیت به فرض‌های اجرایی">🔧 بهینه‌سازی و مطالعهٔ جامع</button>
       <button class="scan-btn" id="disc-run" onclick="discBacktest()">🧪 اجرای بک‌تست</button>
@@ -2471,6 +2472,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <div id="disc-funds" style="display:none"></div>
   <div id="disc-stats" style="display:none"></div>
   <div id="disc-opt" style="display:none"></div>
+  <div id="disc-ft" style="display:none"></div>
   <div id="disc-val" style="display:none"></div>
   <div id="disc-bub" style="display:none"></div>
   <div id="disc-cards"></div>
@@ -7036,6 +7038,8 @@ const DISC_TIP_RULES = [
   [/^سهم از کل زیان$/, 'چند درصد از مجموع زیان‌ها (به ریال) به این علت برمی‌گردد.'],
   [/^زیان \(م\.ر\)$/, 'مجموع زیان این گروه به میلیون ریال.'],
   [/^تعداد$/, 'تعداد معاملات این گروه.'],
+  [/^🧪 تست سراسری/, 'تست سراسری روی دنیای ساختگی (بدون دادهٔ واقعی): پارامتر مرده، سیم‌کشی، پیش‌فرض‌ها، بهینه‌ساز، حسابداری و آزمونِ خودِ آزمون‌ها.'],
+  [/^(پارامتر|ممیزی|سیم‌کشی|رابط کاربری|ناوردایی|بهینه‌ساز|تفسیر زیان|جهش|یکنوایی|تکرارپذیری)/, 'گروه آزمون سراسری؛ اگر شکستی باشد خودکار باز می‌شود.'],
   // --- comprehensive study ---------------------------------------------------------
   [/^(⚡|◐|●|↻)/, 'پیش‌تنظیم دامنهٔ جستجو.'],
   [/^جستجو؟$/, 'اگر تیک بخورد این پارامتر در مطالعه جستجو می‌شود؛ وگرنه روی مقدار فرم ثابت می‌ماند.'],
@@ -7050,6 +7054,7 @@ const DISC_TIP_RULES = [
   [/^بازده آزمون$/, 'بازده همان ترکیب در بخش آخرِ دوره که در انتخاب دخالت نداشته.'],
   [/^آمارهٔ t$/, 'میانگین بازدهٔ معاملات تقسیم بر خطای معیارش؛ تقریبی (معاملات هم‌زمان همبسته‌اند). زیر ۱٫۵ یعنی سود از نوسان قابل‌تشخیص نیست.'],
   [/^پسیو \(هم‌وزن\)$/, 'خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها در همین دوره‌ها، بدون کارمزد.'],
+  [/^اوج$/, 'بیشترین درصد سرمایهٔ دفتری که هم‌زمان در پوزیشن بود.'],
   [/^سرمایهٔ درگیر در طول بازه/, 'چند درصد از سرمایهٔ دفتری در هر لحظه داخل پوزیشن بوده است (پله‌ای). بقیه نقد و بی‌کار بوده.'],
   [/^میانگین \(وزن‌دار با زمان/, 'میانگین درصد سرمایهٔ درگیر، وزن‌دار با زمان واقعیِ ساعت‌به‌ساعت.'],
   [/^سقف ساختاری$/, 'تعداد صندوق‌ها × سهم هر پوزیشن (حداکثر ۱۰۰٪). چون هر صندوق هم‌زمان یک پوزیشن دارد، بیشتر از این ممکن نیست.'],
@@ -7275,7 +7280,7 @@ async function discBubFocus(i) {
   el.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
-let _discExpChart = null;
+let _discExpChart = null, _discExpRO = null;
 
 function discExposureHtml(res) {
   const e = res.exposure;
@@ -7299,6 +7304,7 @@ function discExposureHtml(res) {
 }
 
 function discExposureDraw(res) {
+  if (_discExpRO) { _discExpRO.disconnect(); _discExpRO = null; }
   if (_discExpChart) { try { _discExpChart.remove(); } catch (e) {} _discExpChart = null; }
   const e = res.exposure, el = document.getElementById('disc-exp-chart');
   if (!e || !el || !e.curve || e.curve.length < 2) return;
@@ -7321,8 +7327,8 @@ function discExposureDraw(res) {
   ser.createPriceLine({price: e.avg_pct || 0, color: '#e0a030', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'میانگین'});
   if (e.ceiling_pct < 100) ser.createPriceLine({price: e.ceiling_pct, color: '#ef5350', lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: 'سقف ساختاری'});
   chart.timeScale().fitContent();
-  const ro = new ResizeObserver(() => chart.applyOptions({width: el.clientWidth}));
-  ro.observe(el);
+  const ro = new ResizeObserver(() => { try { chart.applyOptions({width: el.clientWidth}); } catch (e) {} });
+  ro.observe(el); _discExpRO = ro;
 }
 
 function discMrHtml(res) {
@@ -7578,7 +7584,7 @@ function discBubPro(ser, box) {
   chart.timeScale().subscribeVisibleTimeRangeChange(() => { clearTimeout(tmr); tmr = setTimeout(discBubStats, 80); });
   if (B.range) { try { chart.timeScale().setVisibleRange(B.range); } catch (e) { chart.timeScale().fitContent(); } }
   else chart.timeScale().fitContent();
-  const ro = new ResizeObserver(() => { chart.applyOptions({width: el.clientWidth}); });
+  const ro = new ResizeObserver(() => { try { chart.applyOptions({width: el.clientWidth}); } catch (e) {} });
   ro.observe(el); B.ro = ro;
   discBubStats();
 }
@@ -7913,6 +7919,38 @@ async function discStudyPayload() {
   return {space, opts: st.opts || {}};
 }
 
+async function discFullTest() {
+  const btn = document.getElementById('disc-ft-btn'), panel = document.getElementById('disc-ft');
+  const r = await fetch('/api/disc/fulltest', {method: 'POST'}).catch(() => null);
+  if (!r?.ok && r?.status !== 409) { showError('تست سراسری شروع نشد.'); return; }
+  btn.disabled = true; panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">⏳ تست سراسری در حال اجرا (حدود ۲ دقیقه) ...</div>';
+  const t = setInterval(async () => {
+    const s = await fetch('/api/disc/fulltest/status').catch(() => null);
+    if (!s?.ok) return;
+    const j = await s.json();
+    if (j.running) { panel.innerHTML = `<div class="ob-p">⏳ ${(j.progress || {}).phase || ''} — ${(j.progress || {}).done || 0}/${(j.progress || {}).total || 0}</div>`; return; }
+    if (!j.result) return;
+    clearInterval(t); btn.disabled = false;
+    if (j.result.error) { panel.innerHTML = `<div class="ob-p">خطا: ${(j.result || {}).error || ''}</div>`; return; }
+    discRenderFullTest(j.result);
+  }, 2000);
+}
+
+function discRenderFullTest(res) {
+  const s = res.summary, panel = document.getElementById('disc-ft');
+  const cls = s.fail ? 'bad' : 'ok';
+  const groups = {};
+  res.items.forEach(i => { (groups[i.group] = groups[i.group] || []).push(i); });
+  const mark = {pass: '<span class="pos">✔</span>', fail: '<span class="neg">✘</span>', skip: '<span style="color:var(--muted)">—</span>'};
+  panel.innerHTML = `<div class="dv-head ${cls}">${s.fail ? `❌ ${s.fail} آزمون شکست خورد` : '✅ همهٔ آزمون‌ها گذشت'} — ${s.pass} موفق از ${s.total} آزمون (${res.seconds} ثانیه)</div>
+    ${Object.entries(groups).map(([g, items]) => {
+      const bad = items.filter(i => i.status === 'fail').length;
+      return `<details ${bad ? 'open' : ''} style="margin-top:6px"><summary class="disc-h" style="cursor:pointer" title="گروه آزمون؛ اگر شکستی باشد خودکار باز می‌شود">${g} — ${items.length - bad} از ${items.length} موفق</summary>
+        <table class="disc-tbl" style="width:100%"><tbody>${items.map(i => `<tr><td style="width:24px">${mark[i.status]}</td><td style="text-align:start">${i.name}</td><td style="text-align:start;color:${i.status === 'fail' ? 'var(--red)' : 'var(--muted)'};font-size:10px">${discLtr(i.detail || '')}</td></tr>`).join('')}</tbody></table></details>`;
+    }).join('')}`;
+}
+
 async function discOptimize() {
   const p = discCheckSel(); if (!p) return;
   const btn = document.getElementById('disc-opt-btn');
@@ -7948,6 +7986,7 @@ async function discOptimize() {
         <div style="height:6px;background:var(--brd);border-radius:3px;margin-top:6px"><div style="height:6px;width:${pc}%;background:var(--green);border-radius:3px"></div></div></div>`;
       return;
     }
+    if (!j.result) return;                       // not started yet / result not stored yet: keep waiting
     clearInterval(discOptTimer); discOptTimer = null;
     btn.disabled = false; btn.textContent = '🔧 بهینه‌سازی و مطالعهٔ جامع';
     if (j.result?.error) { panel.innerHTML = `<div class="ob-p">خطا: ${j.result.error}</div>`; return; }

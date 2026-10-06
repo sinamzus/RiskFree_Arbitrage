@@ -1934,6 +1934,33 @@ def create_app(db, scan_callback=None):
     _disc_opt_state = {"running": False, "progress": {}, "result": None}
     _disc_opt_lock = threading.Lock()
 
+    _disc_test_state = {"running": False, "progress": {}, "result": None}
+
+    @app.route("/api/disc/fulltest", methods=["POST"])
+    def api_disc_fulltest():
+        """Run the end-to-end suite (synthetic world) in the background."""
+        if _disc_test_state["running"]:
+            return jsonify({"status": "already running"}), 409
+
+        _disc_test_state.update(running=True, progress={"phase": "start"}, result=None)
+
+        def _run():
+            from discount_fulltest import run_all
+            try:
+                _disc_test_state["result"] = run_all(ui=False, progress=_disc_test_state["progress"])
+            except Exception as e:
+                logger.exception("fulltest failed")
+                _disc_test_state["result"] = {"error": f"{type(e).__name__}: {e}"}
+            finally:
+                _disc_test_state["running"] = False
+        threading.Thread(target=_run, daemon=True, name="disc-fulltest").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/disc/fulltest/status")
+    def api_disc_fulltest_status():
+        return jsonify({"running": _disc_test_state["running"], "progress": _disc_test_state["progress"],
+                        "result": _disc_test_state["result"]})
+
     @app.route("/api/disc/study_space")
     def api_disc_study_space():
         from discount_study import space_info
@@ -1973,11 +2000,12 @@ def create_app(db, scan_callback=None):
         objective = str(_get("objective", "robust"))
         seed = _num("seed", 7, 0, 10**6, int)
 
+        with _disc_opt_lock:                       # set BEFORE the thread starts so the first poll cannot miss it
+            _disc_opt_state["running"] = True
+            _disc_opt_state["progress"] = {"done": 0, "total": 0, "phase": "setup"}
+            _disc_opt_state["result"] = None
+
         def _run():
-            with _disc_opt_lock:
-                _disc_opt_state["running"] = True
-                _disc_opt_state["progress"] = {"done": 0, "total": 0, "phase": "setup"}
-                _disc_opt_state["result"] = None
             try:
                 if mode == "grid":
                     res = optimize_discount(
