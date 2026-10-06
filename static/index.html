@@ -6381,14 +6381,15 @@ function discRenderFunds() {
       <span style="font-size:10px;color:var(--muted)">دسته یا نامِ هر صندوق را اینجا عوض کنید؛ دائمی ذخیره می‌شود و تشخیص خودکار آن را بازنویسی نمی‌کند.</span>
     </div>
     <div class="disc-tblwrap" style="max-height:420px"><table class="disc-tbl"><thead><tr>
-      <th>شناسه</th><th>نماد (مچ‌شده)</th><th>دسته</th><th>منبع دسته</th><th>روز داده</th>
+      <th>شناسه</th><th>نماد (مچ‌شده)</th><th>نام کامل</th><th>دسته</th><th>منبع دسته</th><th>روز داده</th>
       <th>از</th><th>تا</th><th>NAV میانگین</th><th>نوسان روزانهٔ NAV ٪</th><th>بیشینهٔ حجم روز</th>
     </tr></thead><tbody>${rows.map(f => `<tr id="dfr-${f.symbol_id}">
       <td>${f.symbol_id}</td>
       <td><input type="text" value="${(f.symbol || '').replace(/"/g, '&quot;')}" placeholder="— بی‌نام —"
             onchange="discEditFund(${f.symbol_id}, {symbol: this.value})"></td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis" title="${(f.full_name || '').replace(/"/g, '&quot;')}">${f.full_name || '—'}</td>
       <td><select onchange="discEditFund(${f.symbol_id}, {category: this.value})">${opt(f.category)}</select></td>
-      <td class="src-${f.cat_source}">${{config:'فهرست config', auto:'خودکار', manual:'دستی'}[f.cat_source] || '—'}</td>
+      <td class="src-${f.cat_source}">${{config:'فهرست config', name:'از نام کامل', auto:'آمار NAV', manual:'دستی'}[f.cat_source] || '—'}</td>
       <td>${f.days}</td><td>${gregIntToJalaliStr(f.first)}</td><td>${gregIntToJalaliStr(f.last)}</td>
       <td>${discFmt(f.avg_nav)}</td><td>${f.nav_vol_pct}</td><td>${discFmt(f.max_vol)}</td></tr>`).join('')}</tbody></table></div>`;
 }

@@ -636,6 +636,9 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
             cats = ({int(r[0]): (r[1], r[2], r[3]) for r in conn.execute(
                 "SELECT symbol_id, category, source, score FROM nav_symbol_category")}
                 if "nav_symbol_category" in tables else {})
+            full = ({int(r[0]): r[1] for r in conn.execute(
+                "SELECT symbol_id, name FROM nav_fund_meta WHERE symbol_id IS NOT NULL")}
+                if "nav_fund_meta" in tables else {})
             for r in conn.execute(
                 "SELECT symbol_id, COUNT(DISTINCT date) AS days, MIN(date) AS first, "
                 "MAX(date) AS last, AVG(nav) AS avg_nav, MAX(vol) AS max_vol "
@@ -646,6 +649,7 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
                 out.append({
                     "symbol_id": sid,
                     "symbol": nm[0] if nm else "",
+                    "full_name": full.get(sid, ""),
                     "name_source": ("manual" if nm and nm[1] == -1 else
                                     "matched" if nm else ""),
                     "match_score": nm[1] if nm else 0,

@@ -92,6 +92,23 @@ CREATE TABLE IF NOT EXISTS nav_symbol_category (
     score     REAL DEFAULT 0
 );
 """
+_META_SCHEMA = """
+CREATE TABLE IF NOT EXISTS nav_fund_meta (
+    ins_code  TEXT PRIMARY KEY,
+    symbol    TEXT NOT NULL,
+    name      TEXT DEFAULT '',        -- full TSETMC name (lVal30)
+    market    TEXT DEFAULT '',
+    symbol_id INTEGER                 -- matched dump id (NULL = not matched)
+);
+CREATE TABLE IF NOT EXISTS nav_ref_daily (
+    ins_code TEXT NOT NULL,
+    date     INTEGER NOT NULL,
+    close    REAL DEFAULT 0,
+    vol      INTEGER DEFAULT 0,
+    PRIMARY KEY (ins_code, date)
+);
+CREATE INDEX IF NOT EXISTS ix_nrd_date_vol ON nav_ref_daily(date, vol);
+"""
 _MAP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS nav_symbol_map (
     symbol_id INTEGER PRIMARY KEY,
@@ -274,18 +291,18 @@ def map_symbols(db_path: Path, min_score: int = 6, margin: float = 1.5) -> None:
         taken.add(sym)
         best[sid] = (sym, sc)
 
-    # keep manual rows (matches = -1) that were imported with --import-map
-    manual = {r[0]: r[1] for r in conn.execute(
-        "SELECT symbol_id, symbol FROM nav_symbol_map WHERE matches = -1")}
-    conn.execute("DELETE FROM nav_symbol_map")
+    # Never overwrite names that already exist (TSETMC-matched or manual):
+    # only add names for symbol_ids that have none yet.
+    have = {r[0] for r in conn.execute("SELECT symbol_id FROM nav_symbol_map")}
+    manual = {r[0] for r in conn.execute(
+        "SELECT symbol_id FROM nav_symbol_map WHERE matches = -1")}
     conn.executemany("INSERT INTO nav_symbol_map VALUES (?,?,?)",
-                     [(sid, s, c) for sid, (s, c) in best.items() if sid not in manual])
-    conn.executemany("INSERT INTO nav_symbol_map VALUES (?,?,-1)", list(manual.items()))
+                     [(sid, s, c) for sid, (s, c) in best.items() if sid not in have])
     conn.commit()
 
     all_ids = [r[0] for r in conn.execute(
         "SELECT DISTINCT symbol_id FROM nav_intraday")]
-    mapped = set(best) | set(manual)
+    mapped = {r[0] for r in conn.execute("SELECT symbol_id FROM nav_symbol_map")}
     print(f"mapped {len(mapped)} of {len(all_ids)} symbol_ids "
           f"({len(manual)} manual)")
     weak = [(sid, s, c) for sid, (s, c) in best.items() if c < 15]
@@ -294,8 +311,8 @@ def map_symbols(db_path: Path, min_score: int = 6, margin: float = 1.5) -> None:
               + ", ".join(f"{s}[{c}]" for _, s, c in sorted(weak, key=lambda x: x[1])))
     try:
         from config import FIXED_INCOME_ETFS
-        have = set(best[i][0] for i in best) | set(manual.values())
-        missing = [f["symbol"] for f in FIXED_INCOME_ETFS if f["symbol"] not in have]
+        tickers = {r[0] for r in conn.execute("SELECT symbol FROM nav_symbol_map")}
+        missing = [f["symbol"] for f in FIXED_INCOME_ETFS if f["symbol"] not in tickers]
         print(f"config fixed-income funds NOT mapped ({len(missing)}): "
               + ", ".join(missing))
     except Exception:
@@ -303,6 +320,39 @@ def map_symbols(db_path: Path, min_score: int = 6, margin: float = 1.5) -> None:
     classify(conn)
     _report_unmatched(conn, [i for i in all_ids if i not in mapped], db_path)
     conn.close()
+
+
+
+_GOLD_RE = re.compile(r"طلا|سکه|زرین|مثقال")
+_FI_RE = re.compile(r"درآمد\s*ثابت|درآمدثابت|با\s*درآمد|پایدار|ثابت|اوراق|نوع\s*دوم|بازده")
+_EQ_RE = re.compile(r"سهام|اهرم|بخشی|شاخص|صنعت|منتخب|پالایش|بانک|خودرو|فلزات|دارو|نفت|پتروشیمی|بورس|بازار")
+_OTHER_RE = re.compile(r"زعفران|نقره|کالا|ارز|مختلط|املاک|مسکن|زمین|ساختمان|پروژه|صنایع\s*دستی")
+
+
+def _fa(text: str) -> str:
+    """Arabic -> Persian letters/digits so keyword rules match TSETMC names."""
+    return (text or "").replace("ي", "ی").replace("ك", "ک").replace("\u200c", " ") \
+        .translate(str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789"))
+
+
+def name_category(name: str, symbol: str = "") -> str | None:
+    """fi | gold | equity | other from the fund's full name; None if unknown.
+
+    Order matters: gold and fixed-income are the most specific, then commodity /
+    mixed / real-estate ("other"), then equity keywords.
+    """
+    n = _fa(name)
+    if not n.strip():
+        return None
+    if _GOLD_RE.search(n):
+        return "gold"
+    if _FI_RE.search(n):
+        return "fi"
+    if _OTHER_RE.search(n):
+        return "other"
+    if _EQ_RE.search(n):
+        return "equity"
+    return None
 
 
 def _pearson(a: list[float], b: list[float]) -> float:
@@ -386,6 +436,24 @@ def classify(conn, gold_corr: float = 0.97, fi_vol_pct: float = 0.2,
     for sid in pool:
         vol = statistics.pstdev(rets[sid].values()) * 100
         cat[sid] = ("gold", "auto", vol) if sid in gold else ("equity", "auto", vol)
+
+    # --- full-name rules (from tools/label_nav_funds.py) beat the statistics --
+    conn.executescript(_META_SCHEMA)
+    by_name = agree = 0
+    for sid, nm in conn.execute(
+            "SELECT symbol_id, name FROM nav_fund_meta WHERE symbol_id IS NOT NULL"):
+        c = name_category(nm)
+        if c is None or sid in manual:
+            continue
+        old = cat.get(sid)
+        if old and old[1] == "config":
+            continue                                  # config list is certain
+        by_name += 1
+        agree += 1 if (old and old[0] == c) else 0
+        cat[sid] = (c, "name", old[2] if old else 0.0)
+    if by_name:
+        print(f"name rules: {by_name} funds categorised from their full name "
+              f"({agree} agree with the NAV statistics)")
 
     for sid, c in manual.items():
         cat[sid] = (c, "manual", cat.get(sid, ("", "", 0))[2])
