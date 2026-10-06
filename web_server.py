@@ -1721,7 +1721,8 @@ def create_app(db, scan_callback=None):
             return str(v).lower() not in ("0", "false", "no", "off")
 
         return DiscountParams(
-            capital=_f("capital", d.capital),
+            initial_capital=_f("initial", d.initial_capital),
+            position_pct=_f("pos", d.position_pct),
             entry_discount_pct=_f("entry", d.entry_discount_pct),
             exit_discount_pct=_f("exit", d.exit_discount_pct),
             max_hold_days=int(_f("hold", d.max_hold_days)),
@@ -1842,7 +1843,7 @@ def create_app(db, scan_callback=None):
 
         cats, syms, start, end = _disc_sel(_get)
         base = _disc_params_from(_get)
-        metric = str(_get("opt_metric", "annualized_pct"))
+        metric = str(_get("opt_metric", "portfolio_return_pct"))
         try:
             min_trades = int(float(_get("min_trades", 30)))
             test_frac = float(_get("test_frac", 0.3))

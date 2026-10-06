@@ -1379,6 +1379,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .disc-tbl th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--surf); }
 .disc-tbl td.pos { color:var(--green); font-weight:700; }
 .disc-tbl td.neg { color:var(--red);   font-weight:700; }
+.disc-tbl td { direction:ltr; }
+.disc-tbl td:first-child { direction:rtl; }
+.disc-tbl input[type=text] { direction:rtl; }
 .disc-tbl select, .disc-tbl input[type=text] { background:var(--bg); color:var(--txt); border:1px solid var(--brd);
     border-radius:4px; padding:2px 5px; font-size:var(--fs-xs); font-family:var(--font); }
 .disc-tbl input[type=text] { width:110px; text-align:center; }
@@ -2343,8 +2346,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-start" type="text" readonly placeholder="از ابتدای داده" onclick="jpOpen(this)" style="width:130px;cursor:pointer"></div>
       <div class="bbt-field" title="تاریخ پایان (شمسی، شامل همان روز) — خالی = تا آخرین داده"><label>تا تاریخ</label>
         <input id="disc-end" type="text" readonly placeholder="تا انتهای داده" onclick="jpOpen(this)" style="width:130px;cursor:pointer"></div>
-      <div class="bbt-field" title="سرمایهٔ جداگانه برای هر صندوق، به میلیون ریال (۱۰۰۰ = یک میلیارد ریال). نتیجهٔ صندوق‌ها جمع می‌شود."><label>سرمایه هر صندوق (میلیون ریال)</label>
-        <input id="disc-capital" type="number" step="100" min="1" value="1000" style="width:130px"></div>
+      <div class="bbt-field" title="سرمایهٔ اولیهٔ کل حساب، به میلیون ریال (۱۰۰۰۰ = ده میلیارد ریال). همهٔ صندوق‌ها از همین یک حساب خرید می‌کنند."><label>سرمایه اولیه (میلیون ریال)</label>
+        <input id="disc-capital" type="number" step="1000" min="1" value="10000" style="width:130px"></div>
+      <div class="bbt-field" title="هر پوزیشن جدید حداکثر این درصد از «سرمایهٔ همان لحظه» (نقد + بهای پوزیشن‌های باز) است؛ پس با رشد یا افت سرمایه، اندازه هم تغییر می‌کند (مرکب)."><label>حداکثر سهم هر پوزیشن ٪ از سرمایهٔ آن لحظه</label>
+        <input id="disc-pos" type="number" step="1" min="0.1" max="100" value="10" style="width:90px"></div>
     </div>
 
     <div class="bbt-group-h">۲) قواعد ورود و تغییر پوزیشن</div>
@@ -2378,9 +2383,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div class="bbt-actions">
       <div class="bbt-field bbt-metric"><label>معیار بهینه‌ساز</label>
         <select id="disc-optmetric">
+          <option value="portfolio_return_pct">بازده کل پرتفوی (سرمایهٔ نهایی)</option>
+          <option value="cagr_pct">بازده سالانهٔ مرکب</option>
+          <option value="net_profit">سود خالص</option>
           <option value="annualized_pct">بازده سالانهٔ سرمایهٔ درگیر</option>
-          <option value="total_net_pnl">سود کل</option>
-          <option value="total_return_pct">بازده کل ٪</option>
           <option value="profit_factor">Profit Factor</option></select></div>
       <div class="bbt-field" title="ترکیب‌هایی که در بازهٔ آموزش کمتر از این‌قدر معامله دارند رد می‌شوند"><label>حداقل معامله</label>
         <input id="disc-mintrades" type="number" step="5" value="30" style="width:64px"></div>
@@ -6238,7 +6244,7 @@ function renderMMOptimize(res) {
   }
   const b = res.best, bp = b.params, bs = b.summary, fmt = n => (+n||0).toLocaleString('en-US');
   const best = `<div id="bbt-opt-best">
-    <div class="ob-h">🏆 بهترین ترکیبِ بازارگردانی (معیار: ${({annualized_pct:'بازده سالانه', total_net_pnl:'سود کل', total_return_pct:'بازده کل', profit_factor:'Profit Factor'})[res.opt_metric] || res.opt_metric})</div>
+    <div class="ob-h">🏆 بهترین ترکیبِ بازارگردانی (معیار: ${({portfolio_return_pct:'بازده کل پرتفوی', cagr_pct:'بازده سالانهٔ مرکب', net_profit:'سود خالص', annualized_pct:'بازده سالانهٔ سرمایهٔ درگیر', profit_factor:'Profit Factor'})[res.opt_metric] || res.opt_metric})</div>
     <div class="ob-p">
       اسپرد <b>${(bp.quote_spread_pct*100).toFixed(2)}%</b> · حجم <b>${fmt(bp.order_volume)}</b>
       · skew <b>${(bp.skew_pct_per_unit*100).toFixed(2)}%</b> · مرکز <b>${bp.center_mode}</b>
@@ -6314,7 +6320,7 @@ function discParams() {
     symbols: v('disc-symbols').trim(),
     start: document.getElementById('disc-start').dataset.greg || '',
     end:   document.getElementById('disc-end').dataset.greg || '',
-    capital: String((+v('disc-capital') || 0) * 1e6), entry: v('disc-entry'), exit: v('disc-exit'),
+    initial: String((+v('disc-capital') || 0) * 1e6), pos: v('disc-pos'), entry: v('disc-entry'), exit: v('disc-exit'),
     hold: v('disc-hold'), stop: v('disc-stop'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
@@ -6328,7 +6334,8 @@ function discParams() {
 function discCheckSel() {
   const p = discParams();
   if (!p.symbols && !p.cats) { showError('حداقل یک دستهٔ صندوق را انتخاب کنید.'); return null; }
-  if (!(+p.capital > 0)) { showError('سرمایه (میلیون ریال) باید بزرگ‌تر از صفر باشد.'); return null; }
+  if (!(+p.initial > 0)) { showError('سرمایهٔ اولیه (میلیون ریال) باید بزرگ‌تر از صفر باشد.'); return null; }
+  if (!(+p.pos > 0 && +p.pos <= 100)) { showError('سهم هر پوزیشن باید بین ۰ و ۱۰۰ درصد باشد.'); return null; }
   if (p.start && p.end && +p.start > +p.end) { showError('تاریخ شروع بعد از تاریخ پایان است.'); return null; }
   return p;
 }
@@ -6339,8 +6346,10 @@ function discScopeText(cats, symbols) {
 }
 
 const discFmt = n => Math.round(+n || 0).toLocaleString('en-US');
+const discTime = t => { const x = String(Math.round(+t || 0)).padStart(6, '0'); return x.slice(0, 2) + ':' + x.slice(2, 4); };
 const discCls = n => (+n || 0) >= 0 ? 'pos' : 'neg';
-const discCard = (k, v, cls) => `<div class="opt-mc"><div class="omk">${k}</div><div class="omv ${cls || ''}">${v}</div></div>`;
+const discLtr = v => String(v).replace(/[-+]?\d[\d.,]*%?/g, m => `<bdi dir="ltr">${m}</bdi>`);
+const discCard = (k, v, cls) => `<div class="opt-mc"><div class="omk">${k}</div><div class="omv ${cls || ''}">${discLtr(v)}</div></div>`;
 
 let _discFunds = [];
 async function discToggleFunds() {
@@ -6424,18 +6433,47 @@ async function discBacktest() {
   renderDiscBacktest(res, p);
 }
 
+const discM = n => ((+n || 0) / 1e6).toLocaleString('en-US', {maximumFractionDigits: 1});
+
+function discCurveSvg(curve, initial) {
+  if (!curve || curve.length < 2) return '';
+  const W = 760, H = 130, L = 6, R = 6, T = 8, B = 8;
+  const ys = curve.map(c => c[1]).concat([initial]);
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const sx = i => L + (W - L - R) * i / (curve.length - 1);
+  const sy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const pts = curve.map((c, i) => sx(i).toFixed(1) + ',' + sy(c[1]).toFixed(1)).join(' ');
+  const last = curve[curve.length - 1][1];
+  const col = last >= initial ? 'var(--green)' : 'var(--red)';
+  return `<div style="font-size:11px;color:var(--sub);display:flex;gap:16px;flex-wrap:wrap;margin-bottom:4px">
+      <span>از ${gregIntToJalaliStr(curve[0][0])}: <b>${discLtr(discM(initial))}</b> م.ر</span>
+      <span>تا ${gregIntToJalaliStr(curve[curve.length - 1][0])}: <b style="color:${col}">${discLtr(discM(last))}</b> م.ر</span>
+      <span style="color:var(--muted)">(خط‌چین = سرمایهٔ اولیه)</span></div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
+    <line x1="${L}" x2="${W - R}" y1="${sy(initial).toFixed(1)}" y2="${sy(initial).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8"/>
+  </svg>`;
+}
+
 function renderDiscBacktest(res, p) {
   const s = res.summary || {};
-  const cls = discCls(s.total_net_pnl);
+  const cls = discCls(s.net_profit);
   const rs = s.exit_reasons || {};
   const reasonTxt = Object.keys(rs).map(k => ({signal:'خروج سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[k] || k) + ' ' + rs[k]).join(' · ') || '—';
+  const per = res.period ? `${gregIntToJalaliStr(res.period[0])} تا ${gregIntToJalaliStr(res.period[1])} (${s.period_days || 0} روز)` : '';
   document.getElementById('disc-cards').innerHTML = `
-    <div class="disc-h">نتیجه — ${discScopeText(p.cats, p.symbols)} · ${res.funds_tested} صندوق دارای داده${res.funds_skipped ? ' (' + res.funds_skipped + ' بدون داده)' : ''}</div>
+    <div class="disc-h">نتیجه — ${discScopeText(p.cats, p.symbols)} · ${res.funds_tested} صندوق دارای داده${res.funds_skipped ? ' (' + res.funds_skipped + ' بدون داده)' : ''} · ${per}</div>
     <div class="opt-metric-row">
-    ${discCard('سود/زیان کل', discFmt(s.total_net_pnl) + ' ﷼', cls)}
-    ${discCard('بازده کل', (s.total_return_pct||0) + '%', cls)}
-    ${discCard('بازده سالانهٔ سرمایهٔ درگیر', (s.annualized_pct||0) + '%', cls)}
-    ${discCard('تعداد معامله', s.trade_count||0)}
+    ${discCard('سرمایهٔ اولیه', discM(s.initial_capital) + ' میلیون ﷼')}
+    ${discCard('💰 سرمایهٔ نهایی', discM(s.final_capital) + ' میلیون ﷼', cls)}
+    ${discCard('سود/زیان خالص', discM(s.net_profit) + ' میلیون ﷼', cls)}
+    ${discCard('بازده کل', (s.portfolio_return_pct||0) + '%', cls)}
+    ${discCard('بازده سالانهٔ مرکب', s.cagr_pct == null ? '— (بازه کوتاه)' : s.cagr_pct + '%', cls)}
+    ${discCard('افت سرمایه (حداکثر)', (s.max_equity_drawdown_pct||0) + '%')}
+    ${discCard('میانگین / اوج سرمایهٔ درگیر', (s.avg_exposure_pct||0) + '% / ' + (s.peak_exposure_pct||0) + '%')}
+    ${discCard('پوزیشن اجراشده / ردشده', (s.accepted_positions||0) + ' / ' + (s.skipped_positions||0))}
     ${discCard('نرخ برد', (s.win_rate||0) + '%')}
     ${discCard('میانگین بازده معامله', (s.avg_net_pct||0) + '%', discCls(s.avg_net_pct))}
     ${discCard('میانگین نگه‌داری', (s.avg_hold_days||0) + ' روز')}
@@ -6443,10 +6481,12 @@ function renderDiscBacktest(res, p) {
     ${discCard('میانگین تخفیف ورود', (s.avg_disc_entry_pct||0) + '%')}
     ${discCard('میانگین تخفیف خروج', (s.avg_disc_exit_pct||0) + '%')}
     ${discCard('کارمزد کل', discFmt(s.total_fees) + ' ﷼')}
-    ${discCard('افت سرمایه', (s.max_drawdown_pct||0) + '%')}
-    ${discCard('بهترین / بدترین', (s.best_pct||0) + '% / ' + (s.worst_pct||0) + '%')}
+    ${discCard('بهترین / بدترین معامله', (s.best_pct||0) + '% / ' + (s.worst_pct||0) + '%')}
     ${discCard('نوع خروج', reasonTxt)}
-  </div>`;
+  </div>
+  <div class="disc-h">رشد سرمایه (ارزش دفتری؛ در لحظهٔ بسته‌شدن هر معامله)</div>
+  ${discCurveSvg(res.equity_curve, s.initial_capital)}
+  <div style="margin-top:4px;font-size:10px;color:var(--muted);line-height:1.7">«سرمایهٔ همان لحظه» = نقد + بهای خریدِ پوزیشن‌های باز. پوزیشن‌های ردشده یعنی نقد برای حداقل یک‌چهارم اندازهٔ هدف کافی نبود.</div>`;
 
   const ps = (res.per_symbol || []).slice(0, 40);
   const psEl = document.getElementById('disc-persym');
@@ -6463,17 +6503,17 @@ function renderDiscBacktest(res, p) {
   const rows = tr.slice(0, LIM).map(t => {
     const c = discCls(t.net_pnl);
     const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[t.exit_reason] || t.exit_reason;
-    return `<tr><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${fmtTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
-      <td>${t.disc_entry_pct}%</td><td>${fmtTime(t.exit_date)}</td><td>${fmtTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
-      <td>${t.disc_exit_pct}%</td><td>${discFmt(t.volume)}</td><td>${t.hold_days}</td>
+    return `<tr><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
+      <td>${t.disc_entry_pct}%</td><td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
+      <td>${t.disc_exit_pct}%</td><td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
       <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td></tr>`;
   }).join('');
   document.getElementById('disc-trades').innerHTML = `<div class="disc-h">معاملات${tr.length > LIM ? ` (${LIM} مورد اول از ${tr.length})` : ` (${tr.length})`}</div>
     <div class="disc-tblwrap" style="max-height:480px"><table class="disc-tbl"><thead><tr>
       <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود</th>
-      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>حجم</th><th>روز</th>
+      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
       <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="15" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
+    </tr></thead><tbody>${rows || '<tr><td colspan="16" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
   document.getElementById('disc-note').textContent = '';
 }
 
@@ -6547,15 +6587,15 @@ function renderDiscOptimize(res, p) {
     const q = r.params, tr = r.train, te = r.test;
     return `<tr class="${i === 0 ? 'best' : ''}">
       <td>${q.entry_discount_pct}</td><td>${q.exit_discount_pct}</td><td>${q.max_hold_days}</td><td>${q.stop_loss_pct}</td>
-      <td>${tr.trade_count}</td><td>${tr.win_rate}%</td><td>${tr.annualized_pct}</td><td class="${discCls(tr.total_net_pnl)}">${discFmt(tr.total_net_pnl)}</td>
-      <td>${te.trade_count}</td><td>${te.win_rate}%</td><td>${te.annualized_pct}</td><td class="${discCls(te.total_net_pnl)}">${discFmt(te.total_net_pnl)}</td></tr>`;
+      <td>${tr.trade_count}</td><td>${tr.win_rate}%</td><td class="${discCls(tr.net_profit)}">${discM(tr.final_capital)}</td><td>${tr.portfolio_return_pct}%</td>
+      <td>${te.trade_count}</td><td>${te.win_rate}%</td><td class="${discCls(te.net_profit)}">${discM(te.final_capital)}</td><td>${te.portfolio_return_pct}%</td></tr>`;
   };
   panel.innerHTML = `<div id="bbt-opt-best">
     <div class="ob-h">🏆 بهترین ترکیب — ${discScopeText(p.cats, p.symbols)} · ${res.funds} صندوق (معیار: ${res.opt_metric})</div>
     <div class="ob-p">
       ورود <b>${bp.entry_discount_pct}%</b> · خروج <b>${bp.exit_discount_pct}%</b> · نگه‌داری <b>${bp.max_hold_days}</b> روز · حد ضرر <b>${bp.stop_loss_pct}%</b><br>
-      آموزش (${gregIntToJalaliStr(res.train_range[0])} تا ${gregIntToJalaliStr(res.train_range[1])}): بازده سالانه <b>${b.train.annualized_pct}%</b> · ${b.train.trade_count} معامله ·
-      <b>خارج از نمونه</b> (${gregIntToJalaliStr(res.test_range[0])} تا ${gregIntToJalaliStr(res.test_range[1])}): بازده سالانه <b>${b.test.annualized_pct}%</b> · ${b.test.trade_count} معامله · سود <b>${discFmt(b.test.total_net_pnl)}</b> ﷼
+      آموزش (${gregIntToJalaliStr(res.train_range[0])} تا ${gregIntToJalaliStr(res.train_range[1])}): سرمایه از <b>${discM(b.train.initial_capital)}</b> به <b>${discM(b.train.final_capital)}</b> میلیون ﷼ (<b>${b.train.portfolio_return_pct}%</b>) · ${b.train.trade_count} معامله<br>
+      <b>خارج از نمونه</b> (${gregIntToJalaliStr(res.test_range[0])} تا ${gregIntToJalaliStr(res.test_range[1])}): سرمایه از <b>${discM(b.test.initial_capital)}</b> به <b>${discM(b.test.final_capital)}</b> میلیون ﷼ (<b>${b.test.portfolio_return_pct}%</b>) · ${b.test.trade_count} معامله
     </div>
     <div class="ob-p" style="color:var(--muted)">اگر بازده «خارج از نمونه» خیلی پایین‌تر از آموزش یا منفی است، ترکیب روی گذشته overfit شده — به آن تکیه نکنید.</div>
     <button id="bbt-opt-apply" onclick='discApplyOpt(${JSON.stringify(bp)})'>اعمال و اجرای بک‌تست ▸</button>
@@ -6563,8 +6603,8 @@ function renderDiscOptimize(res, p) {
   <table id="bbt-opt-table"><thead><tr>
     <th colspan="4">پارامترها</th><th colspan="4">آموزش</th><th colspan="4">خارج از نمونه</th></tr><tr>
     <th>ورود٪</th><th>خروج٪</th><th>روز</th><th>حد ضرر٪</th>
-    <th>معامله</th><th>برد</th><th>سالانه٪</th><th>سود</th>
-    <th>معامله</th><th>برد</th><th>سالانه٪</th><th>سود</th>
+    <th>معامله</th><th>برد</th><th>سرمایه نهایی (م.ر)</th><th>بازده</th>
+    <th>معامله</th><th>برد</th><th>سرمایه نهایی (م.ر)</th><th>بازده</th>
   </tr></thead><tbody>${(res.top || []).map(row).join('')}</tbody></table>`;
 }
 

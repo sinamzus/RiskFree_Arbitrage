@@ -21,7 +21,8 @@ Profit is ALWAYS computed from traded prices, never from NAV:
 * buy  at  last · (1 + half_spread)      (assumed spread — no order book here)
 * sell at  last · (1 − half_spread)
 * fees:    BUYER_COMMISSION on the buy, SELLER_COMMISSION + SELLER_TAX on the sell
-* size:    min(capital, participation% of that day's total traded volume)
+* size:    position_pct % of the CURRENT capital (cash + cost of open positions),
+           limited by cash, and by participation% of that day's total volume
 * a quote is only used when the cumulative volume grew since the previous
   snapshot (``require_fresh``) so a stale "last" price never fills an order.
 
@@ -38,7 +39,11 @@ exit  : last ≥ NAV·(1 − exit_discount_pct/100)             → sell  ("sign
         bid  ≤ entry_price·(1 − stop_loss_pct/100)          → sell  ("stop")
         data ends while holding                             → sell  ("end")
 After any exit the same fund is not re-entered on the same calendar day.
-Each fund is an independent sleeve with ``capital`` rials; results are summed.
+One shared capital pool: every fund is simulated at its maximum liquidity, then all
+trades are replayed in time order against a single account that starts with
+``initial_capital`` and sizes each new position at ``position_pct`` % of the capital
+at that moment (compounding).  If cash is short the position is scaled down (or
+skipped when less than a quarter of the intended size is affordable).
 """
 
 from __future__ import annotations
@@ -68,7 +73,8 @@ CATEGORIES = {
 
 @dataclass
 class DiscountParams:
-    capital: float = 1_000_000_000      # rials per fund sleeve
+    initial_capital: float = 10_000_000_000   # rials, one shared pool
+    position_pct: float = 10.0          # max % of the CURRENT capital in one position
     entry_discount_pct: float = 0.50    # buy when price ≤ NAV·(1−this/100)
     exit_discount_pct: float = 0.0      # sell when price ≥ NAV·(1−this/100); <0 = wait for premium
     max_hold_days: int = 10             # calendar days; 0 = no limit
@@ -104,6 +110,7 @@ class Trade:
     net_pct: float
     hold_days: int
     exit_reason: str            # signal | time | stop | end
+    scale: float = 1.0          # share of the maximum-liquidity position actually taken
 
 
 # --------------------------------------------------------------------------- #
@@ -111,6 +118,7 @@ class Trade:
 # --------------------------------------------------------------------------- #
 
 _ORD: dict[int, int] = {}
+_SIM_CAPITAL = 1e15      # per-fund simulation is liquidity-limited only; sizing happens in _replay
 
 
 def _ord(date_int: int) -> int:
@@ -226,14 +234,17 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams) -
         pos -= units
         cost -= cost_part
 
-    for o, d, t, nav, last, fresh in rows:
+    last_i = len(rows) - 1
+    for i, (o, d, t, nav, last, fresh) in enumerate(rows):
         if p.require_fresh and not fresh:
             continue
         if pos == 0:
+            if i == last_i:
+                continue                  # never open a position on the final snapshot
             if d == blocked_date or last > nav * ent_mult:
                 continue
             ask = last * (1 + hs)
-            units = min(int(p.capital // ask), _cap(d))
+            units = min(int(_SIM_CAPITAL // ask), _cap(d))
             if units <= 0:
                 continue
             pos, cost = units, units * ask
@@ -311,6 +322,114 @@ def _summarize(trades: list[Trade], base_capital: float) -> dict:
     }
 
 
+def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
+    """Replay maximum-liquidity trades against ONE capital pool, in time order.
+
+    Returns (accepted_trades, portfolio_dict, equity_curve, skipped_positions).
+    A position (all its exit chunks) is scaled by f = min(1, affordable/intended):
+    intended = position_pct % of book capital (cash + open cost); affordable = cash.
+    P&L is linear in size, so scaling a trade is exact (no market impact modelled).
+    """
+    bf, sf = p.buy_fee, p.sell_fee
+    groups: dict[tuple, list[Trade]] = {}
+    for t in trades:
+        groups.setdefault((t.symbol, t.entry_date, t.entry_time), []).append(t)
+    events = []
+    for key, chunks in groups.items():
+        events.append((key[1], key[2], 1, key[0], key, -1))
+        for i, t in enumerate(chunks):
+            same = (t.exit_date, t.exit_time) == (key[1], key[2])
+            events.append((t.exit_date, t.exit_time, 2 if same else 0, key[0], key, i))
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))     # at a tie: other exits, then entries, then own-instant exits
+
+    cash = float(p.initial_capital)
+    invested = 0.0                         # book cost of open positions
+    factor: dict[tuple, float] = {}
+    accepted: list[Trade] = []
+    skipped = 0
+    curve: dict[int, float] = {d0: cash}
+    peak = cash
+    max_dd = 0.0
+    exp_area = 0.0                         # ∑ (invested/equity) · calendar days
+    peak_exp = 0.0
+    last_ord = _ord(d0)
+    first_ord = last_ord
+    for d, t, kind, _sym, key, i in events:
+        o = _ord(d)
+        eq = cash + invested
+        if eq > 0 and o > last_ord:
+            exp_area += (invested / eq) * (o - last_ord)
+        last_ord = max(last_ord, o)
+        if kind == 1:                                            # entry (kind 0/2 = exit chunk)
+            chunks = groups[key]
+            full_cost = sum(c.buy_notional for c in chunks)
+            if full_cost <= 0:
+                continue
+            intended = p.position_pct / 100.0 * eq * (1 + bf)    # cash needed incl. fee
+            amount = min(intended, cash)
+            if intended <= 0 or amount < 0.25 * intended:
+                skipped += 1
+                continue
+            f = min(1.0, amount / (full_cost * (1 + bf)))
+            if f * chunks[0].volume < 1 and len(chunks) == 1:
+                skipped += 1
+                continue
+            factor[key] = f
+            cash -= f * full_cost * (1 + bf)
+            invested += f * full_cost
+            if eq > 0:
+                peak_exp = max(peak_exp, invested / (cash + invested))
+        else:                                                    # exit chunk
+            f = factor.get(key)
+            if f is None:
+                continue
+            c = groups[key][i]
+            buy_n, sell_n = f * c.buy_notional, f * c.sell_notional
+            cash += sell_n * (1 - sf)
+            invested -= buy_n
+            net = sell_n * (1 - sf) - buy_n * (1 + bf)
+            accepted.append(replace(
+                c, volume=int(c.volume * f), buy_notional=round(buy_n, 0),
+                sell_notional=round(sell_n, 0), fees=round(buy_n * bf + sell_n * sf, 0),
+                net_pnl=round(net, 0), scale=round(f, 4)))
+            eq2 = cash + invested
+            curve[d] = eq2
+            peak = max(peak, eq2)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - eq2) / peak)
+
+    final = cash + invested
+    span_days = max(1, _ord(d1) - first_ord)
+    years = span_days / 365.0
+    cagr = None
+    if final > 0 and p.initial_capital > 0 and years >= 30 / 365.0:
+        cagr = ((final / p.initial_capital) ** (1 / years) - 1) * 100
+    pf = {
+        "initial_capital": round(p.initial_capital, 0),
+        "final_capital": round(final, 0),
+        "net_profit": round(final - p.initial_capital, 0),
+        "portfolio_return_pct": round((final / p.initial_capital - 1) * 100, 3) if p.initial_capital else 0,
+        "cagr_pct": round(cagr, 2) if cagr is not None else None,
+        "max_equity_drawdown_pct": round(max_dd * 100, 3),
+        "avg_exposure_pct": round(exp_area / span_days * 100, 1),
+        "peak_exposure_pct": round(peak_exp * 100, 1),
+        "skipped_positions": skipped,
+        "accepted_positions": len(factor),
+        "period_days": span_days,
+    }
+    ds = sorted(curve)
+    curve_list = [[d, round(curve[d], 0)] for d in ds]
+    return accepted, pf, curve_list, skipped
+
+
+def _portfolio_summary(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
+    accepted, pf, curve, skipped = _replay(trades, p, d0, d1)
+    s = _summarize(accepted, p.initial_capital)
+    s.update(pf)
+    s["max_drawdown_pct"] = pf["max_equity_drawdown_pct"]
+    return accepted, s, curve
+
+
 def _per_symbol(trades: list[Trade], capital: float) -> list[dict]:
     by: dict[str, list[Trade]] = {}
     for t in trades:
@@ -336,23 +455,33 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
                           params: DiscountParams | None = None) -> dict:
     p = params or DiscountParams()
     funds = _universe(db, cats, symbols)
-    all_trades: list[Trade] = []
-    tested = skipped = 0
+    raw_trades: list[Trade] = []
+    tested = skipped_funds = 0
     for sid, label in funds:
         rows, day_vol = _prep(db.get_nav_intraday(sid, start, end), p)
         if not rows:
-            skipped += 1
+            skipped_funds += 1
             continue
         tested += 1
-        all_trades.extend(_simulate(label, rows, day_vol, p))
-    all_trades.sort(key=lambda t: (t.entry_date, t.entry_time))
+        raw_trades.extend(_simulate(label, rows, day_vol, p))
+    dates = db.get_nav_intraday_dates(start, end)
+    d0 = dates[0] if dates else (start or 0)
+    d1 = dates[-1] if dates else (end or 0)
+    accepted, summary, curve = _portfolio_summary(raw_trades, p, d0, d1)
+    accepted.sort(key=lambda t: (t.entry_date, t.entry_time))
+    if len(curve) > 400:                       # keep the payload small
+        step = len(curve) / 400.0
+        curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
     return {
         "cats": cats or [],
-        "funds_tested": tested, "funds_skipped": skipped,
+        "funds_tested": tested, "funds_skipped": skipped_funds,
         "params": asdict(p),
-        "trades": [asdict(t) for t in all_trades],
-        "per_symbol": _per_symbol(all_trades, p.capital),
-        "summary": _summarize(all_trades, p.capital * max(tested, 1)),
+        "period": [d0, d1],
+        "signals": len({(t.symbol, t.entry_date, t.entry_time) for t in raw_trades}),
+        "trades": [asdict(t) for t in accepted],
+        "per_symbol": _per_symbol(accepted, p.initial_capital),
+        "equity_curve": curve,
+        "summary": summary,
     }
 
 
@@ -421,10 +550,11 @@ GRID_DEFAULT = {
 }
 
 METRICS = {
-    "total_net_pnl":    "سود کل",
-    "total_return_pct": "بازده کل ٪",
-    "annualized_pct":   "بازده سالانهٔ سرمایهٔ درگیر ٪",
-    "profit_factor":    "Profit Factor",
+    "portfolio_return_pct": "بازده کل پرتفوی ٪ (سرمایهٔ نهایی)",
+    "cagr_pct":             "بازده سالانهٔ مرکب ٪",
+    "net_profit":           "سود خالص (ریال)",
+    "annualized_pct":       "بازده سالانهٔ سرمایهٔ درگیر ٪",
+    "profit_factor":        "Profit Factor",
 }
 
 
@@ -441,7 +571,7 @@ def _combos(base: DiscountParams, grid: dict) -> list[DiscountParams]:
 
 def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | None = None,
                       start: int | None = None, end: int | None = None,
-                      base: DiscountParams | None = None, opt_metric: str = "annualized_pct",
+                      base: DiscountParams | None = None, opt_metric: str = "portfolio_return_pct",
                       min_trades: int = 30, test_frac: float = 0.3, top_n: int = 15,
                       grid: dict | None = None, progress: dict | None = None,
                       progress_lock: threading.Lock | None = None) -> dict:
@@ -449,7 +579,7 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
     then report each top combo's result on the untouched last ``test_frac``."""
     base = base or DiscountParams()
     if opt_metric not in METRICS:
-        opt_metric = "annualized_pct"
+        opt_metric = "portfolio_return_pct"
     combos = _combos(base, grid or GRID_DEFAULT)
     funds = _universe(db, cats, symbols)
     dates = db.get_nav_intraday_dates(start, end)
@@ -475,15 +605,16 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
             with (progress_lock or threading.Lock()):
                 progress["done"] = k + 1
 
-    cap = base.capital * max(len(funds), 1)
+    nxt = next((d for d in dates if d > cut), dates[-1])
     scored = []
     for ci, c in enumerate(combos):
-        s_tr = _summarize(train_tr[ci], cap)
+        _, s_tr, _ = _portfolio_summary(train_tr[ci], c, dates[0], cut)
         if s_tr["trade_count"] < min_trades:
             continue
-        scored.append({"params": asdict(c), "train": s_tr,
-                       "test": _summarize(test_tr[ci], cap),
-                       "_score": s_tr.get(opt_metric, 0)})
+        _, s_te, _ = _portfolio_summary(test_tr[ci], c, nxt, dates[-1])
+        sc = s_tr.get(opt_metric)
+        scored.append({"params": asdict(c), "train": s_tr, "test": s_te,
+                       "_score": sc if sc is not None else -1e18})
     scored.sort(key=lambda r: -r["_score"])
     for r in scored:
         r.pop("_score", None)
@@ -491,7 +622,7 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
         "cats": cats or [], "funds": len(funds), "opt_metric": opt_metric,
         "tested_combos": len(combos), "qualified_combos": len(scored),
         "min_trades": min_trades, "test_frac": test_frac,
-        "train_range": [dates[0], cut], "test_range": [cut, dates[-1]],
+        "train_range": [dates[0], cut], "test_range": [nxt, dates[-1]],
         "best": scored[0] if scored else None,
         "top": scored[:top_n],
     }
