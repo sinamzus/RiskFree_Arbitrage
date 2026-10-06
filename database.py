@@ -551,6 +551,49 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
             }
         return None
 
+    def get_nav_series(self, symbol: str, field: str = "nav") -> dict[int, float]:
+        """Return the recorded daily NAV for *symbol* as ``{YYYYMMDD: nav}``.
+
+        NAV is merged from every place the project ever stored it, with the
+        more authoritative source overriding the weaker one on the same date:
+
+            intraday_orderbook.nav  <  snapshots (last scan of the day)  <  nav_cache
+
+        *field* ∈ {nav, cancel_nav, issue_nav, statistical_nav}.  If the chosen
+        field is 0/missing for a row, the plain ``nav`` of that row is used.
+        """
+        if field not in ("nav", "cancel_nav", "issue_nav", "statistical_nav"):
+            field = "nav"
+        out: dict[int, float] = {}
+
+        def _pick(row) -> float:
+            v = row[field] if field in row.keys() else 0
+            return float(v) if v and v > 0 else float(row["nav"] or 0)
+
+        with self._conn() as conn:
+            # 1) order-book snapshots carry a single NAV column (cancel_nav)
+            for r in conn.execute(
+                "SELECT date, nav FROM intraday_orderbook "
+                "WHERE symbol=? AND nav>0 ORDER BY date, time",
+                (symbol,),
+            ):
+                out[int(r["date"])] = float(r["nav"])
+            # 2) scan snapshots — later scans of a day overwrite earlier ones
+            for r in conn.execute(
+                f"SELECT date, nav, {field} AS f FROM snapshots "
+                "WHERE symbol=? AND nav>0 ORDER BY scanned_at",
+                (symbol,),
+            ):
+                v = r["f"] if r["f"] and r["f"] > 0 else r["nav"]
+                out[int(str(r["date"]).replace("-", ""))] = float(v)
+            # 3) nav_cache — one authoritative row per (symbol, date)
+            for r in conn.execute(
+                "SELECT * FROM nav_cache WHERE symbol=? AND nav>0 ORDER BY date",
+                (symbol,),
+            ):
+                out[int(str(r["date"]).replace("-", ""))] = _pick(r)
+        return out
+
     def get_symbols(self) -> list[str]:
         """Return all distinct symbols stored in the DB."""
         with self._conn() as conn:
