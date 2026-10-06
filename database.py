@@ -624,6 +624,61 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
             return {int(r["symbol_id"]): r["category"] for r in conn.execute(
                 "SELECT symbol_id, category FROM nav_symbol_category")}
 
+    def get_nav_fund_table(self) -> list[dict]:
+        """One row per symbol_id for the fund-list panel (name, category, stats)."""
+        out = []
+        with self._conn() as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            names = ({int(r[0]): (r[1], r[2]) for r in conn.execute(
+                "SELECT symbol_id, symbol, matches FROM nav_symbol_map")}
+                if "nav_symbol_map" in tables else {})
+            cats = ({int(r[0]): (r[1], r[2], r[3]) for r in conn.execute(
+                "SELECT symbol_id, category, source, score FROM nav_symbol_category")}
+                if "nav_symbol_category" in tables else {})
+            for r in conn.execute(
+                "SELECT symbol_id, COUNT(DISTINCT date) AS days, MIN(date) AS first, "
+                "MAX(date) AS last, AVG(nav) AS avg_nav, MAX(vol) AS max_vol "
+                "FROM nav_intraday GROUP BY symbol_id ORDER BY symbol_id"):
+                sid = int(r["symbol_id"])
+                nm = names.get(sid)
+                ct = cats.get(sid)
+                out.append({
+                    "symbol_id": sid,
+                    "symbol": nm[0] if nm else "",
+                    "name_source": ("manual" if nm and nm[1] == -1 else
+                                    "matched" if nm else ""),
+                    "match_score": nm[1] if nm else 0,
+                    "category": ct[0] if ct else "other",
+                    "cat_source": ct[1] if ct else "",
+                    "nav_vol_pct": ct[2] if ct else 0,
+                    "days": r["days"], "first": r["first"], "last": r["last"],
+                    "avg_nav": round(r["avg_nav"] or 0, 0),
+                    "max_vol": r["max_vol"] or 0,
+                })
+        return out
+
+    def set_nav_fund(self, symbol_id: int, symbol: str | None = None,
+                     category: str | None = None) -> None:
+        """Manually name and/or categorise a fund (kept across re-classification)."""
+        with self._conn() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS nav_symbol_map (symbol_id INTEGER "
+                         "PRIMARY KEY, symbol TEXT NOT NULL, matches INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE IF NOT EXISTS nav_symbol_category (symbol_id INTEGER "
+                         "PRIMARY KEY, category TEXT NOT NULL, source TEXT DEFAULT 'auto', "
+                         "score REAL DEFAULT 0)")
+            if symbol is not None:
+                if symbol.strip():
+                    conn.execute("INSERT OR REPLACE INTO nav_symbol_map VALUES (?,?,-1)",
+                                 (symbol_id, symbol.strip()))
+                else:
+                    conn.execute("DELETE FROM nav_symbol_map WHERE symbol_id=?", (symbol_id,))
+            if category is not None:
+                old = conn.execute("SELECT score FROM nav_symbol_category WHERE symbol_id=?",
+                                   (symbol_id,)).fetchone()
+                conn.execute("INSERT OR REPLACE INTO nav_symbol_category VALUES (?,?,'manual',?)",
+                             (symbol_id, category, old[0] if old else 0))
+
     def get_nav_intraday_ids(self) -> list[int]:
         with self._conn() as conn:
             return [int(r[0]) for r in conn.execute(

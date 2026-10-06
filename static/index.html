@@ -1379,6 +1379,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .disc-tbl th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--surf); }
 .disc-tbl td.pos { color:var(--green); font-weight:700; }
 .disc-tbl td.neg { color:var(--red);   font-weight:700; }
+.disc-tbl select, .disc-tbl input[type=text] { background:var(--bg); color:var(--txt); border:1px solid var(--brd);
+    border-radius:4px; padding:2px 5px; font-size:var(--fs-xs); font-family:var(--font); }
+.disc-tbl input[type=text] { width:110px; text-align:center; }
+.disc-tbl td.src-manual { color:var(--blue); }
+.disc-tbl td.src-config { color:var(--green); }
+.disc-tbl tr.saved td { background:rgba(38,166,154,.12); }
 .disc-h { font-size:var(--fs-xs); font-weight:700; color:var(--sub); margin:4px 0 -2px; }
 
 /* ── Options arbitrage tab (mirrors the market-making look) ── */
@@ -2380,6 +2386,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-mintrades" type="number" step="5" value="30" style="width:64px"></div>
       <div class="bbt-field" title="این کسر از آخرِ تاریخ‌ها فقط برای آزمون خارج از نمونه کنار گذاشته می‌شود"><label>آزمون خارج از نمونه</label>
         <input id="disc-testfrac" type="number" step="0.05" value="0.3" style="width:64px"></div>
+      <button class="scan-btn" id="disc-funds-btn" onclick="discToggleFunds()" title="فهرست همهٔ صندوق‌ها، نمادِ مچ‌شده و دسته‌شان — قابل‌ویرایش">📋 فهرست صندوق‌ها</button>
       <button class="scan-btn" id="disc-stats-btn" onclick="discStats()" title="توزیع تخفیف و تازگی NAV هر صندوق — برای انتخاب آستانه‌ها">📊 آمار تخفیف</button>
       <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="جستجوی شبکه‌ای روی ورود/خروج/نگه‌داری/حد ضرر + آزمون خارج از نمونه">🔧 بهینه‌سازی</button>
       <button class="scan-btn" id="disc-run" onclick="discBacktest()">🧪 اجرای بک‌تست</button>
@@ -2387,6 +2394,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div id="disc-note"></div>
   </div>
 
+  <div id="disc-funds" style="display:none"></div>
   <div id="disc-stats" style="display:none"></div>
   <div id="disc-opt" style="display:none"></div>
   <div id="disc-cards"></div>
@@ -6333,6 +6341,73 @@ function discScopeText(cats, symbols) {
 const discFmt = n => Math.round(+n || 0).toLocaleString('en-US');
 const discCls = n => (+n || 0) >= 0 ? 'pos' : 'neg';
 const discCard = (k, v, cls) => `<div class="opt-mc"><div class="omk">${k}</div><div class="omv ${cls || ''}">${v}</div></div>`;
+
+let _discFunds = [];
+async function discToggleFunds() {
+  const el = document.getElementById('disc-funds');
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = '<div class="disc-h">⏳ در حال خواندن ... (بار اول دسته‌بندی هم محاسبه می‌شود)</div>';
+  const r = await fetch('/api/disc/funds').catch(() => null);
+  if (!r?.ok) { el.innerHTML = '<div class="disc-h" style="color:var(--red)">فهرست در دسترس نیست — جدول NAV لحظه‌ای را وارد کنید.</div>'; return; }
+  _discFunds = (await r.json()).funds || [];
+  discRenderFunds();
+}
+
+function discRenderFunds() {
+  const el = document.getElementById('disc-funds');
+  const fc = document.getElementById('disc-f-cat')?.value || '';
+  const fq = (document.getElementById('disc-f-q')?.value || '').trim();
+  const fn = document.getElementById('disc-f-name')?.value || '';
+  const cnt = {}; _discFunds.forEach(f => cnt[f.category] = (cnt[f.category] || 0) + 1);
+  const rows = _discFunds.filter(f =>
+    (!fc || f.category === fc) &&
+    (fn === '' || (fn === 'named' ? !!f.symbol : !f.symbol)) &&
+    (!fq || (f.symbol || '').includes(fq) || String(f.symbol_id).includes(fq)));
+  const opt = (cur) => DISC_CAT_ORDER.map(k => `<option value="${k}" ${k === cur ? 'selected' : ''}>${DISC_CAT_LABEL[k]}</option>`).join('');
+  el.innerHTML = `<div class="disc-h">فهرست صندوق‌ها — ${rows.length} از ${_discFunds.length} ·
+      ${DISC_CAT_ORDER.map(k => `${DISC_CAT_LABEL[k]}: ${cnt[k] || 0}`).join(' · ')}</div>
+    <div class="bbt-group" style="flex-direction:row;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div class="bbt-field"><label>فیلتر دسته</label>
+        <select id="disc-f-cat" onchange="discRenderFunds()" style="width:130px">
+          <option value="">همه</option>${DISC_CAT_ORDER.map(k => `<option value="${k}" ${k === fc ? 'selected' : ''}>${DISC_CAT_LABEL[k]}</option>`).join('')}</select></div>
+      <div class="bbt-field"><label>نام</label>
+        <select id="disc-f-name" onchange="discRenderFunds()" style="width:120px">
+          <option value="" ${fn === '' ? 'selected' : ''}>همه</option>
+          <option value="named" ${fn === 'named' ? 'selected' : ''}>نام‌دار</option>
+          <option value="unnamed" ${fn === 'unnamed' ? 'selected' : ''}>بی‌نام</option></select></div>
+      <div class="bbt-field"><label>جستجو (نماد یا شناسه)</label>
+        <input id="disc-f-q" type="text" value="${fq}" oninput="discRenderFunds()" style="width:150px"></div>
+      <span style="font-size:10px;color:var(--muted)">دسته یا نامِ هر صندوق را اینجا عوض کنید؛ دائمی ذخیره می‌شود و تشخیص خودکار آن را بازنویسی نمی‌کند.</span>
+    </div>
+    <div class="disc-tblwrap" style="max-height:420px"><table class="disc-tbl"><thead><tr>
+      <th>شناسه</th><th>نماد (مچ‌شده)</th><th>دسته</th><th>منبع دسته</th><th>روز داده</th>
+      <th>از</th><th>تا</th><th>NAV میانگین</th><th>نوسان روزانهٔ NAV ٪</th><th>بیشینهٔ حجم روز</th>
+    </tr></thead><tbody>${rows.map(f => `<tr id="dfr-${f.symbol_id}">
+      <td>${f.symbol_id}</td>
+      <td><input type="text" value="${(f.symbol || '').replace(/"/g, '&quot;')}" placeholder="— بی‌نام —"
+            onchange="discEditFund(${f.symbol_id}, {symbol: this.value})"></td>
+      <td><select onchange="discEditFund(${f.symbol_id}, {category: this.value})">${opt(f.category)}</select></td>
+      <td class="src-${f.cat_source}">${{config:'فهرست config', auto:'خودکار', manual:'دستی'}[f.cat_source] || '—'}</td>
+      <td>${f.days}</td><td>${gregIntToJalaliStr(f.first)}</td><td>${gregIntToJalaliStr(f.last)}</td>
+      <td>${discFmt(f.avg_nav)}</td><td>${f.nav_vol_pct}</td><td>${discFmt(f.max_vol)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+async function discEditFund(sid, patch) {
+  const r = await fetch('/api/disc/fund_edit', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(Object.assign({symbol_id: sid}, patch))
+  }).catch(() => null);
+  if (!r?.ok) { showError('ذخیره نشد'); return; }
+  const f = _discFunds.find(x => x.symbol_id === sid);
+  if (f) {
+    if (patch.symbol !== undefined) f.symbol = patch.symbol.trim();
+    if (patch.category !== undefined) { f.category = patch.category; f.cat_source = 'manual'; }
+  }
+  const tr = document.getElementById('dfr-' + sid);
+  if (tr) { tr.classList.add('saved'); setTimeout(() => tr.classList.remove('saved'), 900); }
+  discLoadCats(true);          // refresh the counts above the category checkboxes
+}
 
 async function discBacktest() {
   const p = discCheckSel(); if (!p) return;

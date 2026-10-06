@@ -1780,6 +1780,27 @@ def create_app(db, scan_callback=None):
                         "first": dates[0] if dates else None,
                         "last": dates[-1] if dates else None, "days": len(dates)})
 
+    @app.route("/api/disc/funds")
+    def api_disc_funds():
+        """Fund list with the matched ticker, category and data stats."""
+        if not db.nav_intraday_available():
+            return jsonify({"error": "nav_intraday missing"}), 400
+        api_disc_categories()           # make sure auto-classification has run once
+        return jsonify({"funds": db.get_nav_fund_table()})
+
+    @app.route("/api/disc/fund_edit", methods=["POST"])
+    def api_disc_fund_edit():
+        body = request.get_json(silent=True) or {}
+        try:
+            sid = int(body.get("symbol_id"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "symbol_id required"}), 400
+        cat = body.get("category")
+        if cat is not None and cat not in ("fi", "equity", "gold", "other"):
+            return jsonify({"error": "bad category"}), 400
+        db.set_nav_fund(sid, body.get("symbol"), cat)
+        return jsonify({"ok": True})
+
     @app.route("/api/disc/backtest")
     def api_disc_backtest():
         from discount_backtest import run_discount_backtest
