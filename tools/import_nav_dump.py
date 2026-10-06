@@ -28,6 +28,7 @@ Usage (from the project folder)
     python tools/import_nav_dump.py "C:\\path\\NAV data\\sample.copy.zst"
     python tools/import_nav_dump.py --map            # symbol_id -> ticker
     python tools/import_nav_dump.py --stats          # what is in the table
+    python tools/import_nav_dump.py --import-map data/nav_unmatched.csv  # manual names
 
 The import is resumable-by-rerun: it recreates ``nav_intraday`` each time.
 """
@@ -207,41 +208,159 @@ def import_dump(path: Path, db_path: Path, batch: int = 50_000) -> None:
           f"{bad:,} malformed, {time.time() - t0:.0f}s")
 
 
-def map_symbols(db_path: Path, min_matches: int = 3) -> None:
-    """Match symbol_id -> ticker by (date, day volume, close) vs daily_history."""
+def map_symbols(db_path: Path, min_score: int = 6, margin: float = 1.5) -> None:
+    """Match symbol_id -> ticker by comparing each day's end-of-day row with
+    ``daily_history`` (volume + closing price), then report what is left.
+
+    Scoring per (symbol_id, ticker) over all common dates:
+      +3  day volume equals the dump's volume exactly
+      +1  dump volume within 80-100% of the day volume AND last/close price
+          within 0.3% of daily_history.close_price
+    A pair is accepted if score >= min_score and beats the runner-up by
+    ``margin``x.  Each ticker is assigned to a single symbol_id.
+    """
     conn = sqlite3.connect(db_path, timeout=60)
     conn.executescript(_MAP_SCHEMA)
-    # one row per (symbol_id, date): the last snapshot of the day
     conn.executescript("""
-        DROP TABLE IF EXISTS _navi_day;
+        DROP TABLE IF EXISTS temp._navi_day;
         CREATE TEMP TABLE _navi_day AS
-        SELECT symbol_id, date, MAX(vol) AS vol
-        FROM nav_intraday GROUP BY symbol_id, date;
+        SELECT symbol_id, date, last, close, vol FROM (
+            SELECT symbol_id, date, last, close,
+                   MAX(vol) OVER (PARTITION BY symbol_id, date) AS vol,
+                   ROW_NUMBER() OVER (PARTITION BY symbol_id, date
+                                      ORDER BY time DESC) AS rn
+            FROM nav_intraday)
+        WHERE rn = 1;
+        CREATE INDEX temp.ix_nd ON _navi_day(date);
     """)
-    rows = conn.execute("""
-        SELECT n.symbol_id, d.symbol, COUNT(*) AS c
-        FROM _navi_day n
-        JOIN daily_history d ON d.date = n.date AND d.volume = n.vol AND d.volume > 0
+    pairs = conn.execute("""
+        SELECT n.symbol_id, d.symbol,
+               SUM(CASE
+                     WHEN d.volume > 0 AND d.volume = n.vol THEN 3
+                     WHEN d.volume > 0 AND n.vol <= d.volume AND n.vol >= 0.8 * d.volume
+                          AND d.close_price > 0
+                          AND (ABS(n.last  / d.close_price - 1) < 0.003
+                            OR ABS(n.close / d.close_price - 1) < 0.003) THEN 1
+                     ELSE 0 END) AS score
+        FROM _navi_day n JOIN daily_history d ON d.date = n.date
         GROUP BY n.symbol_id, d.symbol
+        HAVING score > 0
     """).fetchall()
+
+    by_sid: dict[int, list[tuple[int, str]]] = {}
+    for sid, sym, sc in pairs:
+        by_sid.setdefault(sid, []).append((sc, sym))
+    cand: list[tuple[int, int, str]] = []          # (score, sid, symbol)
+    for sid, lst in by_sid.items():
+        lst.sort(reverse=True)
+        top = lst[0]
+        second = lst[1][0] if len(lst) > 1 else 0
+        if top[0] >= min_score and top[0] >= margin * second:
+            cand.append((top[0], sid, top[1]))
+    cand.sort(reverse=True)                        # strongest claim wins a ticker
+    taken: set[str] = set()
     best: dict[int, tuple[str, int]] = {}
-    for sid, sym, c in rows:
-        if c >= min_matches and (sid not in best or c > best[sid][1]):
-            best[sid] = (sym, c)
+    for sc, sid, sym in cand:
+        if sym in taken:
+            continue
+        taken.add(sym)
+        best[sid] = (sym, sc)
+
+    # keep manual rows (matches = -1) that were imported with --import-map
+    manual = {r[0]: r[1] for r in conn.execute(
+        "SELECT symbol_id, symbol FROM nav_symbol_map WHERE matches = -1")}
     conn.execute("DELETE FROM nav_symbol_map")
     conn.executemany("INSERT INTO nav_symbol_map VALUES (?,?,?)",
-                     [(sid, s, c) for sid, (s, c) in best.items()])
+                     [(sid, s, c) for sid, (s, c) in best.items() if sid not in manual])
+    conn.executemany("INSERT INTO nav_symbol_map VALUES (?,?,-1)", list(manual.items()))
     conn.commit()
+
     all_ids = [r[0] for r in conn.execute(
         "SELECT DISTINCT symbol_id FROM nav_intraday")]
+    mapped = set(best) | set(manual)
+    print(f"mapped {len(mapped)} of {len(all_ids)} symbol_ids "
+          f"({len(manual)} manual)")
+    weak = [(sid, s, c) for sid, (s, c) in best.items() if c < 15]
+    if weak:
+        print("low-confidence (score<15): "
+              + ", ".join(f"{s}[{c}]" for _, s, c in sorted(weak, key=lambda x: x[1])))
+    try:
+        from config import FIXED_INCOME_ETFS
+        have = set(best[i][0] for i in best) | set(manual.values())
+        missing = [f["symbol"] for f in FIXED_INCOME_ETFS if f["symbol"] not in have]
+        print(f"config fixed-income funds NOT mapped ({len(missing)}): "
+              + ", ".join(missing))
+    except Exception:
+        pass
+    _report_unmatched(conn, [i for i in all_ids if i not in mapped], db_path)
     conn.close()
-    print(f"mapped {len(best)} of {len(all_ids)} symbol_ids to tickers")
-    for sid, (s, c) in sorted(best.items(), key=lambda x: x[1][0]):
-        print(f"  {sid:>8} -> {s}  ({c} matching days)")
-    miss = [i for i in all_ids if i not in best]
-    if miss:
-        print(f"unmatched symbol_ids ({len(miss)}): {miss[:30]}"
-              + (" ..." if len(miss) > 30 else ""))
+
+
+def _report_unmatched(conn, miss: list[int], db_path: Path) -> None:
+    """Describe the unmatched symbol_ids so they can be identified by hand."""
+    import csv
+    import statistics
+    if not miss:
+        print("all symbol_ids mapped")
+        return
+    rows = []
+    for sid in miss:
+        navs = conn.execute(
+            "SELECT date, nav, last FROM nav_intraday WHERE symbol_id=? "
+            "ORDER BY date, time", (sid,)).fetchall()
+        if not navs:
+            continue
+        per_day: dict[int, float] = {}
+        for d, nav, _ in navs:
+            per_day[d] = nav                      # last NAV of the day
+        seq = [per_day[d] for d in sorted(per_day)]
+        rets = [(b / a - 1) * 100 for a, b in zip(seq, seq[1:]) if a > 0]
+        nav_vol = statistics.pstdev(rets) if len(rets) > 5 else 0.0
+        prem = [abs(l / n - 1) * 100 for _, n, l in navs if l and n > 0]
+        maxvol = conn.execute(
+            "SELECT MAX(vol) FROM nav_intraday WHERE symbol_id=?", (sid,)).fetchone()[0]
+        kind = ("fixed-income?" if nav_vol < 0.2 and len(rets) > 5 else "equity/other?")
+        rows.append({
+            "symbol_id": sid, "days": len(per_day),
+            "first": min(per_day), "last": max(per_day),
+            "median_nav": round(statistics.median(seq), 0),
+            "nav_daily_vol_pct": round(nav_vol, 3),
+            "median_price_vs_nav_pct": round(statistics.median(prem), 3) if prem else 0,
+            "max_day_volume": maxvol or 0, "guess": kind, "symbol": "",
+        })
+    rows.sort(key=lambda r: (-r["days"], r["symbol_id"]))
+    out = db_path.parent / "nav_unmatched.csv"
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    fi = sum(1 for r in rows if r["guess"] == "fixed-income?")
+    print(f"unmatched symbol_ids: {len(rows)}  "
+          f"(guess: {fi} fixed-income-like, {len(rows) - fi} equity/other)")
+    print("top 15 by days of data:")
+    for r in rows[:15]:
+        print(f"  sid={r['symbol_id']:>6} days={r['days']:>3} "
+              f"nav≈{r['median_nav']:>9,.0f} navVol={r['nav_daily_vol_pct']:.3f}% "
+              f"maxVol={r['max_day_volume']:>12,} {r['guess']}")
+    print(f"full list written to: {out}")
+
+
+def import_manual_map(db_path: Path, csv_path: Path) -> None:
+    """Load hand-filled ``symbol_id,symbol`` rows (e.g. from nav_unmatched.csv)."""
+    import csv
+    conn = sqlite3.connect(db_path, timeout=60)
+    conn.executescript(_MAP_SCHEMA)
+    n = 0
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            sym = (r.get("symbol") or "").strip()
+            if sym and (r.get("symbol_id") or "").strip().isdigit():
+                conn.execute("INSERT OR REPLACE INTO nav_symbol_map VALUES (?,?,-1)",
+                             (int(r["symbol_id"]), sym))
+                n += 1
+    conn.commit()
+    conn.close()
+    print(f"imported {n} manual mappings")
 
 
 def stats(db_path: Path) -> None:
@@ -267,10 +386,14 @@ def main() -> None:
     ap.add_argument("--db", default=str(DEFAULT_DB), help="target SQLite db")
     ap.add_argument("--map", action="store_true", help="match symbol_id -> ticker")
     ap.add_argument("--stats", action="store_true", help="print table summary")
+    ap.add_argument("--import-map", metavar="CSV",
+                    help="load hand-filled symbol_id,symbol rows (see nav_unmatched.csv)")
     a = ap.parse_args()
     db = Path(a.db)
     if a.dump:
         import_dump(Path(a.dump), db)
+    if a.import_map:
+        import_manual_map(db, Path(a.import_map))
     if a.map:
         map_symbols(db)
     if a.stats:
