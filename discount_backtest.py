@@ -172,6 +172,32 @@ def _universe(db, cats: list[str] | None, symbols: list[str] | None) -> list[tup
     return [(i, label[i]) for i in ids if kinds.get(i, "other") in want_c]
 
 
+def _warmup_start(start: int | None, p: DiscountParams) -> int | None:
+    """Date to start LOADING from so the per-fund baseline already has history on
+    ``start`` (≈ 2 calendar days per trading day + a week of slack)."""
+    if not start or p.baseline_days <= 0:
+        return start
+    o = _ord(start) - (p.baseline_days * 2 + 7)
+    try:
+        d = _dt.date.fromordinal(max(o, 1))
+    except ValueError:
+        return start
+    return d.year * 10000 + d.month * 100 + d.day
+
+
+def _load(db, sid: int, start: int | None, end: int | None, p: DiscountParams):
+    """(raw_in_range, rows, day_vol): rows are built from the warm-up-extended raw data
+    (so the baseline is ready on day one) but only rows with date >= start are kept."""
+    raw_all = db.get_nav_intraday(sid, _warmup_start(start, p), end)
+    rows, day_vol = _prep(raw_all, p)
+    if start:
+        rows = [r for r in rows if r[1] >= start]
+        raw = [r for r in raw_all if r[0] >= start]
+    else:
+        raw = raw_all
+    return raw, rows, day_vol
+
+
 def _prep(raw: list[tuple], p: DiscountParams):
     """Raw DB rows -> (rows, day_vol).
 
@@ -722,11 +748,10 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     price_series: list[dict] = []
     nav_series: list[dict] = []
     for sid, label in funds:
-        raw = db.get_nav_intraday(sid, start, end)
+        raw, rows, day_vol = _load(db, sid, start, end, p)
         ps, ns = _daily_series(raw, p)
         price_series.append(ps)
         nav_series.append(ns)
-        rows, day_vol = _prep(raw, p)
         if not rows:
             skipped_funds += 1
             continue
@@ -862,7 +887,7 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
             progress.update(done=0, total=len(funds), combos=len(combos), phase="grid")
 
     for k, (sid, label) in enumerate(funds):
-        rows, day_vol = _prep(db.get_nav_intraday(sid, start, end), base)
+        _, rows, day_vol = _load(db, sid, start, end, base)
         if rows:
             tr_rows = [r for r in rows if r[1] <= cut]
             te_rows = [r for r in rows if r[1] > cut]

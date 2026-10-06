@@ -1364,7 +1364,16 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
                background:var(--surf); border:1px solid var(--brd);
                border-radius:8px; padding:12px 14px; flex-shrink:0; }
 #disc-params .bbt-group { flex-direction:row; flex-wrap:wrap; gap:14px; align-items:flex-end; }
-#disc-cats { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+#disc-cats { display:flex; flex-direction:column; gap:6px; }
+.disc-catrow { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.disc-panel { border:1px solid var(--brd); border-radius:6px; padding:8px 10px; background:var(--bg); }
+.disc-ptool { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:6px; }
+.disc-ptool input[type=text] { width:150px; height:26px; padding:3px 7px; background:var(--surf); color:var(--txt);
+    border:1px solid var(--brd); border-radius:5px; font-size:var(--fs-xs); font-family:var(--font); }
+.disc-fgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:3px 12px; max-height:210px; overflow:auto; }
+.disc-fchk { display:flex; align-items:center; gap:5px; font-size:var(--fs-xs); color:var(--sub); cursor:pointer; white-space:nowrap; }
+.disc-fchk.off { opacity:.5; }
+.disc-fchk .fid { color:var(--muted); font-size:10px; }
 .disc-cat { display:flex; align-items:center; gap:6px; cursor:pointer;
             background:var(--bg); border:1px solid var(--brd); border-radius:6px;
             padding:6px 10px; font-size:var(--fs-xs); color:var(--sub); user-select:none; }
@@ -2337,10 +2346,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   </div>
 
   <div id="disc-params">
-    <div class="bbt-group-h">۱) دستهٔ صندوق‌ها — بک‌تست فقط روی دسته‌های انتخاب‌شده اجرا می‌شود</div>
+    <div class="bbt-group-h">۱) دسته و صندوق‌ها — بک‌تست فقط روی صندوق‌های فعالِ دسته‌های روشن اجرا می‌شود (پیش‌فرض: دستهٔ طلا با عیار، گنج، کهربا، طلا)</div>
     <div id="disc-cats"><span style="color:var(--muted);font-size:11px">⏳ در حال خواندن دسته‌ها ...</span></div>
     <div class="bbt-group">
-      <div class="bbt-field" title="اختیاری: فقط همین نمادها (با کاما). نماد بی‌نام را با #شناسه بنویسید، مثل #2276. اگر پر باشد، انتخاب دسته نادیده گرفته می‌شود."><label>نمادهای مشخص (اختیاری)</label>
+      <div class="bbt-field" title="اختیاری: فقط همین نمادها (با کاما). نماد بی‌نام را با #شناسه یا خود شناسه بنویسید، مثل 2276. اگر پر باشد، انتخاب دسته و صندوق‌های بالا نادیده گرفته می‌شود."><label>نمادهای مشخص (اختیاری)</label>
         <input id="disc-symbols" type="text" placeholder="مثلاً: کمند, #2276" style="width:200px"></div>
       <div class="bbt-field" title="تاریخ شروع (شمسی) — خالی = از اولین داده"><label>از تاریخ</label>
         <input id="disc-start" type="text" readonly placeholder="از ابتدای داده" onclick="jpOpen(this)" style="width:130px;cursor:pointer"></div>
@@ -6291,40 +6300,190 @@ function mmApplyOpt(bp) {
 // ══════════════════════════════════════════════════════════════════
 let discOptTimer = null;
 let discCatsLoaded = false;
+let discDatesInit = false;
 const DISC_CAT_ORDER = ['fi', 'equity', 'gold', 'other'];
 const DISC_CAT_LABEL = { fi: 'درآمد ثابت', equity: 'سهامی', gold: 'طلا', other: 'سایر / نامشخص' };
+
+// ── Selection state: which categories are on, and which funds inside them ──────
+// Default: only the gold category, and inside it only عیار، گنج، کهربا، طلا.
+const DISC_SEL_KEY = 'disc_sel_v1';
+const DISC_DEFAULT_GOLD = ['عیار', 'گنج', 'کهربا', 'طلا'];
+const discNorm = s => String(s || '').replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/[‌\s]+/g, '').trim();
+let discSel = { cats: {}, funds: {} };
+let discSelFunds = [];          // selectable funds (duplicates are never offered)
+let discRangeInfo = '';
+
+function discSaveSel() {
+  try { localStorage.setItem(DISC_SEL_KEY, JSON.stringify(discSel)); } catch (e) {}
+}
+
+function discInitSel(funds, useSaved) {
+  let saved = null;
+  if (useSaved) { try { saved = JSON.parse(localStorage.getItem(DISC_SEL_KEY) || 'null'); } catch (e) {} }
+  const want = new Set(DISC_DEFAULT_GOLD.map(discNorm));
+  const gold = funds.filter(f => f.category === 'gold');
+  const matched = gold.filter(f => want.has(discNorm(f.symbol)));
+  const goldDefault = matched.length ? new Set(matched.map(f => f.symbol_id)) : new Set(gold.map(f => f.symbol_id));
+  const sel = { cats: {}, funds: {} };
+  DISC_CAT_ORDER.forEach(k => {
+    sel.cats[k] = saved && saved.cats && k in saved.cats ? !!saved.cats[k] : (k === 'gold');
+  });
+  funds.forEach(f => {
+    if (saved && saved.funds && f.symbol_id in saved.funds) sel.funds[f.symbol_id] = !!saved.funds[f.symbol_id];
+    else sel.funds[f.symbol_id] = f.category === 'gold' ? goldDefault.has(f.symbol_id) : true;
+  });
+  discSel = sel;
+}
+
+function discSelectedIds() {
+  return discSelFunds.filter(f => discSel.cats[f.category] && discSel.funds[f.symbol_id]).map(f => f.symbol_id);
+}
+
+function discSelectedCats() {
+  return DISC_CAT_ORDER.filter(k => discSel.cats[k] && discSelFunds.some(f => f.category === k && discSel.funds[f.symbol_id]));
+}
+
+function discCatCount(k) {
+  const all = discSelFunds.filter(f => f.category === k);
+  return [all.filter(f => discSel.funds[f.symbol_id]).length, all.length];
+}
+
+function discUpdateCounts() {
+  DISC_CAT_ORDER.forEach(k => {
+    const el = document.getElementById('disc-cnt-' + k);
+    if (!el) return;
+    const [on, tot] = discCatCount(k);
+    el.textContent = `${on} از ${tot} صندوق فعال`;
+    document.getElementById('disc-catlab-' + k)?.classList.toggle('on', !!discSel.cats[k]);
+  });
+  const ids = discSelectedIds();
+  const sum = document.getElementById('disc-selsum');
+  if (sum) sum.textContent = `مجموع: ${ids.length} صندوق در بک‌تست`;
+}
+
+function discToggleCat(k, on) { discSel.cats[k] = on; discSaveSel(); discUpdateCounts(); }
+
+function discToggleFund(sid, on, el) {
+  discSel.funds[sid] = on;
+  el?.parentElement?.classList.toggle('off', !on);
+  discSaveSel(); discUpdateCounts();
+}
+
+function discSetAll(k, on) {
+  discSelFunds.filter(f => f.category === k).forEach(f => { discSel.funds[f.symbol_id] = on; });
+  document.querySelectorAll(`#disc-panel-${k} .disc-fchk`).forEach(l => {
+    if (l.style.display === 'none') return;
+    const cb = l.querySelector('input'); const sid = +cb.dataset.sid;
+    // “همه / هیچ” applies to the funds currently visible (respects the search filter)
+    discSel.funds[sid] = on; cb.checked = on; l.classList.toggle('off', !on);
+  });
+  if (on) discSel.cats[k] = true;
+  const cc = document.querySelector(`#disc-catlab-${k} input`); if (cc) cc.checked = !!discSel.cats[k];
+  discSaveSel(); discUpdateCounts();
+}
+
+function discFilterPanel(k, q) {
+  const nq = discNorm(q);
+  document.querySelectorAll(`#disc-panel-${k} .disc-fchk`).forEach(l => {
+    l.style.display = !nq || l.dataset.name.includes(nq) ? '' : 'none';
+  });
+}
+
+function discTogglePanel(k) {
+  const el = document.getElementById('disc-panel-' + k);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function discResetSel() {
+  try { localStorage.removeItem(DISC_SEL_KEY); } catch (e) {}
+  discInitSel(discSelFunds, false);
+  discRenderCats();
+}
+
+function discRenderCats() {
+  const box = document.getElementById('disc-cats');
+  const open = new Set([...document.querySelectorAll('.disc-panel')].filter(e => e.style.display !== 'none').map(e => e.id));
+  const rows = DISC_CAT_ORDER.filter(k => discSelFunds.some(f => f.category === k)).map(k => {
+    const list = discSelFunds.filter(f => f.category === k)
+      .sort((a, b) => (a.symbol ? 0 : 1) - (b.symbol ? 0 : 1) || String(a.symbol).localeCompare(String(b.symbol), 'fa'));
+    const [on, tot] = discCatCount(k);
+    return `<div>
+      <div class="disc-catrow">
+        <label class="disc-cat ${discSel.cats[k] ? 'on' : ''}" id="disc-catlab-${k}">
+          <input type="checkbox" ${discSel.cats[k] ? 'checked' : ''} onchange="discToggleCat('${k}', this.checked)">
+          ${DISC_CAT_LABEL[k]} <span class="dc-n" id="disc-cnt-${k}">${on} از ${tot} صندوق فعال</span></label>
+        <button type="button" class="pill" onclick="discTogglePanel('${k}')">▾ انتخاب صندوق‌ها</button>
+      </div>
+      <div class="disc-panel" id="disc-panel-${k}" style="display:${open.has('disc-panel-' + k) ? '' : 'none'};margin-top:4px">
+        <div class="disc-ptool">
+          <input type="text" placeholder="جستجوی نماد ..." oninput="discFilterPanel('${k}', this.value)">
+          <button type="button" class="pill" onclick="discSetAll('${k}', true)">همه</button>
+          <button type="button" class="pill" onclick="discSetAll('${k}', false)">هیچ</button>
+          <span style="font-size:10px;color:var(--muted)">«همه / هیچ» فقط روی صندوق‌های نمایش‌داده‌شده اعمال می‌شود</span>
+        </div>
+        <div class="disc-fgrid">${list.map(f => {
+          const nm = f.symbol || '#' + f.symbol_id;
+          const checked = !!discSel.funds[f.symbol_id];
+          return `<label class="disc-fchk ${checked ? '' : 'off'}" data-name="${discNorm(nm)}" title="${(f.full_name || '').replace(/"/g, '&quot;')} · ${f.days} روز داده">
+            <input type="checkbox" data-sid="${f.symbol_id}" ${checked ? 'checked' : ''} onchange="discToggleFund(${f.symbol_id}, this.checked, this)">
+            ${nm}${f.symbol ? '' : ''}</label>`;
+        }).join('')}</div>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = rows
+    + `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+         <span id="disc-selsum" style="font-size:11px;color:var(--sub);font-weight:700"></span>
+         <button type="button" class="pill" onclick="discResetSel()" title="فقط دستهٔ طلا با عیار، گنج، کهربا، طلا">↺ پیش‌فرض</button>
+         <span style="font-size:10px;color:var(--muted)">${discRangeInfo}</span></div>`;
+  discUpdateCounts();
+}
+
+function discSetDate(id, jy, jm, jd) {
+  const el = document.getElementById(id);
+  const [gy, gm, gd] = jalaliToGregorian(jy, jm, jd);
+  el.value = `${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')}`;
+  el.dataset.greg = `${gy}${String(gm).padStart(2, '0')}${String(gd).padStart(2, '0')}`;
+}
 
 async function discLoadCats(force) {
   if (discCatsLoaded && !force) return;
   const box = document.getElementById('disc-cats');
-  const r = await fetch('/api/disc/categories').catch(() => null);
-  if (!r?.ok) { box.innerHTML = '<span style="color:var(--red)">خطا در خواندن دسته‌ها</span>'; return; }
-  const j = await r.json();
-  if (!j.available) {
+  const [rc, rf] = await Promise.all([
+    fetch('/api/disc/categories').catch(() => null),
+    fetch('/api/disc/funds').catch(() => null)]);
+  if (!rc?.ok) { box.innerHTML = '<span style="color:var(--red)">خطا در خواندن دسته‌ها</span>'; return; }
+  const j = await rc.json();
+  if (!j.available || !rf?.ok) {
     box.innerHTML = '<span style="color:var(--red)">جدول NAV لحظه‌ای وجود ندارد — اول <code>python tools/import_nav_dump.py &lt;dump.zst&gt; --map</code> را اجرا کنید.</span>';
     return;
   }
+  const all = (await rf.json()).funds || [];
+  discSelFunds = all.filter(f => f.cat_source !== 'dup');       // duplicate ids are never offered
+  discRangeInfo = `دادهٔ NAV: ${gregIntToJalaliStr(j.first)} تا ${gregIntToJalaliStr(j.last)} (${j.days} روز)`;
+  const firstTime = !discCatsLoaded;
   discCatsLoaded = true;
-  const prev = new Set(discSelectedCats());
-  const first = prev.size === 0;
-  box.innerHTML = DISC_CAT_ORDER.filter(k => j.categories[k] && j.categories[k].funds > 0).map(k => {
-    const c = j.categories[k];
-    const checked = first ? (k !== 'other') : prev.has(k);
-    return `<label class="disc-cat ${checked ? 'on' : ''}"><input type="checkbox" value="${k}" ${checked ? 'checked' : ''}
-      onchange="this.parentElement.classList.toggle('on', this.checked)">
-      ${DISC_CAT_LABEL[k]} <span class="dc-n">${c.funds} صندوق${c.named ? ' · ' + c.named + ' نام‌دار' : ''}</span></label>`;
-  }).join('') + `<span style="font-size:10px;color:var(--muted)">دادهٔ NAV: ${gregIntToJalaliStr(j.first)} تا ${gregIntToJalaliStr(j.last)} (${j.days} روز)</span>`;
-}
-
-function discSelectedCats() {
-  return [...document.querySelectorAll('#disc-cats input[type=checkbox]:checked')].map(i => i.value);
+  if (firstTime) discInitSel(discSelFunds, true);
+  else {                                         // keep choices, give new funds the default
+    const keep = discSel;
+    discInitSel(discSelFunds, false);
+    DISC_CAT_ORDER.forEach(k => { if (k in keep.cats) discSel.cats[k] = keep.cats[k]; });
+    discSelFunds.forEach(f => { if (f.symbol_id in keep.funds) discSel.funds[f.symbol_id] = keep.funds[f.symbol_id]; });
+  }
+  discRenderCats();
+  if (!discDatesInit) {                          // default period: 1 Mehr 1404 → today
+    discDatesInit = true;
+    discSetDate('disc-start', 1404, 7, 1);
+    const t = jalaliToday(); discSetDate('disc-end', t[0], t[1], t[2]);
+  }
 }
 
 function discParams() {
   const v = id => document.getElementById(id).value;
+  const ids = discSelectedIds();
   const q = {
     cats: discSelectedCats().join(','),
-    symbols: v('disc-symbols').trim(),
+    symbols: v('disc-symbols').trim() || ids.join(','),
     start: document.getElementById('disc-start').dataset.greg || '',
     end:   document.getElementById('disc-end').dataset.greg || '',
     initial: String((+v('disc-capital') || 0) * 1e6), pos: v('disc-pos'), entry: v('disc-entry'), exit: v('disc-exit'),
@@ -6340,7 +6499,7 @@ function discParams() {
 
 function discCheckSel() {
   const p = discParams();
-  if (!p.symbols && !p.cats) { showError('حداقل یک دستهٔ صندوق را انتخاب کنید.'); return null; }
+  if (!p.symbols) { showError('حداقل یک صندوق را فعال کنید (دستهٔ آن هم باید روشن باشد).'); return null; }
   if (!(+p.initial > 0)) { showError('سرمایهٔ اولیه (میلیون ریال) باید بزرگ‌تر از صفر باشد.'); return null; }
   if (!(+p.pos > 0 && +p.pos <= 100)) { showError('سهم هر پوزیشن باید بین ۰ و ۱۰۰ درصد باشد.'); return null; }
   if (p.start && p.end && +p.start > +p.end) { showError('تاریخ شروع بعد از تاریخ پایان است.'); return null; }
@@ -6348,8 +6507,10 @@ function discCheckSel() {
 }
 
 function discScopeText(cats, symbols) {
-  if (symbols) return 'نمادها: ' + symbols;
-  return (cats || '').split(',').filter(Boolean).map(c => DISC_CAT_LABEL[c] || c).join(' + ') || 'همه';
+  if (symbols && !/^[\d,]+$/.test(symbols)) return 'نمادها: ' + symbols;
+  const parts = DISC_CAT_ORDER.filter(k => discSel.cats[k] && discCatCount(k)[0] > 0)
+    .map(k => `${DISC_CAT_LABEL[k]} (${discCatCount(k)[0]} از ${discCatCount(k)[1]})`);
+  return parts.join(' + ') || 'همه';
 }
 
 const discFmt = n => Math.round(+n || 0).toLocaleString('en-US');
