@@ -2384,7 +2384,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="بیشینهٔ روزهای تقویمیِ نگه‌داری؛ ۰ = بدون سقف"><label>حداکثر نگه‌داری (روز)</label>
         <input id="disc-hold" type="number" step="1" value="10" style="width:70px"></div>
       <div class="bbt-field" title="«بر اساس صندوق»: هر صندوق نسبت به حباب معمول خودش ارزان باشد. «بر اساس شاخص حباب»: میانگین ساده حباب همهٔ صندوق‌های فعال (تعدیل‌شده با حباب معمول هر صندوق) زیر آستانه برود؛ آن‌وقت همهٔ صندوق‌های فعال خریده می‌شوند و خروج وقتی شاخص برگشت. «هر دو»: هم خودِ صندوق ارزان باشد هم شاخص."><label>حالت ورود</label>
-        <select id="disc-entrymode" style="width:260px">
+        <select id="disc-entrymode" style="width:260px" onchange="discStudyBuild()">
           <option value="fund">بر اساس حباب هر صندوق (حالت فعلی)</option>
           <option value="index">بر اساس شاخص حباب (میانگین همهٔ صندوق‌ها)</option>
           <option value="both">هر دو (صندوق ارزان و شاخص ارزان)</option></select></div>
@@ -7832,7 +7832,10 @@ async function discStudyBuild() {
   const on = st.on || Object.fromEntries(sp.dims.map(d => [d.key, true]));
   const o = Object.assign({objective: 'robust', n_samples: 400, blocks: 6, max_seconds: 300, max_universes: 20}, st.opts || {});
   const preset = (k, l, tip) => `<button type="button" class="pill" onclick="discStudyPreset('${k}')" title="${tip}">${l}</button>`;
-  box.innerHTML = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0">
+  const mnow = document.getElementById('disc-entrymode').value;
+  const mtxt = {fund: 'هر صندوق', index: 'شاخص حباب', both: 'هر دو'}[mnow] || mnow;
+  box.innerHTML = `<div class="dv-note" style="font-size:11px;color:var(--sub)">حالت ورودِ فعلی فرم: <b>${mtxt}</b>. اگر «حالت ورود» جستجو نشود، بهینه‌ساز خودکار پارامترهای ورود/خروجِ مربوط به همین حالت را می‌گذارد (در حالت شاخص: «ورود/خروج شاخص»؛ در حالت هر صندوق: «ورود/خروج تخفیف») و پارامترهای بی‌اثر را حذف می‌کند. برای مقایسهٔ حالت‌ها «حالت ورود» را تیک بزنید.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0">
       ${preset('quick', '⚡ سریع (۴ پارامتر)', 'فقط ورود، خروج، نگه‌داری و حد ضرر؛ سریع‌ترین و کم‌ابعادترین مطالعه')}
       ${preset('medium', '◐ متوسط', 'سریع + نوع حد ضرر، تعدیل حباب دائمی، فیلتر بازگشت به میانگین')}
       ${preset('full', '● کامل (همهٔ پارامترها)', 'همهٔ پارامترهای مدل‌شده با هم جستجو و تحلیل می‌شوند')}
@@ -7872,11 +7875,24 @@ function discStudyCollect() {
   return st;
 }
 
+// entry/exit dimensions that matter for the entry mode currently chosen in the form
+function discStudyEntryDims(mode) {
+  return mode === 'index' ? ['index_entry_pct', 'index_exit_pct']
+    : mode === 'both' ? ['entry_discount_pct', 'exit_discount_pct', 'index_entry_pct']
+    : ['entry_discount_pct', 'exit_discount_pct'];
+}
+function discStudyPresetDims(k, sp) {
+  const mode = document.getElementById('disc-entrymode').value;
+  const strip = ['entry_discount_pct', 'exit_discount_pct', 'index_entry_pct', 'index_exit_pct'];
+  const base = (sp.presets[k] || []).filter(d => !strip.includes(d));
+  return k === 'full' ? sp.presets.full : discStudyEntryDims(mode).concat(base);
+}
+
 function discStudyPreset(k) {
   const sp = _discSpace; if (!sp) return;
   const st = discStudyState();
   if (k === 'reset') st.vals = {};
-  else st.on = Object.fromEntries(sp.dims.map(d => [d.key, (sp.presets[k] || []).includes(d.key)]));
+  else st.on = Object.fromEntries(sp.dims.map(d => [d.key, discStudyPresetDims(k, sp).includes(d.key)]));
   discStudySave(st);
   discStudyBuild();
 }

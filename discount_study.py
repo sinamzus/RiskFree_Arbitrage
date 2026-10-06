@@ -269,10 +269,47 @@ class Study:
         self.progress, self.lock = progress, lock
         self.t0 = time.time()
         self.truncated = False
+        self.auto_added: list[str] = []
+        self.dropped: list[str] = []
+        self._adapt_space()
         self.cache_u: dict[tuple, dict] = {}
         self.cache_order: list[tuple] = []
         self.records: list[dict] = []
         self.by_key: dict[tuple, dict] = {}
+
+    # ---- space that matches the entry mode ----------------------------------------
+    def _adapt_space(self):
+        """Make the searched dimensions meaningful for the entry mode(s) in play.
+
+        Per-fund entry/exit thresholds do nothing when the mode is "index" (and vice versa), so a
+        study that kept searching them would silently optimise nothing. Needed dimensions that the
+        user did not select are added with their default values; dimensions that cannot matter in
+        any mode / state of the study are dropped. Both lists are reported."""
+        modes = self.space.get("entry_mode") or [self.base.entry_mode]
+        need = set()
+        if any(m in ("fund", "both") for m in modes):
+            need |= {"entry_discount_pct", "exit_discount_pct"}
+        if any(m in ("index", "both") for m in modes):
+            need.add("index_entry_pct")
+        if "index" in modes:
+            need.add("index_exit_pct")
+        for d in ("entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct"):
+            if d in need and d not in self.space:
+                self.space[d] = list(DIMS[d]["choices"])
+                self.auto_added.append(d)
+            elif d not in need and d in self.space:
+                del self.space[d]
+                self.dropped.append(d)
+        centers = self.space.get("mr_center") or [self.base.mr_center]
+        if all(c == "off" for c in centers):
+            for d in ("mr_window_days", "mr_horizon_days", "mr_min_score"):
+                if d in self.space:
+                    del self.space[d]
+                    self.dropped.append(d)
+        stops = self.space.get("stop_loss_pct") or [self.base.stop_loss_pct]
+        if all(float(x) == 0 for x in stops) and "stop_mode" in self.space:
+            del self.space["stop_mode"]
+            self.dropped.append("stop_mode")
 
     # ---- helpers --------------------------------------------------------------
     def _prog(self, **kw):
@@ -769,6 +806,14 @@ class Study:
 
         # --- plain-language findings -----------------------------------------------------------------------
         findings = []
+        lab = lambda ds: "، ".join(DIMS[d]["label"] for d in ds)          # noqa: E731
+        modes_txt = {"fund": "هر صندوق", "index": "شاخص حباب", "both": "هر دو"}
+        findings.append("حالت ورودِ مورد مطالعه: " + "، ".join(modes_txt.get(m, m) for m in
+                                                            (self.space.get("entry_mode") or [self.base.entry_mode])) + ".")
+        if self.auto_added:
+            findings.append("چون با حالت ورودِ انتخابی لازم بودند، خودکار به جستجو اضافه شدند: " + lab(self.auto_added) + ".")
+        if self.dropped:
+            findings.append("در حالت/تنظیم فعلی هیچ اثری ندارند و از جستجو حذف شدند: " + lab(self.dropped) + ".")
         if self.min_trades < self.min_trades_requested:
             findings.append(f"کمتر از ۲۰ ترکیب به {self.min_trades_requested} معامله در آموزش رسیدند؛ «حداقل معامله» خودکار به {self.min_trades} کاهش یافت. "
                             "نتیجه با نمونهٔ معاملاتیِ کم ضعیف‌تر است؛ بازهٔ بلندتر یا صندوق بیشتر بگیرید.")
@@ -807,6 +852,8 @@ class Study:
                       "n_universes": len(self.cache_order), "seconds": round(time.time() - self.t0, 1),
                       "truncated": self.truncated,
                       "searched": [d for d in ORDER if d in self.space],
+                      "auto_added": self.auto_added, "dropped": self.dropped,
+                      "entry_modes": self.space.get("entry_mode") or [self.base.entry_mode],
                       "labels": {d: DIMS[d]["label"] for d in ORDER}},
             "best": self._row(best), "default": self._row(default_rec) if default_rec else None,
             "top": [self._row(r) for r in top],
