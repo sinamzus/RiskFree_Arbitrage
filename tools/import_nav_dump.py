@@ -327,7 +327,7 @@ def classify(conn, gold_corr: float = 0.97, fi_vol_pct: float = 0.2,
     * equity : everything else with a NAV.
     """
     import statistics
-    conn.executescript(_CAT_SCHEMA)
+    conn.executescript(_CAT_SCHEMA + _MAP_SCHEMA)
     manual = {r[0]: r[1] for r in conn.execute(
         "SELECT symbol_id, category FROM nav_symbol_category WHERE source='manual'")}
     names = {r[0]: r[1] for r in conn.execute(

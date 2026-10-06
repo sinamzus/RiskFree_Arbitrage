@@ -1755,6 +1755,19 @@ def create_app(db, scan_callback=None):
             return jsonify({"available": False, "categories": {}, "error":
                             "nav_intraday missing — run tools/import_nav_dump.py"})
         kinds = db.get_nav_symbol_category()
+        if not kinds:
+            # first time only: classify once and store it permanently
+            try:
+                import sqlite3
+                from tools.import_nav_dump import classify
+                conn = sqlite3.connect(db.path, timeout=60)
+                try:
+                    classify(conn)
+                finally:
+                    conn.close()
+                kinds = db.get_nav_symbol_category()
+            except Exception:
+                logger.exception("auto-classification failed")
         names = db.get_nav_symbol_map()
         counts = {k: {"label": v, "funds": 0, "named": 0} for k, v in CATEGORIES.items()}
         for sid in db.get_nav_intraday_ids():
