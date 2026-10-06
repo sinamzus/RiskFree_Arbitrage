@@ -691,6 +691,8 @@ def build_benchmark(price_series: list[dict], nav_series: list[dict],
     nav_levels, _ = _equal_weight_index(nav_series)
     nav_st = _level_stats(nav_levels)
     reb = _rebalanced_with_fees(price_series, init, p.buy_fee, p.sell_fee)
+    if reb.get("stats") is not None:
+        reb["stats"]["avg_funds"] = st["avg_funds"]
     curve_src = reb.get("curve") or [(d, init * lv) for d, lv in levels]
     curve = [[d, round(v, 0)] for d, v in curve_src]
     if len(curve) > 400:
@@ -699,7 +701,6 @@ def build_benchmark(price_series: list[dict], nav_series: list[dict],
     return {
         "first": levels[0][0], "last": levels[-1][0],
         "funds": sum(1 for s in price_series if len(s) >= 2),
-        "index": st,                                           # theoretical, no costs
         "rebalanced": reb.get("stats", {}),                    # daily rebalance WITH fees
         "buyhold": _buy_and_hold(price_series, init, p.buy_fee, p.sell_fee),
         "nav_index": nav_st,
