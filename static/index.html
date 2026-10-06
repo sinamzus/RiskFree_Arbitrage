@@ -2333,12 +2333,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div class="bbt-group">
       <div class="bbt-field" title="اختیاری: فقط همین نمادها (با کاما). نماد بی‌نام را با #شناسه بنویسید، مثل #2276. اگر پر باشد، انتخاب دسته نادیده گرفته می‌شود."><label>نمادهای مشخص (اختیاری)</label>
         <input id="disc-symbols" type="text" placeholder="مثلاً: کمند, #2276" style="width:200px"></div>
-      <div class="bbt-field"><label>از تاریخ (YYYYMMDD)</label>
-        <input id="disc-start" type="number" placeholder="همه" style="width:110px"></div>
-      <div class="bbt-field"><label>تا تاریخ</label>
-        <input id="disc-end" type="number" placeholder="همه" style="width:110px"></div>
-      <div class="bbt-field" title="سرمایهٔ جداگانه برای هر صندوق (ریال). نتیجهٔ صندوق‌ها جمع می‌شود."><label>سرمایه هر صندوق (ریال)</label>
-        <input id="disc-capital" type="number" step="100000000" value="1000000000" style="width:130px"></div>
+      <div class="bbt-field" title="تاریخ شروع (شمسی) — خالی = از اولین داده"><label>از تاریخ</label>
+        <input id="disc-start" type="text" readonly placeholder="از ابتدای داده" onclick="jpOpen(this)" style="width:130px;cursor:pointer"></div>
+      <div class="bbt-field" title="تاریخ پایان (شمسی، شامل همان روز) — خالی = تا آخرین داده"><label>تا تاریخ</label>
+        <input id="disc-end" type="text" readonly placeholder="تا انتهای داده" onclick="jpOpen(this)" style="width:130px;cursor:pointer"></div>
+      <div class="bbt-field" title="سرمایهٔ جداگانه برای هر صندوق، به میلیون ریال (۱۰۰۰ = یک میلیارد ریال). نتیجهٔ صندوق‌ها جمع می‌شود."><label>سرمایه هر صندوق (میلیون ریال)</label>
+        <input id="disc-capital" type="number" step="100" min="1" value="1000" style="width:130px"></div>
     </div>
 
     <div class="bbt-group-h">۲) قواعد ورود و تغییر پوزیشن</div>
@@ -6292,7 +6292,7 @@ async function discLoadCats(force) {
     return `<label class="disc-cat ${checked ? 'on' : ''}"><input type="checkbox" value="${k}" ${checked ? 'checked' : ''}
       onchange="this.parentElement.classList.toggle('on', this.checked)">
       ${DISC_CAT_LABEL[k]} <span class="dc-n">${c.funds} صندوق${c.named ? ' · ' + c.named + ' نام‌دار' : ''}</span></label>`;
-  }).join('') + `<span style="font-size:10px;color:var(--muted)">دادهٔ NAV: ${j.first} تا ${j.last} (${j.days} روز)</span>`;
+  }).join('') + `<span style="font-size:10px;color:var(--muted)">دادهٔ NAV: ${gregIntToJalaliStr(j.first)} تا ${gregIntToJalaliStr(j.last)} (${j.days} روز)</span>`;
 }
 
 function discSelectedCats() {
@@ -6304,8 +6304,9 @@ function discParams() {
   const q = {
     cats: discSelectedCats().join(','),
     symbols: v('disc-symbols').trim(),
-    start: v('disc-start'), end: v('disc-end'),
-    capital: v('disc-capital'), entry: v('disc-entry'), exit: v('disc-exit'),
+    start: document.getElementById('disc-start').dataset.greg || '',
+    end:   document.getElementById('disc-end').dataset.greg || '',
+    capital: String((+v('disc-capital') || 0) * 1e6), entry: v('disc-entry'), exit: v('disc-exit'),
     hold: v('disc-hold'), stop: v('disc-stop'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
@@ -6319,6 +6320,8 @@ function discParams() {
 function discCheckSel() {
   const p = discParams();
   if (!p.symbols && !p.cats) { showError('حداقل یک دستهٔ صندوق را انتخاب کنید.'); return null; }
+  if (!(+p.capital > 0)) { showError('سرمایه (میلیون ریال) باید بزرگ‌تر از صفر باشد.'); return null; }
+  if (p.start && p.end && +p.start > +p.end) { showError('تاریخ شروع بعد از تاریخ پایان است.'); return null; }
   return p;
 }
 
@@ -6475,8 +6478,8 @@ function renderDiscOptimize(res, p) {
     <div class="ob-h">🏆 بهترین ترکیب — ${discScopeText(p.cats, p.symbols)} · ${res.funds} صندوق (معیار: ${res.opt_metric})</div>
     <div class="ob-p">
       ورود <b>${bp.entry_discount_pct}%</b> · خروج <b>${bp.exit_discount_pct}%</b> · نگه‌داری <b>${bp.max_hold_days}</b> روز · حد ضرر <b>${bp.stop_loss_pct}%</b><br>
-      آموزش (${res.train_range[0]}–${res.train_range[1]}): بازده سالانه <b>${b.train.annualized_pct}%</b> · ${b.train.trade_count} معامله ·
-      <b>خارج از نمونه</b> (${res.test_range[0]}–${res.test_range[1]}): بازده سالانه <b>${b.test.annualized_pct}%</b> · ${b.test.trade_count} معامله · سود <b>${discFmt(b.test.total_net_pnl)}</b> ﷼
+      آموزش (${gregIntToJalaliStr(res.train_range[0])} تا ${gregIntToJalaliStr(res.train_range[1])}): بازده سالانه <b>${b.train.annualized_pct}%</b> · ${b.train.trade_count} معامله ·
+      <b>خارج از نمونه</b> (${gregIntToJalaliStr(res.test_range[0])} تا ${gregIntToJalaliStr(res.test_range[1])}): بازده سالانه <b>${b.test.annualized_pct}%</b> · ${b.test.trade_count} معامله · سود <b>${discFmt(b.test.total_net_pnl)}</b> ﷼
     </div>
     <div class="ob-p" style="color:var(--muted)">اگر بازده «خارج از نمونه» خیلی پایین‌تر از آموزش یا منفی است، ترکیب روی گذشته overfit شده — به آن تکیه نکنید.</div>
     <button id="bbt-opt-apply" onclick='discApplyOpt(${JSON.stringify(bp)})'>اعمال و اجرای بک‌تست ▸</button>
