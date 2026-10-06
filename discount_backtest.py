@@ -124,7 +124,8 @@ class DiscountParams:
     participation_pct: float = 5.0      # max share of the day's volume we can trade; 0 = unlimited
     require_fresh: bool = True          # only trade on snapshots where volume grew
     max_nav_age_days: int = 3           # ignore snapshots whose NAV is older than this
-    session_start: int = 90000          # HHMMSS (Tehran)
+    session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
+    session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
     session_end: int = 123000
     buy_fee: float = BUYER_COMMISSION
     sell_fee: float = SELLER_COMMISSION + SELLER_TAX
@@ -407,6 +408,34 @@ def _mr_summary(label: str, rows: list[tuple], mr: list, p: DiscountParams) -> d
             "eligible_now": by_day[days[-1]] >= p.mr_min_score}
 
 
+def _day_windows(raw: list[tuple]) -> dict[int, tuple[int, int]]:
+    """{date: (t_first, t_last)} — first / last snapshot of the day at which the
+    cumulative volume GREW.  That is the real continuous-trading window of this fund
+    on this day: before it the quote is a pre-open indication (volume still 0, orders
+    cannot execute), after it the quote is stale.  Gold funds, for example, trade
+    11:00-15:00 on some days and 12:00-18:00 on others, so a fixed clock window is wrong."""
+    win: dict[int, list[int]] = {}
+    day, prev = None, 0
+    for r in raw:
+        d, t, vol = r[0], r[1], (r[5] or 0)
+        if d != day:
+            day, prev = d, 0
+        if vol > prev:
+            w = win.get(d)
+            if w is None:
+                win[d] = [t, t]
+            else:
+                w[1] = t
+        prev = max(prev, vol)
+    return {d: (w[0], w[1]) for d, w in win.items()}
+
+
+def _in_session(p: DiscountParams, win: tuple[int, int] | None, t: int) -> bool:
+    if p.session_mode == "fixed":
+        return p.session_start <= t <= p.session_end
+    return win is not None and win[0] <= t <= win[1]
+
+
 def _prep(raw: list[tuple], p: DiscountParams):
     """Raw DB rows -> (rows, day_vol).
 
@@ -421,6 +450,7 @@ def _prep(raw: list[tuple], p: DiscountParams):
     day_vol: dict[int, int] = {}
     prev_vol = 0
     prev_date = 0
+    windows = _day_windows(raw) if p.session_mode != "fixed" else {}
     for d, t, nav, nav_d, last, vol in raw:
         if d != prev_date:
             prev_date, prev_vol = d, 0
@@ -429,7 +459,7 @@ def _prep(raw: list[tuple], p: DiscountParams):
             day_vol[d] = vol
         fresh = vol > prev_vol
         prev_vol = max(prev_vol, vol)
-        if not (p.session_start <= t <= p.session_end):
+        if not _in_session(p, windows.get(d), t):
             continue
         if not last or last <= 0 or not nav or nav <= 0:
             continue
@@ -827,10 +857,11 @@ def _daily_series(raw: list[tuple], p: DiscountParams) -> tuple[dict, dict]:
     """Raw snapshots -> ({date: end-of-day traded price}, {date: end-of-day NAV})."""
     price: dict[int, float] = {}
     nav: dict[int, float] = {}
+    windows = _day_windows(raw) if p.session_mode != "fixed" else {}
     for d, t, n, nav_d, last, vol in raw:             # rows arrive in time order
         if n and n > 0:
             nav[d] = n
-        if last and last > 0 and (vol or 0) > 0 and p.session_start <= t <= p.session_end:
+        if last and last > 0 and (vol or 0) > 0 and _in_session(p, windows.get(d), t):
             price[d] = last
     return price, nav
 

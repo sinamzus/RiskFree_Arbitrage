@@ -1751,6 +1751,7 @@ def create_app(db, scan_callback=None):
             mr_window_days=max(5, int(_f("mrwin", d.mr_window_days))),
             mr_min_score=_f("mrmin", d.mr_min_score),
             mr_horizon_days=max(1, int(_f("mrhor", d.mr_horizon_days))),
+            session_mode=("fixed" if str(get("smode") or d.session_mode) == "fixed" else "auto"),
             session_start=_hhmmss(get("sstart"), d.session_start),
             session_end=_hhmmss(get("send"), d.session_end),
             index_entry_pct=_f("ientry", d.index_entry_pct),

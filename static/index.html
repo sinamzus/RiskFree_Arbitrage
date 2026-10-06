@@ -2427,10 +2427,15 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-sellfee" type="number" step="0.005" value="0.145" style="width:70px"></div>
       <div class="bbt-field" title="NAVهای کهنه‌تر از این‌قدر روز نادیده گرفته می‌شود (برای طلا/سهام مهم است)"><label>حداکثر سن NAV (روز)</label>
         <input id="disc-navage" type="number" step="1" value="3" style="width:70px"></div>
-      <div class="bbt-field" title="ساعت شروع جلسهٔ معاملاتی (وقت تهران، HH:MM). فقط اسنپ‌شات‌های داخل این بازه در بک‌تست و نمودار استفاده می‌شوند. اگر دادهٔ شما ساعت‌های دیگری دارد (مثلاً ۱۱:۳۰ تا ۱۷:۳۰) این را تغییر دهید؛ با «python tools\nav_coverage.py --hours» ساعت واقعی را ببینید."><label>شروع جلسه</label>
-        <input id="disc-sstart" type="text" value="09:00" style="width:64px;direction:ltr"></div>
-      <div class="bbt-field" title="ساعت پایان جلسهٔ معاملاتی (وقت تهران، HH:MM)"><label>پایان جلسه</label>
-        <input id="disc-send" type="text" value="12:30" style="width:64px;direction:ltr"></div>
+      <div class="bbt-field" title="«خودکار از حجم»: برای هر صندوق و هر روز، بازهٔ معامله از اولین تا آخرین لحظه‌ای است که حجم تجمعی بالا رفته. قبل از آن پیش‌گشایش است (سفارش اجرا نمی‌شود) و بعد از آن قیمت کهنه. برای صندوق‌هایی که ساعت معاملهٔ هر روزشان فرق می‌کند (مثلاً طلا ۱۱ تا ۱۵ یا ۱۲ تا ۱۸) این حالت درست است. «ساعت ثابت»: فقط بازهٔ ساعتی دستی."><label>ساعت جلسه</label>
+        <select id="disc-smode" style="width:190px" onchange="document.getElementById('disc-sfix').style.display = this.value === 'fixed' ? '' : 'none'">
+          <option value="auto">خودکار از حجم (هر صندوق، هر روز)</option>
+          <option value="fixed">ساعت ثابت (دستی)</option></select></div>
+      <span id="disc-sfix" style="display:none;gap:6px;align-items:flex-end">
+        <div class="bbt-field" title="شروع جلسه (وقت تهران، HH:MM) — فقط در حالت «ساعت ثابت»"><label>شروع</label>
+          <input id="disc-sstart" type="text" value="09:00" style="width:64px;direction:ltr"></div>
+        <div class="bbt-field" title="پایان جلسه (وقت تهران، HH:MM) — فقط در حالت «ساعت ثابت»"><label>پایان</label>
+          <input id="disc-send" type="text" value="12:30" style="width:64px;direction:ltr"></div></span>
       <label class="chk" title="فقط روی اسنپ‌شات‌هایی که حجم نسبت به قبلی بیشتر شده؛ قیمتِ کهنه سفارش پر نمی‌کند">
         <input id="disc-fresh" type="checkbox" checked> فقط قیمت تازه</label>
     </div>
@@ -6538,7 +6543,7 @@ function discParams() {
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
-    navage: v('disc-navage'), sstart: v('disc-sstart'), send: v('disc-send'),
+    navage: v('disc-navage'), smode: v('disc-smode'), sstart: v('disc-sstart'), send: v('disc-send'),
     fresh: document.getElementById('disc-fresh').checked ? '1' : '0',
   };
   Object.keys(q).forEach(k => { if (q[k] === '' || q[k] == null) delete q[k]; });
@@ -6874,7 +6879,8 @@ const DISC_TIP_RULES = [
   [/^هیچ$/, 'غیرفعال کردن همهٔ صندوق‌هایی که الان در این فهرست دیده می‌شوند.'],
   [/اعمال و اجرای بک‌تست/, 'پارامترهای برتر این سطر را در فرم می‌نویسد و بلافاصله بک‌تست را اجرا می‌کند.'],
   [/^(🔄\s*)?بارگذاری$/, 'داده‌های نمودار را برای بازهٔ فرم و صندوق‌های تیک‌خورده از سرور می‌خواند.'],
-  [/^(شروع|پایان) جلسه/, 'بازهٔ ساعتیِ معتبرِ معامله (وقت تهران).'],
+  [/^خودکار از حجم/, 'بازهٔ معامله هر صندوق در هر روز از روی رشد حجم تعیین می‌شود؛ پیش‌گشایش و بعد از پایان معامله کنار گذاشته می‌شود.'],
+  [/^ساعت ثابت/, 'فقط اسنپ‌شات‌های داخل بازهٔ ساعتیِ دستی (شروع/پایان) استفاده می‌شوند.'],
   [/^کارمزد خرید/, 'کارمزد کارگزاری و بورس هنگام خرید، درصدی از مبلغ معامله (پیش‌فرض ۰٫۱۴۵٪).'],
   [/^کارمزد فروش/, 'کارمزد و مالیات هنگام فروش، درصدی از مبلغ معامله (پیش‌فرض ۰٫۱۴۵٪).'],
   [/^نمایش$/, 'نوع نمایش نمودار: خط زمانی تعاملی، نقشهٔ حرارتی روز×ساعت، یا میانگین حباب بر حسب ساعت.'],

@@ -8,9 +8,9 @@
     python tools\\nav_coverage.py "#2276" --times           # list every snapshot time
     python tools\\nav_coverage.py کهربا --db path\\to\\other.db
 
-Prints, per day: number of snapshots, first/last time, how many have a fresh price
-(volume grew since the previous snapshot) and the usable ones the backtest sees
-(inside the session, positive price and NAV), then an hour histogram.
+Prints, per day: number of snapshots, how many are pre-open (before the first volume
+growth), how many have a fresh price (volume grew), the real trading window
+(first -> last volume growth) and the first/last snapshot, then an hour histogram.
 """
 from __future__ import annotations
 
@@ -152,20 +152,26 @@ def main() -> int:
             by_day[r[0]].append(r)
         hours = Counter()
         tot = 0
-        print(f"{'تاریخ':<11}{'میلادی':<10}{'نقطه':>5}{'تازه':>6}{'قابل‌استفاده':>13}   اولین → آخرین")
+        print(f"{'تاریخ':<11}{'میلادی':<10}{'نقطه':>5}{'پیش‌گشایش':>11}{'تازه':>6}{'جلسهٔ واقعی (از رشد حجم)':>28}   اولین → آخرین نقطه")
         for d in sorted(by_day):
             rs = by_day[d]
             prev = 0
-            fresh = usable = 0
+            fresh = pre = 0
+            first_g = last_g = None
             for _d, t, nav, nav_d, last_p, vol in rs:
                 if (vol or 0) > prev:
                     fresh += 1
+                    if first_g is None:
+                        first_g = t
+                    last_g = t
                 prev = max(prev, vol or 0)
-                if 90000 <= t <= 123000 and last_p and last_p > 0 and nav and nav > 0:
-                    usable += 1
+                if first_g is None:
+                    pre += 1                      # before the first volume growth = pre-open
                 hours[int(t) // 10000] += 1
+            usable = fresh
             tot += len(rs)
-            print(f"{jal(d):<11}{d:<10}{len(rs):>5}{fresh:>6}{usable:>13}   {hhmm(rs[0][1])} → {hhmm(rs[-1][1])}")
+            win = f"{hhmm(first_g)[:5]} → {hhmm(last_g)[:5]}" if first_g is not None else "— (حجمی نبود)"
+            print(f"{jal(d):<11}{d:<10}{len(rs):>5}{pre:>11}{fresh:>6}{win:>28}   {hhmm(rs[0][1])[:5]} → {hhmm(rs[-1][1])[:5]}")
             if a.times:
                 print("    " + "  ".join(hhmm(r[1])[:5] for r in rs))
         print(f"\nجمع: {tot} نقطه در {len(by_day)} روز (میانگین {tot / len(by_day):.1f} در روز)")

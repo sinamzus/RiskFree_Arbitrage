@@ -669,6 +669,20 @@ def self_test() -> dict:
     share_fp = sum(1 for x in sc_rw if x >= 70) / len(sc_rw)
     add("پذیرش اشتباهیِ قدم‌زدن تصادفی در آستانهٔ ۷۰ کم است (≤ ۲۰٪)", share_fp <= 0.20,
         f"{round(share_fp * 100, 1)}٪ از لحظه‌ها")
+    # trading hours differ per fund and day (gold: 11-15 one day, 12-18 the next): the session is
+    # taken from the volume, so pre-open indications and stale post-close quotes are never traded
+    raw_s = []
+    for day, (a, b) in ((20260301, (110000, 150000)), (20260302, (120000, 180000))):
+        raw_s += [(day, a - 3000, 1000.0, day, 980.0, 0), (day, a - 1000, 1000.0, day, 980.0, 0),
+                  (day, a, 1000.0, day, 995.0, 50), (day, a + 10000, 1000.0, day, 996.0, 90),
+                  (day, b, 1000.0, day, 997.0, 120), (day, b + 500, 1000.0, day, 970.0, 120)]
+    win_s = D._day_windows(raw_s)
+    rows_s, _ = D._prep(raw_s, D.DiscountParams(baseline_days=0, session_mode="auto"))
+    got = sorted({(r[1], r[2]) for r in rows_s})
+    want = sorted({(d, t) for d, t, _n, _nd, _l, v in raw_s if v > 0 and win_s[d][0] <= t <= win_s[d][1]})
+    add("ساعت جلسه از روی حجم تعیین می‌شود: پیش‌گشایش و قیمتِ کهنهٔ بعد از بسته‌شدن هرگز معامله نمی‌شود",
+        win_s == {20260301: (110000, 150000), 20260302: (120000, 180000)} and got == want and len(got) == 6,
+        f"بازه‌ها {win_s}، {len(got)} لحظهٔ قابل‌معامله از {len(raw_s)}")
     rws = _synthetic_rows("revert", n_days=120, seed=77)
     for centered in (False, True):
         dev = [r[4] / r[6] - 1.0 for r in rws]
