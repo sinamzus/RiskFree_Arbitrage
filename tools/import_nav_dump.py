@@ -323,34 +323,39 @@ def map_symbols(db_path: Path, min_score: int = 6, margin: float = 1.5) -> None:
 
 
 
-_GOLD_RE = re.compile(r"طلا|سکه|زرین|مثقال")
-_FI_RE = re.compile(r"درآمد\s*ثابت|درآمدثابت|با\s*درآمد|پایدار|ثابت|اوراق|نوع\s*دوم|بازده")
-_EQ_RE = re.compile(r"سهام|اهرم|بخشی|شاخص|صنعت|منتخب|پالایش|بانک|خودرو|فلزات|دارو|نفت|پتروشیمی|بورس|بازار")
-_OTHER_RE = re.compile(r"زعفران|نقره|کالا|ارز|مختلط|املاک|مسکن|زمین|ساختمان|پروژه|صنایع\s*دستی")
-
-
 def _fa(text: str) -> str:
     """Arabic -> Persian letters/digits so keyword rules match TSETMC names."""
     return (text or "").replace("ي", "ی").replace("ك", "ک").replace("\u200c", " ") \
         .translate(str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789"))
 
 
+_TOKEN_SPLIT = re.compile(r"[\s\-\.\(\)/،,؛:]+")
+_GOLD_TOK = ("طلا", "سکه")
+_FI_TOK = ("ثابت", "درآمدثابت", "پایدار", "اوراق", "بازده")
+_OTHER_TOK = ("زعفران", "نقره", "کالا", "املاک", "مسکن", "زمین", "ساختمان", "پروژه", "ارزی")
+_EQ_TOK = ("سهام", "اهرم", "بخشی", "شاخص")
+
+
 def name_category(name: str, symbol: str = "") -> str | None:
     """fi | gold | equity | other from the fund's full name; None if unknown.
 
-    Order matters: gold and fixed-income are the most specific, then commodity /
-    mixed / real-estate ("other"), then equity keywords.
+    Matching is by WORD PREFIX (not substring) so "ارزش" is not read as "ارز".
+    Mixed funds ("مختلط") are deliberately left to the NAV statistics.
+    Order: gold, fixed-income, commodity/real-estate ("other"), equity.
     """
     n = _fa(name)
-    if not n.strip():
+    toks = [t for t in _TOKEN_SPLIT.split(n) if t]
+    if not toks:
         return None
-    if _GOLD_RE.search(n):
+    joined = " ".join(toks)
+    starts = lambda keys: any(t.startswith(k) for t in toks for k in keys)   # noqa: E731
+    if starts(_GOLD_TOK):
         return "gold"
-    if _FI_RE.search(n):
+    if starts(_FI_TOK) or "درآمد ثابت" in joined or "نوع دوم" in joined:
         return "fi"
-    if _OTHER_RE.search(n):
+    if starts(_OTHER_TOK) or "ارز" in toks:
         return "other"
-    if _EQ_RE.search(n):
+    if starts(_EQ_TOK):
         return "equity"
     return None
 
@@ -380,6 +385,8 @@ def classify(conn, gold_corr: float = 0.97, fi_vol_pct: float = 0.2,
     conn.executescript(_CAT_SCHEMA + _MAP_SCHEMA)
     manual = {r[0]: r[1] for r in conn.execute(
         "SELECT symbol_id, category FROM nav_symbol_category WHERE source='manual'")}
+    dups = {r[0] for r in conn.execute(
+        "SELECT symbol_id FROM nav_symbol_category WHERE source='dup'")}
     names = {r[0]: r[1] for r in conn.execute(
         "SELECT symbol_id, symbol FROM nav_symbol_map")}
     try:
@@ -439,22 +446,28 @@ def classify(conn, gold_corr: float = 0.97, fi_vol_pct: float = 0.2,
 
     # --- full-name rules (from tools/label_nav_funds.py) beat the statistics --
     conn.executescript(_META_SCHEMA)
-    by_name = agree = 0
+    by_name = agree = gold_kept = 0
     for sid, nm in conn.execute(
             "SELECT symbol_id, name FROM nav_fund_meta WHERE symbol_id IS NOT NULL"):
         c = name_category(nm)
-        if c is None or sid in manual:
+        if c is None or sid in manual or sid in dups:
             continue
         old = cat.get(sid)
         if old and old[1] == "config":
             continue                                  # config list is certain
+        if old and old[0] == "gold" and c != "gold":
+            gold_kept += 1                            # NAV moves like the gold cluster
+            continue
         by_name += 1
         agree += 1 if (old and old[0] == c) else 0
         cat[sid] = (c, "name", old[2] if old else 0.0)
     if by_name:
         print(f"name rules: {by_name} funds categorised from their full name "
-              f"({agree} agree with the NAV statistics)")
+              f"({agree} agree with the NAV statistics); "
+              f"{gold_kept} kept as gold because their NAV moves exactly like the gold cluster")
 
+    for sid in dups:
+        cat[sid] = ("other", "dup", cat.get(sid, ("", "", 0))[2])
     for sid, c in manual.items():
         cat[sid] = (c, "manual", cat.get(sid, ("", "", 0))[2])
     conn.execute("DELETE FROM nav_symbol_category")

@@ -69,12 +69,18 @@ def _looks_like_fund(name: str) -> bool:
     return any(h in n for h in FUND_NAME_HINTS)
 
 
-def discover(fetcher, conn: sqlite3.Connection, min_funds: int = 150) -> int:
-    """Fill nav_fund_meta with every tradeable fund (ticker + full name)."""
+def discover(fetcher, conn: sqlite3.Connection, min_funds: int = 150,
+             include_all: bool = False) -> int:
+    """Fill nav_fund_meta with every tradeable fund (ticker + full name).
+
+    include_all=True also stores every other tradeable instrument (stocks, ...) —
+    used to find dump ids whose TSETMC name does not contain "صندوق".
+    """
     found: dict[str, dict] = {}
     try:
         for r in fetcher.get_market_watch():
-            if r.get("type") == "fund" or _looks_like_fund(r.get("name", "")):
+            if (r.get("type") == "fund" or _looks_like_fund(r.get("name", ""))
+                    or (include_all and r.get("type") in ("stock", "other"))):
                 found[r["ins_code"]] = {"symbol": r["symbol"], "name": r.get("name", ""),
                                         "market": r.get("market", "")}
     except Exception as e:                                   # noqa: BLE001
@@ -210,14 +216,38 @@ def match(conn: sqlite3.Connection, min_score: int = 6, margin: float = 1.5) -> 
         "SELECT ins_code, symbol, name FROM nav_fund_meta")}
     manual = {r[0] for r in conn.execute(
         "SELECT symbol_id FROM nav_symbol_map WHERE matches = -1")}
+
+    # Duplicate ids: an unmatched id whose best ticker is already owned by another
+    # id AND whose day volumes equal that ticker's on most of the days both have data
+    # (the same instrument stored under a second symbol_id).
+    owner = {code: sid for sid, (code, _) in best.items()}
+    dups: dict[int, tuple[str, int]] = {}
+    for sc, sid, code in cands:
+        if sid in best or sid in manual or code not in owner:
+            continue
+        common = conn.execute(
+            "SELECT COUNT(*) FROM (SELECT DISTINCT date FROM nav_intraday WHERE symbol_id=?) a "
+            "JOIN (SELECT DISTINCT date FROM nav_intraday WHERE symbol_id=?) b USING(date)",
+            (sid, owner[code])).fetchone()[0]
+        if common >= 5 and (sc / 3.0) >= 0.5 * common:
+            dups[sid] = (code, owner[code])
     conn.execute("UPDATE nav_fund_meta SET symbol_id = NULL")
     for sid, (code, sc) in best.items():
         conn.execute("UPDATE nav_fund_meta SET symbol_id=? WHERE ins_code=?", (sid, code))
         if sid not in manual:
             conn.execute("INSERT OR REPLACE INTO nav_symbol_map VALUES (?,?,?)",
                          (sid, meta[code][0], sc))
+    for sid, (code, o) in dups.items():
+        conn.execute("INSERT OR REPLACE INTO nav_symbol_map VALUES (?,?,?)",
+                     (sid, f"{meta[code][0]} (تکراری)", score[(sid, code)]))
+        conn.execute("INSERT OR REPLACE INTO nav_symbol_category VALUES (?, 'other', 'dup', 0)",
+                     (sid,))
     conn.commit()
-    return {"matched": len(best), "scores": score, "best": best, "meta": meta}
+    if dups:
+        print("  duplicate ids (same instrument under another symbol_id, excluded from "
+              "default runs): " + ", ".join(f"{sid}→{meta[c][0]}(sid {o})" for sid, (c, o) in dups.items()))
+    return {"matched": len(best), "scores": score, "best": best, "meta": meta,
+            "dups": dups}
 
 
 # --------------------------------------------------------------------------- #
@@ -265,6 +295,36 @@ def report(conn: sqlite3.Connection, res: dict, out_dir: Path) -> None:
             print(f"  ... and {len(rows) - 10} more in the CSV")
 
 
+def diagnose(conn: sqlite3.Connection, res: dict) -> None:
+    """For significant unmatched ids: closest ticker, who owns it, date overlap."""
+    owner = {code: sid for sid, (code, _) in res["best"].items()}
+    left = [r for r in conn.execute(
+        "SELECT symbol_id, COUNT(DISTINCT date), MIN(date), MAX(date), MAX(vol) FROM nav_intraday "
+        "WHERE symbol_id NOT IN (SELECT symbol_id FROM nav_symbol_map) GROUP BY symbol_id")
+        if r[1] >= 20 and (r[4] or 0) > 0]
+    if not left:
+        return
+    print("\nsignificant ids still without a name (closest ticker / who owns it):")
+    for sid, days, first, last, mv in sorted(left, key=lambda r: -r[1]):
+        cand = sorted(((sc, code) for (s2, code), sc in res["scores"].items() if s2 == sid),
+                      reverse=True)[:1]
+        line = f"  sid={sid:>6} days={days:>3} {first}..{last} maxVol={mv:>12,}"
+        if cand:
+            sc, code = cand[0]
+            tick = res["meta"].get(code, ("?", ""))[0]
+            o = owner.get(code)
+            line += f" -> {tick}[{sc}]"
+            if o:
+                ov = conn.execute(
+                    "SELECT COUNT(*) FROM (SELECT DISTINCT date FROM nav_intraday WHERE symbol_id=?) a "
+                    "JOIN (SELECT DISTINCT date FROM nav_intraday WHERE symbol_id=?) b USING(date)",
+                    (sid, o)).fetchone()[0]
+                line += f" owned by sid={o} (both have data on {ov} common days)"
+        else:
+            line += " -> no candidate on TSETMC (delisted / renamed?)"
+        print(line)
+
+
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
@@ -273,6 +333,8 @@ def main() -> None:
     ap.add_argument("--db", default=str(DEFAULT_DB))
     ap.add_argument("--match", action="store_true", help="only re-match from stored history (no network)")
     ap.add_argument("--refresh", action="store_true", help="re-download every fund's history")
+    ap.add_argument("--no-widen", action="store_true",
+                    help="do not search non-fund instruments for still-unnamed ids")
     ap.add_argument("--min-funds", type=int, default=150,
                     help="below this many market-watch funds, run the keyword sweep too")
     a = ap.parse_args()
@@ -301,9 +363,24 @@ def main() -> None:
     print("3/4 matching symbol_ids to tickers ...")
     res = match(conn)
     print(f"  matched {res['matched']} symbol_ids")
+
+    def _significant_left() -> int:
+        return conn.execute(
+            "SELECT COUNT(*) FROM (SELECT symbol_id FROM nav_intraday WHERE symbol_id NOT IN "
+            "(SELECT symbol_id FROM nav_symbol_map) GROUP BY symbol_id "
+            "HAVING COUNT(DISTINCT date) >= 20 AND MAX(vol) > 0)").fetchone()[0]
+
+    if not a.match and not a.no_widen and _significant_left():
+        print(f"  {_significant_left()} active ids still unnamed — widening the search to "
+              f"ALL TSETMC instruments (names may lack the word 'صندوق') ...")
+        discover(fetcher, conn, 0, include_all=True)
+        fetch_history(fetcher, conn, span)
+        res = match(conn)
+        print(f"  matched {res['matched']} symbol_ids after widening")
     print("4/4 categories from full names ...")
     classify(conn)
     report(conn, res, db.parent)
+    diagnose(conn, res)
     conn.close()
 
 
