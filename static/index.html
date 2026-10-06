@@ -6856,6 +6856,261 @@ function discBubbleHtml(res) {
     <div style="font-size:10px;color:var(--muted);margin-top:2px">خط قرمز = آستانهٔ ورود، خط سبز = آستانهٔ خروج، خط خاکستری = صفر (حباب معمول)</div>`;
 }
 
+// ---------------------------------------------------------------------------
+//  Tooltips: every button / option / column / card in the discount tab explains
+//  itself on hover.  Rules are matched against the element's text; elements that
+//  already carry a title (or sit inside one) are left alone.
+// ---------------------------------------------------------------------------
+const DISC_TIP_RULES = [
+  // --- buttons & selection ---------------------------------------------------
+  [/اجرای بک‌تست/, 'بک‌تست را با همین تنظیمات روی صندوق‌های فعال و بازهٔ انتخابی اجرا می‌کند. خرید/فروش با قیمت واقعیِ همان لحظه (± نیم‌اسپرد) و کارمزد محاسبه می‌شود، نه با NAV.'],
+  [/^▾ انتخاب صندوق/, 'باز و بسته کردن فهرست صندوق‌های این دسته؛ از آنجا می‌توانید هر صندوق را جدا فعال یا غیرفعال کنید.'],
+  [/^(↻\s*)?پیش‌فرض/, 'برگرداندن انتخاب به حالت پیش‌فرض: فقط دستهٔ طلا و فقط صندوق‌های عیار، گنج، کهربا و طلا.'],
+  [/^همه$/, 'فعال کردن همهٔ صندوق‌هایی که الان در این فهرست دیده می‌شوند (فیلتر جستجو را رعایت می‌کند).'],
+  [/^هیچ$/, 'غیرفعال کردن همهٔ صندوق‌هایی که الان در این فهرست دیده می‌شوند.'],
+  [/اعمال و اجرای بک‌تست/, 'پارامترهای برتر این سطر را در فرم می‌نویسد و بلافاصله بک‌تست را اجرا می‌کند.'],
+  [/^(🔄\s*)?بارگذاری$/, 'داده‌های نمودار را برای بازهٔ فرم و صندوق‌های تیک‌خورده از سرور می‌خواند.'],
+  [/^کارمزد خرید/, 'کارمزد کارگزاری و بورس هنگام خرید، درصدی از مبلغ معامله (پیش‌فرض ۰٫۱۴۵٪).'],
+  [/^کارمزد فروش/, 'کارمزد و مالیات هنگام فروش، درصدی از مبلغ معامله (پیش‌فرض ۰٫۱۴۵٪).'],
+  [/^نمایش$/, 'نوع نمایش نمودار: خط زمانی تعاملی، نقشهٔ حرارتی روز×ساعت، یا میانگین حباب بر حسب ساعت.'],
+  [/^مبنا برای نقشهٔ حرارتی/, 'سریِ مبنای نقشهٔ حرارتی: شاخص یا یکی از صندوق‌های بارگذاری‌شده.'],
+  [/^شاخص میانگین ساده/, 'نمایش شاخص: میانگین ساده حباب همهٔ صندوق‌های فعال (نه فقط صندوق‌های تیک‌خورده).'],
+  [/^نماد$/, 'نام صندوق.'],
+  // --- optimizer metric ------------------------------------------------------
+  [/معیار بهینه‌ساز/, 'ملاکی که بهینه‌ساز با آن ترکیب‌ها را رتبه‌بندی می‌کند. «بازده کل پرتفوی» سرمایهٔ نهایی را مبنا می‌گیرد؛ بقیه گزینه‌ها جایگزین‌اند.'],
+  [/^بازده کل پرتفوی \(سرمایهٔ نهایی\)/, 'درصد رشدِ کل سرمایه از ابتدا تا انتها (با احتساب اندازهٔ پوزیشن، کارمزد و اسپرد).'],
+  [/^بازده سالانهٔ مرکب$/, 'بازدهِ معادل سالانه با فرض سود مرکب؛ برای مقایسهٔ بازه‌های با طول متفاوت. در بازهٔ کوتاه (کمتر از حدود یک ماه) محاسبه نمی‌شود.'],
+  [/^سود خالص$/, 'مجموع سود/زیان ریالی همهٔ معاملات پس از کسر هزینه‌ها.'],
+  [/^بازده سالانهٔ سرمایهٔ درگیر/, 'بازده سالانه شده نسبت به پولی که واقعاً در معامله بوده است؛ بیانگر کارایی سرمایه‌ای که درگیر می‌شود، نه کل حساب.'],
+  [/^Profit Factor$/, 'مجموع سودِ معاملات سودده تقسیم بر مجموع زیانِ معاملات زیان‌ده. بالای ۱ یعنی سود بر زیان می‌چربد.'],
+  // --- fund list / filters ---------------------------------------------------
+  [/^فهرست صندوق‌ها —/, 'فهرست همهٔ صندوق‌های موجود در دادهٔ NAV لحظه‌ای با نماد مچ‌شده و دسته؛ نام و دسته را می‌توانید همین‌جا اصلاح کنید و برای همیشه ذخیره می‌شود.'],
+  [/^فیلتر دسته$/, 'فقط صندوق‌های این دسته را در جدول نشان بده.'],
+  [/^نام$/, 'نمایش فقط صندوق‌های نام‌دار یا فقط بی‌نام.'],
+  [/^جستجو \(/, 'جستجو بر اساس نماد یا شناسهٔ عددی.'],
+  [/^شناسه$/, 'شناسهٔ عددی نماد در پایگاه داده (symbol_id).'],
+  [/^نماد \(مچ‌شده\)/, 'نامی که این شناسه به آن مچ شده است؛ قابل ویرایش (تغییر بلافاصله ذخیره می‌شود).'],
+  [/^نام کامل$/, 'نام کامل صندوق در بورس.'],
+  [/^دسته$/, 'دستهٔ صندوق: درآمد ثابت، سهامی، طلا یا سایر. قابل ویرایش و دائمی.'],
+  [/^منبع دسته$/, 'دسته از کجا آمده است: فهرست config، نام کامل، آمار NAV، دستی، یا شناسهٔ تکراری که نادیده گرفته می‌شود.'],
+  [/^روز داده$/, 'تعداد روزهایی که برای این صندوق اسنپ‌شات NAV لحظه‌ای داریم.'],
+  [/^از$/, 'تاریخ اولین دادهٔ این صندوق.'],
+  [/^تا$/, 'تاریخ آخرین دادهٔ این صندوق.'],
+  [/^NAV میانگین$/, 'میانگین NAV صندوق در دوره (ریال)؛ برای تشخیص اندازه/قیمت صندوق.'],
+  [/^نوسان روزانهٔ NAV/, 'انحراف معیار تغییر روزانهٔ NAV. در صندوق‌های طلا/سهام بالا بودن آن یعنی NAV روزِ قبل به‌سرعت کهنه می‌شود.'],
+  [/^بیشینهٔ حجم روز$/, 'بیشترین حجم معامله در یک روز؛ نشانهٔ نقدشوندگی و سقف پوزیشن قابل‌اجرا.'],
+  // --- stats table -----------------------------------------------------------
+  [/^توزیع تخفیف/, 'توزیع «قیمت/NAV − ۱» هر صندوق؛ برای انتخاب آستانهٔ ورود: اگر ۵٪ پایین فقط −۰٫۱٪ است، آستانهٔ −۰٫۵٪ تقریباً هرگز فعال نمی‌شود.'],
+  [/^روز$/, 'تعداد روزهای معاملاتی دارای داده.'],
+  [/^میانهٔ تخفیف/, 'میانهٔ (قیمت/NAV − ۱) به درصد؛ نمایندهٔ «حباب معمول» صندوق. منفی = معمولاً زیر NAV.'],
+  [/^۵٪ پایین$/, 'صدکِ پنجمِ تخفیف: ۵٪ لحظه‌ها تخفیف از این هم عمیق‌تر بوده است.'],
+  [/^۹۵٪ بالا$/, 'صدکِ نود و پنجم: ۵٪ لحظه‌ها حباب از این بیشتر بوده است.'],
+  [/^زمان زیرِ آستانه/, 'چند درصد از لحظه‌ها تخفیف از آستانهٔ ورود فرم عمیق‌تر بوده است (فرصت‌های بالقوه).'],
+  [/^سن میانهٔ NAV/, 'میانهٔ فاصلهٔ تاریخ NAV با تاریخ معامله به روز؛ عدد بزرگ یعنی NAVِ کهنه.'],
+  [/^تغییر NAV در روز$/, 'میانگین تغییر NAV در هر روز؛ برای فهم اینکه تخفیف ظاهری چقدر فقط از کهنگی NAV است.'],
+  // --- result cards ----------------------------------------------------------
+  [/^نتیجه —/, 'خلاصهٔ نتیجهٔ بک‌تست برای دسته‌ها/صندوق‌های فعال و بازهٔ انتخابی.'],
+  [/^سرمایهٔ اولیه$/, 'سرمایهٔ شروع حساب (میلیون ریال) که همهٔ صندوق‌ها از یک استخر مشترک می‌گیرند.'],
+  [/سرمایهٔ نهایی$/, 'ارزش حساب در پایان بازه (نقد + هزینهٔ پوزیشن‌های باز) پس از همهٔ هزینه‌ها.'],
+  [/^سود\/زیان خالص$/, 'سرمایهٔ نهایی منهای اولیه.'],
+  [/^بازده کل$/, 'درصد تغییر کل سرمایه در بازه.'],
+  [/^افت سرمایه/, 'بیشترین افت از یک قلهٔ منحنی سرمایه تا کف بعدی (Max Drawdown).'],
+  [/^میانگین \/ اوج سرمایهٔ درگیر/, 'میانگین و بیشینهٔ درصدی از سرمایه که در پوزیشن بود. پایین بودن یعنی بخش بزرگی از زمان پول بی‌کار مانده است.'],
+  [/^پوزیشن اجراشده/, 'تعداد پوزیشن‌هایی که واقعاً گرفته شد / تعداد سیگنال‌هایی که چون نقد کافی نبود یا سقف حجم اجازه نداد ردّ شد.'],
+  [/^نرخ برد$/, 'درصد معاملاتی که پس از کسر هزینه سودده بوده‌اند.'],
+  [/^میانگین بازده معامله$/, 'میانگین بازدهِ خالص هر معامله (پس از اسپرد و کارمزد).'],
+  [/^میانگین نگه‌داری$/, 'میانگین مدت نگه‌داری پوزیشن به روز تقویمی.'],
+  [/^میانگین تخفیف ورود$/, 'میانگین (قیمت خرید/NAV − ۱) در لحظهٔ ورود؛ منفی = زیر NAV.'],
+  [/^میانگین تخفیف خروج$/, 'میانگین (قیمت فروش/NAV − ۱) در لحظهٔ خروج. اگر از تخفیف ورود بازتر باشد یعنی همگرایی رخ نداده است.'],
+  [/^کارمزد کل$/, 'مجموع کارمزد و مالیات پرداختی در همهٔ معاملات (ریال).'],
+  [/^بهترین \/ بدترین معامله$/, 'بیشترین سود و بیشترین زیانِ یک معامله به درصد.'],
+  [/^نوع خروج$/, 'تعداد معاملات به تفکیک علت خروج: سیگنال (برگشت تخفیف)، زمان (سقف نگه‌داری)، حد ضرر، پایان داده.'],
+  // --- passive benchmark -----------------------------------------------------
+  [/^مقایسه با پسیو/, 'همان صندوق‌ها را نه با سیگنال، بلکه به‌صورت منفعل نگه می‌داریم تا ببینیم استراتژی چیزی بیشتر از «فقط حضور در بازار» آورده یا نه.'],
+  [/^روش$/, 'روش سرمایه‌گذاری مورد مقایسه.'],
+  [/^سرمایهٔ نهایی \(م\.ر\)$/, 'ارزش پایانی حساب به میلیون ریال.'],
+  [/^حداکثر افت$/, 'بیشترین افت از قله تا کف منحنی ارزش.'],
+  [/^نوسان سالانه$/, 'انحراف معیار بازده روزانه سالانه‌شده؛ معیار ریسک.'],
+  [/^استراتژی \(/, 'نتیجهٔ همین بک‌تست (خرید زیر NAV و خروج طبق قواعد فرم).'],
+  [/^پسیو با تعادل روزانه/, 'هر روز وزن برابر روی همهٔ صندوق‌ها؛ چون هر روز برای بازتعادل خرید و فروش می‌شود کارمزد و اسپرد آن هم کسر شده است.'],
+  [/^خرید و نگه‌داری/, 'روز اول به‌صورت هم‌وزن خرید و تا پایان نگه می‌داریم؛ فقط یک بار کارمزد خرید و یک بار فروش.'],
+  [/^فقط بازده NAV/, 'رشد خودِ NAV صندوق‌ها بدون اثر حباب/تخفیف و بدون هزینه؛ مرجعِ «ارزش ذاتی» نه یک سبد قابل‌معامله.'],
+  [/^برتری استراتژی/, 'اختلاف بازده کل استراتژی با پسیو (نقطهٔ درصد). مثبت = ایده چیزی بیشتر از حضور در بازار آورده.'],
+  [/^رشد سرمایه/, 'منحنی سرمایه: استراتژی (سبز) در برابر پسیو (آبی) با سرمایهٔ اولیهٔ یکسان.'],
+  // --- bubble index & mean reversion ------------------------------------------
+  [/^شاخص حباب \(میانگین ساده/, 'میانگین ساده حباب (قیمت/NAV − ۱) صندوق‌های فعال. وقتی کل گروه ارزان باشد شاخص منفی می‌شود؛ خطوط افقی آستانهٔ ورود و خروج‌اند.'],
+  [/^فیلتر بازگشت به میانگین/, 'فقط صندوق‌هایی معامله می‌شوند که حبابشان در ۲۰ روز اخیر رفتار «برگشت‌پذیر» داشته باشد (امتیاز ۰ تا ۱۰۰). صندوقِ زیر حداقل امتیاز تا وقتی دوباره بالا بیاید کنار می‌رود.'],
+  [/^روزهای امتیازدارا$/, 'تعداد روزهایی که برای این صندوق امتیاز بازگشت قابل محاسبه بود (دادهٔ کافیِ ۲۰ روز قبل).'],
+  [/^میانگین امتیاز$/, 'میانگین امتیاز بازگشت به میانگین در کل بازه (۰ تا ۱۰۰). امتیاز بالا = حباب معمولاً به مرکز برمی‌گردد.'],
+  [/^آخرین امتیاز$/, 'امتیاز در آخرین روز بازه؛ نشان می‌دهد صندوق همین حالا مجاز است یا نه.'],
+  [/^سهم روزهای مجاز$/, 'چند درصد از روزها امتیاز صندوق ≥ حداقل بود و اجازهٔ ورود داشت.'],
+  [/^وضعیت امروز$/, 'مجاز = امتیاز آخرین روز ≥ حداقل امتیاز؛ حذف‌شده = فعلاً از گزینه‌ها کنار است.'],
+  [/^امتیاز بازگشت$/, 'امتیاز بازگشت به میانگین صندوق در لحظهٔ ورود (۰ تا ۱۰۰).'],
+  // --- per-fund & trades tables ----------------------------------------------
+  [/^به تفکیک صندوق/, 'نتیجهٔ هر صندوق به‌تنهایی (مرتب‌شده از بیشترین سود).'],
+  [/^معامله$/, 'تعداد معاملات.'],
+  [/^سود\/زیان$/, 'سود یا زیان خالص (ریال) پس از کارمزد.'],
+  [/^بازده کل ٪$/, 'سود خالص نسبت به سرمایهٔ اولیه (درصد).'],
+  [/^بازده سالانه ٪$/, 'بازده سالانه‌شده.'],
+  [/^معاملات \(/, 'فهرست همهٔ معاملات؛ هر ردیف یک خرید و فروش کامل (حداکثر ۶۰۰ ردیف نمایش داده می‌شود).'],
+  [/^تاریخ ورود$/, 'تاریخ شمسی خرید.'],
+  [/^تاریخ خروج$/, 'تاریخ شمسی فروش.'],
+  [/^ساعت$/, 'ساعت (وقت تهران) همان اسنپ‌شات.'],
+  [/^قیمت خرید$/, 'قیمت اجرای خرید = آخرین قیمت × (۱ + نیم‌اسپرد).'],
+  [/^قیمت فروش$/, 'قیمت اجرای فروش = آخرین قیمت × (۱ − نیم‌اسپرد).'],
+  [/^تخفیف ورود/, 'قیمت خرید نسبت به NAV همان لحظه؛ منفی = زیر NAV.'],
+  [/^تخفیف خروج$/, 'قیمت فروش نسبت به NAV در لحظهٔ خروج.'],
+  [/^حباب معمول$/, 'حباب معمولِ همین صندوق (میانهٔ چند روز قبل)؛ صندوقی که دائماً زیر یا بالای NAV است با آن تعدیل می‌شود.'],
+  [/^نسبت به معمول$/, 'تخفیف/حباب نسبت به حباب معمولِ خودِ صندوق؛ سیگنال واقعی از همین ستون می‌آید.'],
+  [/^شاخص حباب \(ورود\)$/, 'مقدار شاخص میانگین حباب در لحظهٔ ورود.'],
+  [/^شاخص حباب \(خروج\)$/, 'مقدار شاخص میانگین حباب در لحظهٔ خروج.'],
+  [/^حجم$/, 'تعداد واحدهایی که معامله شد (محدود به سهمی از حجم همان روز).'],
+  [/^مبلغ خرید/, 'مبلغ خرید به میلیون ریال.'],
+  [/^کارمزد$/, 'کارمزد و مالیات خرید و فروش این معامله (ریال).'],
+  [/^بازده$/, 'بازدهِ خالص همین معامله پس از اسپرد و کارمزد.'],
+  [/^خروج$/, 'علت خروج: سیگنال، زمان، حد ضرر یا پایان داده.'],
+  // --- optimizer table -------------------------------------------------------
+  [/^پارامترها$/, 'ترکیب ورود/خروج/نگه‌داری/حد ضرر.'],
+  [/^آموزش$/, 'نتیجه روی بخش آموزش (قدیمی‌تر) دادهٔ بازه.'],
+  [/^خارج از نمونه$/, 'نتیجه روی بخش آخرِ دادهٔ بازه که بهینه‌ساز هرگز ندیده است؛ معیار اصلی برای باور کردن یک ترکیب.'],
+  [/^ورود٪$/, 'آستانهٔ تخفیف ورود.'],
+  [/^خروج٪$/, 'آستانهٔ تخفیف خروج.'],
+  [/^حد ضرر٪$/, 'مقدار حد ضرر.'],
+  [/^برد$/, 'نرخ برد.'],
+  [/^سرمایه نهایی/, 'سرمایهٔ نهایی به میلیون ریال.'],
+  // --- self-test / validation ------------------------------------------------
+  [/^آزمون سلامت شبیه‌ساز/, 'آزمون خودِ ابزار روی دنیاهای ساختگیِ با پاسخ معلوم: اگر این‌ها نگذرند نتیجهٔ روی دادهٔ واقعی را باور نکنید.'],
+  [/^آزمون$/, 'نام بررسی.'],
+  [/^نتیجه$/, 'قبول یا رد.'],
+  [/^جزئیات$/, 'عدد اندازه‌گیری‌شده در بررسی.'],
+  [/^ب\) اجرا و هزینه/, 'آیا ضعف/قوت نتیجه از نحوهٔ اجرا و هزینه (اسپرد، کارمزد، نقدشوندگی) است؟'],
+  [/^ج\) ایده/, 'آیا خودِ «زیر NAV بودن» اطلاعاتی دربارهٔ آینده دارد؟ اگر قرمز باشد ایده کار نمی‌کند، نه پارامتر.'],
+  [/^الف\) پارامتر/, 'آیا نتیجه به انتخاب دقیقِ ورود/خروج وابسته است (بیش‌برازش) یا در یک ناحیهٔ هموار پایدار است؟'],
+  [/^[۱1]\) حسابرسی هزینه/, 'سود هر معامله را به اجزا می‌شکند: رشد NAV، همگرایی تخفیف (خودِ ایده)، اسپرد، کارمزد.'],
+  [/^[۲2]\) آیا/, 'آزمون جایگشت: آیا بازده پس از سیگنال از «دنیای بدون بازگشت» با همان نوسان بهتر است؟'],
+  [/^[۳3]\) سخت‌گیری/, 'نتیجه را با فرض‌های بدبینانه‌تر (اسپرد و کارمزد بیشتر، سقف حجم کمتر) دوباره می‌سنجد.'],
+  [/^[۴4]\) سطح پارامتر/, 'نقشهٔ حرارتی بازده برای ترکیب‌های مختلف ورود × خروج. ناحیهٔ هموار و سودده = ایده پایدار؛ یک خانهٔ تنها = نویز.'],
+  [/^[۵5]\) walk-forward/, 'پارامتر فقط با دادهٔ قبل از هر بلوک انتخاب و روی همان بلوکِ ندیده سنجیده می‌شود؛ نزدیک‌ترین شبیه‌سازی به معامله‌ی واقعی.'],
+  [/^[۶6]\) پایداری/, 'آیا سود به یک صندوق یا یک ماه خاص تکیه دارد؟'],
+  [/^جزء$/, 'یک جزء از تفکیک سود هر معامله.'],
+  [/^میانگین هر معامله \(وزن/, 'میانگین وزن‌دار (به اندازهٔ پوزیشن) این جزء به درصد.'],
+  [/^معنی$/, 'توضیح جزء.'],
+  [/^افق \(روز\)$/, 'چند روز پس از سیگنال بازده را اندازه می‌گیریم.'],
+  [/^روزهای سیگنال$/, 'تعداد روزهایی که صندوق زیر آستانه بود (نمونهٔ آزمون).'],
+  [/^میانگین بازده پس از سیگنال/, 'میانگین تغییر قیمتِ صندوق در افق مشخص پس از روزهای سیگنال.'],
+  [/^میانگین خودِ صندوق$/, 'میانگین تغییر قیمت همان صندوق در همهٔ روزها (مبنای مقایسه).'],
+  [/^مزیت$/, 'بازدهِ پس از سیگنال منهای میانگین خودِ صندوق؛ همان «مزیت اطلاعاتی» سیگنال.'],
+  [/^p-value$/, 'احتمال دیدن چنین مزیتی فقط به‌خاطر شانس (جایگشت تصادفی). کمتر از ۰٫۰۵ = احتمالاً واقعی.'],
+  [/^پس از کسر هزینه$/, 'مزیت پس از کم کردن اسپرد و کارمزد رفت‌وبرگشت؛ فقط اگر مثبت باشد قابل‌معامله است.'],
+  [/^سناریو$/, 'فرض اجرایی آزمون‌شده.'],
+  [/^میانگین هر معامله$/, 'میانگین بازدهِ خالص هر معامله در این سناریو.'],
+  [/^ورود ↓/, 'سطرها آستانهٔ ورود، ستون‌ها آستانهٔ خروج؛ هر خانه بازده کل آن ترکیب.'],
+  [/^بلوک$/, 'یک قطعهٔ زمانی از بازه که به‌عنوان آزمون جدا شده است.'],
+  [/^بازده با پارامتر ثابت$/, 'بازدهِ این بلوک با پارامترهای فعلی فرم.'],
+  [/^پارامتر انتخابی walk-forward$/, 'پارامتری که فقط از بلوک‌های قبلی انتخاب شده است.'],
+  [/^بازده خارج از نمونه$/, 'بازدهِ همان پارامتر روی این بلوکِ دیده‌نشده.'],
+  [/^ماه \(شمسی\)$/, 'ماه شمسی.'],
+  [/^سود\/زیان \(م\.ر\)$/, 'سود یا زیان ماهانه به میلیون ریال.'],
+  // --- stress scenario names --------------------------------------------------
+  [/^پایه \(فرض/, 'با همین فرض‌های فرم، بدون تغییر.'],
+  [/^اسپرد ×/, 'اسپرد فرضی چند برابر شده است؛ چون اردربوک نداریم، این مهم‌ترین آزمون بدبینی است.'],
+  [/^کارمزد \+/, 'کارمزد خرید و فروش ۵۰٪ بیشتر.'],
+  [/^سقف حجم/, 'سقف مشارکت در حجم روز کمتر شده است؛ یعنی پوزیشن کوچک‌تر یا ناقص‌تر پر می‌شود.'],
+  // --- chart stats table ---------------------------------------------------------
+  [/^سری$/, 'نام صندوق یا شاخص.'],
+  [/^نقطه$/, 'تعداد نقطه‌های داده در بازهٔ دیده‌شدهٔ نمودار.'],
+  [/^آخرین$/, 'آخرین مقدار در بازهٔ دیده‌شده.'],
+  [/^میانگین$/, 'میانگین مقدار در بازهٔ دیده‌شده.'],
+  [/^کمینه$/, 'کمترین مقدار (عمیق‌ترین تخفیف) در بازهٔ دیده‌شده.'],
+  [/^بیشینه$/, 'بیشترین مقدار (بیشترین حباب) در بازهٔ دیده‌شده.'],
+  [/^σ$/, 'انحراف معیار: پراکندگیِ حباب؛ هرچه بزرگ‌تر، فرصت‌ها و ریسک بیشتر.'],
+  [/^z آخرین$/, '(آخرین − میانگین) ÷ σ؛ چند σ آخرین مقدار از میانگین فاصله دارد. بسیار منفی = نسبت به معمول خودش ارزان.'],
+  [/^زیر صفر$/, 'چند درصد از نقطه‌ها حباب منفی (تخفیف) بوده است.'],
+  // --- bubble chart -----------------------------------------------------------
+  [/^نمودار حباب/, 'حباب = قیمت آخر نسبت به NAV (درصد). منفی = تخفیف. شاخص = میانگین ساده حباب صندوق‌های فعال.'],
+];
+
+// <option> texts (matched before the generic rules)
+const DISC_TIP_OPTS = [
+  [/^همه$/, 'بدون فیلتر.'],
+  [/^درآمد ثابت$/, 'صندوق‌های درآمد ثابت (اوراق).'],
+  [/^سهامی$/, 'صندوق‌های سهامی و مختلط.'],
+  [/^طلا$/, 'صندوق‌های طلا و سکه.'],
+  [/^سایر/, 'صندوق‌هایی که دسته‌شان مشخص نیست.'],
+  [/^نام‌دار$/, 'فقط صندوق‌هایی که نماد دارند.'],
+  [/^بی‌نام$/, 'صندوق‌هایی که هنوز نمادی به آن‌ها نسبت داده نشده است.'],
+  [/^بر اساس حباب هر صندوق/, 'هر صندوق وقتی نسبت به حباب معمول خودش ارزان شد جداگانه خریداری می‌شود.'],
+  [/^بر اساس شاخص حباب/, 'وقتی میانگین ساده حباب همهٔ صندوق‌های فعال زیر آستانه رفت، همهٔ آن‌ها با هم خریده می‌شوند؛ خروج با برگشت شاخص.'],
+  [/^هر دو/, 'هم خودِ صندوق ارزان باشد و هم شاخص زیر آستانه.'],
+  [/^NAV: عمیق‌تر شدن تخفیف/, 'فروش اضطراری وقتی تخفیف نسبت به لحظهٔ ورود این‌قدر واحد درصد بازتر شد.'],
+  [/^NAV: رسیدن تخفیف/, 'فروش اضطراری وقتی قیمت به NAV×(۱−این٪) رسید.'],
+  [/^قیمت: افت از قیمت خرید/, 'حد ضرر کلاسیک: افت درصدی نسبت به قیمت خرید.'],
+  [/^خاموش$/, 'فیلتر بازگشت به میانگین اعمال نمی‌شود؛ همهٔ صندوق‌ها همیشه مجازند.'],
+  [/^بازگشت حول صفر/, 'امتیاز: آیا حباب به صفر (قیمت = NAV) برمی‌گردد؟'],
+  [/^بازگشت حول میانگین حبابِ دستهٔ/, 'امتیاز: آیا حباب به میانگین حبابِ همهٔ صندوق‌های هم‌دسته برمی‌گردد؟'],
+  [/^بازگشت حول میانگین حبابِ خود/, 'امتیاز: آیا حباب به میانگین بلندمدتِ خودِ همین صندوق (از قبل از پنجرهٔ امتیازدهی) برمی‌گردد؟'],
+  [/^لحظه‌ای$/, 'هر اسنپ‌شات یک نقطه (حدود ۱۶ بار در روز).'],
+  [/^ساعتی$/, 'میانگین اسنپ‌شات‌های هر ساعت.'],
+  [/^روزانه$/, 'میانگین اسنپ‌شات‌های هر روز.'],
+  [/^حباب خام/, 'قیمت آخر ÷ NAV − ۱ به درصد؛ منفی = تخفیف.'],
+  [/^منهای شاخص/, 'حباب هر صندوق منهای شاخص میانگین ساده؛ نشان می‌دهد صندوق نسبت به کل گروه چقدر گران/ارزان است.'],
+  [/^انحراف از میانگین خود/, 'حباب منهای میانگین N روز قبلِ خودِ همان سری؛ فاصله از «حباب معمول» خودش.'],
+  [/^شاخص$/, 'میانگین ساده حباب همهٔ صندوق‌های فعال.'],
+  [/^خط زمانی/, 'نمودار TradingView: هر لحظهٔ معاملاتی یک نقطه، با زوم و جابه‌جایی.'],
+  [/^نقشهٔ حرارتی/, 'هر ردیف یک روز و هر ستون یک ساعت؛ رنگ = اندازهٔ حباب.'],
+  [/^میانگین حباب بر حسب ساعت/, 'میانگین حباب در هر ساعتِ روز روی همهٔ روزهای بازه؛ الگوی درون‌روزی.'],
+];
+
+// rows of the cost-attribution table (first cell)
+const DISC_TIP_ROWS = [
+  [/^سود ناخالص/, 'تغییر قیمت میانی از ورود تا خروج پیش از هر هزینه.'],
+  [/^— رشد NAV/, 'بخشی از سود که اگر فقط نگه داشته بودید هم می‌گرفتید (carry)؛ ربطی به ایده ندارد.'],
+  [/^— همگرایی/, 'بخشی که از بسته شدن تخفیف می‌آید؛ همین بخش خودِ ایده است.'],
+  [/^اسپرد \(رفت/, 'هزینهٔ نیم‌اسپرد فرضی برای خرید و فروش.'],
+  [/^کارمزد \(رفت/, 'کارمزد و مالیات خرید و فروش.'],
+  [/^سود خالص$/, 'ناخالص منهای اسپرد و کارمزد.'],
+  [/^معاملاتی که هزینه/, 'سهم معاملاتی که پس از هزینه سودده بودند.'],
+  [/^سهم رشد NAV/, 'اگر زیاد باشد، سود بیشتر «پسیو» بوده تا همگرایی تخفیف.'],
+];
+
+const DISC_TIP_SEL = 'button,label,th,.omk,option,.disc-h,.dv-t,.dv-head,.pill,.chk,.dv-sec td:first-child,#disc-cards table td:first-child';
+
+function discTipText(el) {
+  return (el.textContent || '').replace(/\s+/g, ' ').trim().replace(/^[^؀-ۿA-Za-z0-9\-—▾↻σ]+\s*/, '');
+}
+
+function discApplyTips(root) {
+  (root || document.getElementById('disc-app') || document).querySelectorAll(DISC_TIP_SEL).forEach(el => {
+    const isOpt = el.matches('option');
+    if (isOpt ? el.hasAttribute('title') : el.closest('[title]')) return;
+    const tx = discTipText(el);
+    if (!tx) return;
+    let tip = null;
+    const rules = isOpt ? DISC_TIP_OPTS.concat(DISC_TIP_RULES) : el.matches('td') ? DISC_TIP_ROWS.concat(DISC_TIP_RULES) : DISC_TIP_RULES;
+    for (const [re, t] of rules) { if (re.test(tx)) { tip = t; break; } }
+    if (!tip && el.matches('.disc-cat')) tip = 'روشن/خاموش کردنِ کل این دسته. فقط صندوق‌های روشنِ دستهٔ روشن در بک‌تست و نمودار می‌آیند.';
+    if (!tip) return;
+    // a label inside a form field explains the whole field
+    const tgt = el.matches('label') ? (el.closest('.bbt-field') || el) : el;
+    if (tgt.hasAttribute('title') || (tgt !== el && tgt.closest('[title]'))) return;
+    tgt.setAttribute('title', tip);
+  });
+}
+
+function discInitTips() {
+  const root = document.getElementById('disc-app');
+  if (!root || root._tipObs) return;
+  let busy = false;
+  root._tipObs = new MutationObserver(() => {
+    if (busy) return;
+    busy = true;
+    setTimeout(() => { try { discApplyTips(root); } catch (e) {} busy = false; }, 60);
+  });
+  root._tipObs.observe(root, {childList: true, subtree: true});
+  discApplyTips(root);
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', discInitTips); else setTimeout(discInitTips, 0);
+
 function discMrHtml(res) {
   const mi = res.mr_info;
   if (!mi) return '';
@@ -6891,7 +7146,7 @@ function discBubInit() {
     <div class="bbt-group" style="align-items:flex-end">
       <div class="bbt-field"><label>نمایش</label>
         <select id="bub-view" onchange="discBubDraw()">
-          <option value="line">خط زمانی (تاریخ + ساعت)</option>
+          <option value="line">خط زمانی — نمودار تعاملی</option>
           <option value="heat">نقشهٔ حرارتی: روز × ساعت</option>
           <option value="hour">میانگین حباب بر حسب ساعتِ روز</option></select></div>
       <div class="bbt-field"><label>مبنا برای نقشهٔ حرارتی</label><select id="bub-heatsrc" onchange="discBubDraw()"></select></div>
@@ -6899,7 +7154,7 @@ function discBubInit() {
       <button class="scan-btn" id="bub-go" onclick="discBubLoad()">🔄 بارگذاری</button>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0" id="bub-chips">${fs.map(f =>
-      `<label class="chk" style="border:1px solid var(--brd);border-radius:12px;padding:2px 8px"><input type="checkbox" class="bub-f" value="${f.symbol}" ${old.has(f.symbol) ? 'checked' : ''}> ${f.symbol}</label>`).join('') || '<span style="color:var(--muted);font-size:11px">صندوقی فعال نیست</span>'}</div>
+      `<label class="chk" title="افزودن / حذف حباب ${f.symbol} از نمودار (پس از تغییر «بارگذاری» را بزنید)" style="border:1px solid var(--brd);border-radius:12px;padding:2px 8px"><input type="checkbox" class="bub-f" value="${f.symbol}" ${old.has(f.symbol) ? 'checked' : ''}> ${f.symbol}</label>`).join('') || '<span style="color:var(--muted);font-size:11px">صندوقی فعال نیست</span>'}</div>
     <div id="bub-msg" style="font-size:11px;color:var(--muted)">صندوق‌ها را تیک بزنید و «بارگذاری» را بزنید (فقط شاخص هم کافی است).</div>
     <div id="bub-chart"></div>`;
 }
@@ -6918,9 +7173,10 @@ async function discBubLoad() {
   if (!r) { msg.textContent = 'سرور در دسترس نیست'; return; }
   const res = await r.json();
   if (res.error) { msg.textContent = 'خطا: ' + res.error; return; }
-  _discBub = {res, pick: new Set(pick)};
+  const keep = _discBub || {};
+  _discBub = {res, pick: new Set(pick), opt: keep.opt, hidden: keep.hidden};
   const src = document.getElementById('bub-heatsrc');
-  src.innerHTML = '<option value="__idx">شاخص</option>' + res.funds.map(f => `<option value="${f.symbol}">${f.symbol}</option>`).join('');
+  src.innerHTML = '<option value="__idx">شاخص</option>' + res.funds.map(f => `<option value="${f.symbol}" title="نقشهٔ حرارتی حباب ${f.symbol}">${f.symbol}</option>`).join('');
   msg.textContent = `${res.funds_in_index} صندوق در شاخص · ${res.index.length.toLocaleString('en-US')} لحظه`;
   discBubDraw();
 }
@@ -6934,83 +7190,249 @@ function discBubSeries() {
 
 function discBubDraw() {
   if (!_discBub) return;
+  if (_discBub.chart) { try { _discBub.chart.remove(); } catch (e) {} _discBub.chart = null; if (_discBub.ro) _discBub.ro.disconnect(); }
   const view = document.getElementById('bub-view').value;
   document.getElementById('bub-heatsrc').parentElement.style.display = view === 'heat' ? '' : 'none';
   const ser = discBubSeries();
   const box = document.getElementById('bub-chart');
   if (!ser.length) { box.innerHTML = '<div style="color:var(--muted);font-size:12px">چیزی برای نمایش نیست — شاخص یا یک صندوق را انتخاب کنید.</div>'; return; }
-  box.innerHTML = view === 'heat' ? discBubHeat() : view === 'hour' ? discBubHour(ser) : discBubLine(ser);
-  if (view === 'line') discBubHover(ser);
+  if (view === 'line') discBubPro(ser, box);
+  else box.innerHTML = view === 'heat' ? discBubHeat() : discBubHour(ser);
 }
 
-const discTkey = (d, t) => d * 1e6 + t;
-const discTfmt = (d, t) => `${gregIntToJalaliStr(d)} ${discTime(t)}`;
+// ---- interactive TradingView-style chart -----------------------------------
+const DISC_BUB_DEFAULT = {res: 'raw', mode: 'raw', n: 20, ma: 1, thr: false, trd: true};
 
-function discBubLine(ser) {
-  // x = position on the shared trading timeline (nights/holidays collapsed)
-  const keys = new Set();
-  ser.forEach(s => s.pts.forEach(p => keys.add(discTkey(p[0], p[1]))));
-  const tl = [...keys].sort((a, b) => a - b);
-  const pos = new Map(tl.map((k, i) => [k, i]));
-  _discBub.tl = tl;
-  const W = 900, H = 300, L = 46, R = 10, T = 10, B = 26;
-  let lo = 0, hi = 0;
-  ser.forEach(s => s.pts.forEach(p => { if (p[2] < lo) lo = p[2]; if (p[2] > hi) hi = p[2]; }));
-  const pad = (hi - lo) * 0.06 || 0.1; lo -= pad; hi += pad;
-  const n = Math.max(1, tl.length - 1);
-  const sx = i => L + (W - L - R) * i / n;
-  const sy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
-  _discBub.geo = {W, H, L, R, T, B, n, lo, hi};
-  const lines = ser.map(s => `<polyline points="${s.pts.map(p => sx(pos.get(discTkey(p[0], p[1]))).toFixed(1) + ',' + sy(p[2]).toFixed(1)).join(' ')}" fill="none" stroke="${s.col}" stroke-width="${s.w}" stroke-linejoin="round"/>`).join('');
-  // y grid
-  const step = (() => { const r = (hi - lo) / 5, m = Math.pow(10, Math.floor(Math.log10(r))); return [1, 2, 5, 10].map(x => x * m).find(x => x >= r); })();
-  let grid = '';
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
-    grid += `<line x1="${L}" x2="${W - R}" y1="${sy(v).toFixed(1)}" y2="${sy(v).toFixed(1)}" stroke="${Math.abs(v) < 1e-9 ? 'var(--muted)' : 'var(--brd)'}" stroke-width="${Math.abs(v) < 1e-9 ? 1.2 : .5}"${Math.abs(v) < 1e-9 ? ' stroke-dasharray="4 4"' : ''}/>
-      <text x="${L - 4}" y="${(sy(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--sub)">${(+v.toFixed(3))}%</text>`;
+function discBubUnix(d, t) {
+  const s = String(Math.round(t)).padStart(6, '0');
+  return Date.UTC(Math.floor(d / 10000), Math.floor(d % 10000 / 100) - 1, d % 100, +s.slice(0, 2), +s.slice(2, 4), +s.slice(4, 6)) / 1000 - 12600;   // Tehran = UTC+3:30
+}
+function discBubKey(d, t, res) {
+  if (res === 'day') return discBubUnix(d, 120000);
+  if (res === 'hour') return discBubUnix(d, Math.floor(t / 10000) * 10000);
+  return discBubUnix(d, t);
+}
+
+// raw [d,t,v] points -> transformed according to the value mode
+function discBubTransform(s, idxMap, o) {
+  if (o.mode === 'spread') {
+    if (s.isIndex) return [];
+    return s.pts.filter(p => idxMap.has(p[0] * 1e6 + p[1])).map(p => [p[0], p[1], p[2] - idxMap.get(p[0] * 1e6 + p[1])]);
   }
-  // x ticks: first trading day of each Jalali month
-  let ticks = '', lastM = null, lastX = -99;
-  tl.forEach((k, i) => {
-    const d = Math.floor(k / 1e6);
-    const jm = gregIntToJalaliStr(d).slice(0, 7);
-    if (jm !== lastM) {
-      lastM = jm;
-      const x = sx(i);
-      if (x - lastX > 44) { ticks += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--brd)" stroke-width=".4"/><text x="${x.toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="9" fill="var(--sub)">${jm}</text>`; lastX = x; }
-    }
-  });
-  const legend = ser.map(s => `<span><span style="color:${s.col}">━</span> ${s.name}</span>`).join('');
-  return `<div style="font-size:11px;color:var(--sub);display:flex;gap:14px;flex-wrap:wrap;margin:4px 0">${legend}
-      <span style="color:var(--muted)">محور افقی: زمانِ معاملاتی (شب و تعطیلی فشرده شده) · زیر صفر = تخفیف نسبت به NAV</span></div>
-    <div style="position:relative;max-width:${W}px">
-    <svg id="bub-svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
-      ${grid}${ticks}${lines}<line id="bub-cur" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--sub)" stroke-width=".6" style="display:none"/></svg>
-    <div id="bub-tip" style="position:absolute;display:none;pointer-events:none;background:var(--surf);border:1px solid var(--brd);border-radius:6px;padding:4px 8px;font-size:11px;direction:ltr;white-space:nowrap"></div></div>`;
+  if (o.mode === 'dev') {
+    const byDay = new Map();
+    s.pts.forEach(p => { const a = byDay.get(p[0]) || [0, 0]; a[0] += p[2]; a[1]++; byDay.set(p[0], a); });
+    const days = [...byDay.keys()].sort((a, b) => a - b);
+    const mean = days.map(d => byDay.get(d)[0] / byDay.get(d)[1]);
+    const ref = new Map();
+    days.forEach((d, i) => { if (i >= o.n) ref.set(d, mean.slice(i - o.n, i).reduce((x, y) => x + y, 0) / o.n); });
+    return s.pts.filter(p => ref.has(p[0])).map(p => [p[0], p[1], p[2] - ref.get(p[0])]);
+  }
+  return s.pts;
 }
 
-function discBubHover(ser) {
-  const svg = document.getElementById('bub-svg'); if (!svg) return;
-  const g = _discBub.geo, tl = _discBub.tl;
-  // per-series lookup by timeline key
-  const maps = ser.map(s => new Map(s.pts.map(p => [discTkey(p[0], p[1]), p[2]])));
-  const tip = document.getElementById('bub-tip'), cur = document.getElementById('bub-cur');
-  svg.onmousemove = e => {
-    const r = svg.getBoundingClientRect();
-    const x = (e.clientX - r.left) / r.width * g.W;
-    const i = Math.max(0, Math.min(tl.length - 1, Math.round((x - g.L) / (g.W - g.L - g.R) * g.n)));
-    const k = tl[i], d = Math.floor(k / 1e6), t = k % 1e6;
-    const cx = g.L + (g.W - g.L - g.R) * i / g.n;
-    cur.setAttribute('x1', cx); cur.setAttribute('x2', cx); cur.style.display = '';
-    tip.innerHTML = `<b>${discTfmt(d, t)}</b>` + ser.map((s, j) => {
-      const v = maps[j].get(k);
-      return `<div><span style="color:${s.col}">●</span> ${s.name}: ${v == null ? '—' : v.toFixed(2) + '%'}</div>`;
-    }).join('');
-    tip.style.display = '';
-    const left = Math.min(r.width - 150, Math.max(0, cx / g.W * r.width + 10));
-    tip.style.left = left + 'px'; tip.style.top = '8px';
-  };
-  svg.onmouseleave = () => { tip.style.display = 'none'; cur.style.display = 'none'; };
+function discBubAgg(pts, res, ma) {
+  const m = new Map();
+  pts.forEach(p => {
+    const k = discBubKey(p[0], p[1], res);
+    const a = m.get(k) || [0, 0]; a[0] += p[2]; a[1]++; m.set(k, a);
+  });
+  let out = [...m].sort((a, b) => a[0] - b[0]).map(([k, a]) => ({time: k, value: a[0] / a[1]}));
+  if (ma > 1) {
+    const w = []; let sum = 0;
+    out = out.map(x => { w.push(x.value); sum += x.value; if (w.length > ma) sum -= w.shift(); return {time: x.time, value: sum / w.length}; });
+  }
+  return out;
+}
+
+function discBubToolbar(o) {
+  const sel = (id, opts, v, tip) => `<select id="${id}" onchange="discBubOpt('${id.slice(4)}', this.value)" title="${tip}">${opts.map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  const btn = (fn, label, tip, id) => `<button type="button" class="pill" ${id ? `id="${id}"` : ''} onclick="${fn}" title="${tip}">${label}</button>`;
+  return `<div id="bub-tb" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0">
+    ${[['۱ هفته', 7], ['۱ ماه', 30], ['۳ ماه', 90], ['۶ ماه', 180]].map(([l, d]) => btn(`discBubRange(${d})`, l, `نمایش آخرین ${l.replace('۱ ', '')} از دادهٔ بارگذاری‌شده`)).join('')}
+    ${btn('discBubRange(0)', 'همه', 'نمایش کل بازه (برازش خودکار)')}
+    <span style="width:1px;height:18px;background:var(--brd)"></span>
+    ${sel('bub-res', [['raw', 'لحظه‌ای'], ['hour', 'ساعتی'], ['day', 'روزانه']], o.res, 'تفکیک زمانی: «لحظه‌ای» = هر اسنپ‌شات (حدود ۱۶ بار در روز)؛ «ساعتی» و «روزانه» = میانگین اسنپ‌شات‌های همان ساعت/روز')}
+    ${sel('bub-mode', [['raw', 'حباب خام (٪ از NAV)'], ['spread', 'منهای شاخص'], ['dev', 'انحراف از میانگین خود']], o.mode, 'نوع مقدار: «خام» = قیمت/NAV−۱؛ «منهای شاخص» = حباب صندوق منهای شاخص میانگین ساده (حباب نسبی)؛ «انحراف از میانگین خود» = حباب منهای میانگین N روز قبلِ خودِ سری (همان چیزی که فیلتر بازگشت به میانگین می‌سنجد)')}
+    <label class="chk" title="تعداد روزهای قبل برای حالت «انحراف از میانگین خود» (فقط از روزهای گذشته استفاده می‌شود؛ N روز اول بازه نمایش داده نمی‌شود)">N <input id="bub-n" type="number" min="3" max="120" value="${o.n}" style="width:54px" onchange="discBubOpt('n', this.value)"></label>
+    <label class="chk" title="هموارسازی: میانگین متحرک ساده روی این‌قدر نقطهٔ آخر هر سری؛ ۱ = بدون هموارسازی">MA <input id="bub-ma" type="number" min="1" max="200" value="${o.ma}" style="width:54px" onchange="discBubOpt('ma', this.value)"></label>
+    <label class="chk" title="خط‌چین آستانهٔ ورود فرم (برای صندوق‌ها و شاخص)؛ فقط در حالت «حباب خام»"><input id="bub-thr" type="checkbox" ${o.thr ? 'checked' : ''} onchange="discBubOpt('thr', this.checked)"> آستانهٔ ورود</label>
+    <label class="chk" title="نقاط ورود و خروج معاملات آخرین بک‌تست روی نمودار هر صندوق (فلش سبز = خرید، قرمز = فروش)"><input id="bub-trd" type="checkbox" ${o.trd ? 'checked' : ''} onchange="discBubOpt('trd', this.checked)"> ورود/خروج بک‌تست</label>
+    <span style="flex:1"></span>
+    ${btn('discBubFit()', '⤢ برازش', 'نمایش کل دادهٔ بارگذاری‌شده و بازگرداندن مقیاس عمودی')}
+    ${btn('discBubFull()', '⛶ تمام‌صفحه', 'نمایش نمودار در تمام صفحه (Esc برای خروج)')}
+    ${btn('discBubShot()', '📷 تصویر', 'ذخیرهٔ تصویر PNG از نمودار')}
+    ${btn('discBubCsv()', '⬇ CSV', 'ذخیرهٔ دادهٔ نمایش‌داده‌شده (با تفکیک و حالت فعلی) به‌صورت CSV')}
+  </div>`;
+}
+
+function discBubOpt(k, v) {
+  const o = _discBub.opt;
+  if (k === 'n' || k === 'ma') o[k] = Math.max(1, Math.round(+v || 1)); else o[k] = v;
+  discBubDraw();
+}
+
+function discBubPro(ser, box) {
+  const B = _discBub;
+  if (!B.opt) B.opt = Object.assign({}, DISC_BUB_DEFAULT);
+  if (!B.hidden) B.hidden = new Set();
+  const o = B.opt, res = B.res;
+  const idxPts = res.index || [];
+  const idxMap = new Map(idxPts.map(p => [p[0] * 1e6 + p[1], p[2]]));
+  const lines = ser.map(s => {
+    const isIndex = s.name === 'شاخص';
+    return Object.assign({}, s, {isIndex, data: discBubAgg(discBubTransform({pts: s.pts, isIndex}, idxMap, o), o.res, o.ma)});
+  }).filter(s => s.data.length);
+  B.lines = lines;
+  const modeMsg = {spread: 'حباب هر صندوق منهای شاخص (حباب نسبی)', dev: `حباب منهای میانگین ${o.n} روز قبلِ خودِ سری`, raw: 'حباب = قیمت آخر ÷ NAV − ۱ (٪)؛ زیر صفر = تخفیف'}[o.mode];
+  if (!lines.length) {
+    box.innerHTML = discBubToolbar(o) + `<div style="color:var(--muted);font-size:12px;padding:10px">برای این حالت دادهٔ کافی نیست${o.mode === 'spread' ? ' (حالت «منهای شاخص» حداقل یک صندوق تیک‌خورده می‌خواهد)' : o.mode === 'dev' ? ` (باید بیش از ${o.n} روز دادهٔ قبل داشته باشیم؛ بازه را بلندتر یا N را کمتر کنید)` : ''}.</div>`;
+    return;
+  }
+  box.innerHTML = `<div id="bub-wrap" style="background:var(--bg);padding:2px">
+    ${discBubToolbar(o)}
+    <div id="bub-legend" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;margin:2px 0 4px;direction:ltr"></div>
+    <div id="bub-pro" style="height:480px;width:100%;border:1px solid var(--brd);border-radius:6px;overflow:hidden"></div>
+    <div style="font-size:10px;color:var(--muted);margin-top:3px">${modeMsg} · چرخ موس = زوم · کشیدن = جابه‌جایی · کشیدن محور = مقیاس · کلیک روی نام سری در راهنما = نمایش/پنهان</div>
+    <div id="bub-stats"></div></div>`;
+  _syncTV();
+  const el = document.getElementById('bub-pro');
+  const opts = tvOpts(el, true);
+  opts.height = el.clientHeight;
+  opts.timeScale.timeVisible = o.res !== 'day';
+  opts.rightPriceScale = Object.assign({}, opts.rightPriceScale, {scaleMargins: {top: 0.08, bottom: 0.08}});
+  const chart = createChart(el, opts);
+  B.chart = chart;
+  const pf = {type: 'custom', formatter: v => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(2) + '%', minMove: 0.01};
+  B.sers = lines.map(s => {
+    const sr = chart.addLineSeries({color: s.col, lineWidth: s.isIndex ? 3 : 2, priceFormat: pf, lastValueVisible: false, priceLineVisible: false,
+      crosshairMarkerRadius: 4, visible: !B.hidden.has(s.name)});
+    sr.setData(s.data);
+    return sr;
+  });
+  // reference lines
+  B.sers[0].createPriceLine({price: 0, color: '#787b86', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: ''});
+  if (o.thr && o.mode === 'raw') {
+    const p = discParams();
+    lines.forEach((s, i) => {
+      const thr = s.isIndex ? +p.ientry : +p.entry;
+      if (thr > 0) B.sers[i].createPriceLine({price: -thr, color: s.col, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: 'ورود'});
+    });
+  }
+  // backtest entries / exits
+  B.nMarkers = 0;
+  const tr = (window._discLastRes && window._discLastRes.trades) || [];
+  if (o.trd && tr.length) {
+    lines.forEach((s, i) => {
+      if (s.isIndex) return;
+      const mine = tr.filter(t => t.symbol === s.name);
+      const mk = [];
+      mine.forEach(t => {
+        mk.push({time: discBubKey(t.entry_date, t.entry_time, o.res), position: 'belowBar', color: '#26a69a', shape: 'arrowUp', text: mine.length <= 30 ? 'خرید' : ''});
+        mk.push({time: discBubKey(t.exit_date, t.exit_time, o.res), position: 'aboveBar', color: '#ef5350', shape: 'arrowDown', text: mine.length <= 30 ? 'فروش' : ''});
+      });
+      mk.sort((a, b) => a.time - b.time);
+      const t0 = s.data[0].time, t1 = s.data[s.data.length - 1].time;
+      const inr = mk.filter(m => m.time >= t0 && m.time <= t1);
+      B.nMarkers += inr.length;
+      try { B.sers[i].setMarkers(inr); } catch (e) {}
+    });
+  }
+  // legend with live values
+  const lg = document.getElementById('bub-legend');
+  const fmtv = v => v == null ? '—' : (Math.abs(v) < 1e-9 ? 0 : v).toFixed(2) + '%';
+  lg.innerHTML = `<span id="bub-lt" style="color:var(--sub);min-width:120px"></span>` + lines.map((s, i) =>
+    `<span class="bub-chip" data-i="${i}" title="کلیک: نمایش / پنهان کردن این سری" style="cursor:pointer;border:1px solid var(--brd);border-radius:12px;padding:1px 8px;${B.hidden.has(s.name) ? 'opacity:.4' : ''}">
+      <span style="color:${s.col}">●</span> ${s.name} <b id="bub-v${i}"></b></span>`).join('') +
+    (B.nMarkers ? `<span style="color:var(--muted)">▲▼ ${B.nMarkers / 2} معامله از آخرین بک‌تست</span>` : '');
+  const showLast = () => { document.getElementById('bub-lt').textContent = ''; lines.forEach((s, i) => { document.getElementById('bub-v' + i).textContent = fmtv(s.data[s.data.length - 1].value); }); };
+  showLast();
+  lg.querySelectorAll('.bub-chip').forEach(c => c.onclick = () => {
+    const i = +c.dataset.i, nm = lines[i].name;
+    if (B.hidden.has(nm)) B.hidden.delete(nm); else B.hidden.add(nm);
+    B.sers[i].applyOptions({visible: !B.hidden.has(nm)});
+    c.style.opacity = B.hidden.has(nm) ? .4 : 1;
+    discBubStats();
+  });
+  chart.subscribeCrosshairMove(param => {
+    if (!param || !param.time || !param.seriesData || !param.seriesData.size) { showLast(); return; }
+    document.getElementById('bub-lt').textContent = discBubFmtTime(param.time);
+    lines.forEach((s, i) => { const d = param.seriesData.get(B.sers[i]); document.getElementById('bub-v' + i).textContent = fmtv(d ? d.value : null); });
+  });
+  let tmr = null;
+  chart.timeScale().subscribeVisibleTimeRangeChange(() => { clearTimeout(tmr); tmr = setTimeout(discBubStats, 80); });
+  if (B.range) { try { chart.timeScale().setVisibleRange(B.range); } catch (e) { chart.timeScale().fitContent(); } }
+  else chart.timeScale().fitContent();
+  const ro = new ResizeObserver(() => { chart.applyOptions({width: el.clientWidth}); });
+  ro.observe(el); B.ro = ro;
+  discBubStats();
+}
+
+function discBubFmtTime(t) {
+  const j = unixToJalali(t);
+  const p = n => String(n).padStart(2, '0');
+  return `${j.jy}/${p(j.jm)}/${p(j.jd)} ${p(j.hh)}:${p(j.mm)}`;
+}
+
+function discBubStats() {
+  const B = _discBub, box = document.getElementById('bub-stats');
+  if (!B || !B.chart || !box) return;
+  let r = null;
+  try { r = B.chart.timeScale().getVisibleRange(); } catch (e) {}
+  if (r) B.range = r;
+  const f = v => (Math.abs(v) < 5e-3 ? 0 : v).toFixed(2) + '%';
+  const rows = B.lines.map(s => {
+    if (B.hidden.has(s.name)) return '';
+    const d = r ? s.data.filter(x => x.time >= r.from && x.time <= r.to) : s.data;
+    if (!d.length) return '';
+    const v = d.map(x => x.value), n = v.length, m = v.reduce((a, b) => a + b, 0) / n;
+    const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / Math.max(1, n - 1));
+    const last = v[n - 1], below = v.filter(x => x < 0).length / n * 100;
+    return `<tr><td style="text-align:start"><span style="color:${s.col}">●</span> ${s.name}</td><td>${n}</td><td>${f(last)}</td><td>${f(m)}</td><td>${f(Math.min(...v))}</td><td>${f(Math.max(...v))}</td><td>${f(sd)}</td>
+      <td>${sd > 1e-9 ? ((last - m) / sd).toFixed(2) : '—'}</td><td>${below.toFixed(0)}%</td></tr>`;
+  }).join('');
+  box.innerHTML = rows ? `<div class="disc-tblwrap" style="max-height:none;margin-top:6px"><table class="disc-tbl" style="direction:ltr"><thead><tr>
+    <th style="text-align:start">سری</th><th>نقطه</th><th>آخرین</th><th>میانگین</th><th>کمینه</th><th>بیشینه</th><th>σ</th><th>z آخرین</th><th>زیر صفر</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="font-size:10px;color:var(--muted);margin-top:2px">آمار فقط روی بازهٔ دیده‌شدهٔ نمودار (با زوم تغییر می‌کند).</div>` : '';
+}
+
+function discBubRange(days) {
+  const B = _discBub; if (!B || !B.chart) return;
+  const all = B.lines.flatMap(s => s.data.map(x => x.time));
+  if (!all.length) return;
+  const hi = Math.max(...all), lo = Math.min(...all);
+  if (!days) { B.range = null; B.chart.timeScale().fitContent(); return; }
+  try { B.chart.timeScale().setVisibleRange({from: Math.max(lo, hi - days * 86400), to: hi}); } catch (e) {}
+}
+function discBubFit() { const B = _discBub; if (!B || !B.chart) return; B.range = null; B.chart.timeScale().fitContent(); B.chart.priceScale('right').applyOptions({autoScale: true}); }
+function discBubFull() {
+  const w = document.getElementById('bub-wrap'); if (!w) return;
+  if (document.fullscreenElement) document.exitFullscreen(); else if (w.requestFullscreen) w.requestFullscreen();
+}
+document.addEventListener('fullscreenchange', () => {
+  const B = _discBub, el = document.getElementById('bub-pro'); if (!B || !B.chart || !el) return;
+  const fs = !!document.fullscreenElement;
+  const w = document.getElementById('bub-wrap');
+  if (w) { w.style.overflow = fs ? 'auto' : ''; w.style.padding = fs ? '10px' : '2px'; }
+  el.style.height = fs ? Math.max(360, window.innerHeight - 220) + 'px' : '480px';
+  setTimeout(() => B.chart.applyOptions({width: el.clientWidth, height: el.clientHeight}), 60);
+});
+function discBubDownload(name, blob) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function discBubShot() {
+  const B = _discBub; if (!B || !B.chart) return;
+  try { B.chart.takeScreenshot().toBlob(b => discBubDownload('bubble-chart.png', b)); } catch (e) { showError('ذخیرهٔ تصویر در این مرورگر ممکن نیست'); }
+}
+function discBubCsv() {
+  const B = _discBub; if (!B || !B.lines) return;
+  const keys = [...new Set(B.lines.flatMap(s => s.data.map(x => x.time)))].sort((a, b) => a - b);
+  const maps = B.lines.map(s => new Map(s.data.map(x => [x.time, x.value])));
+  const out = ['time_tehran,' + B.lines.map(s => '"' + s.name + '"').join(',')];
+  keys.forEach(k => out.push(discBubFmtTime(k) + ',' + maps.map(m => m.has(k) ? m.get(k).toFixed(4) : '').join(',')));
+  discBubDownload('bubble-data.csv', new Blob(['﻿' + out.join('\n')], {type: 'text/csv;charset=utf-8'}));
 }
 
 // slot = HH:MM bucket of the snapshot time
@@ -7074,6 +7496,7 @@ function discBubHour(ser) {
 }
 
 function renderDiscBacktest(res, p) {
+  window._discLastRes = res;
   const s = res.summary || {};
   const cls = discCls(s.net_profit);
   const rs = s.exit_reasons || {};
