@@ -7027,6 +7027,12 @@ const DISC_TIP_RULES = [
   [/^اسپرد ×/, 'اسپرد فرضی چند برابر شده است؛ چون اردربوک نداریم، این مهم‌ترین آزمون بدبینی است.'],
   [/^کارمزد \+/, 'کارمزد خرید و فروش ۵۰٪ بیشتر.'],
   [/^سقف حجم/, 'سقف مشارکت در حجم روز کمتر شده است؛ یعنی پوزیشن کوچک‌تر یا ناقص‌تر پر می‌شود.'],
+  [/^تفسیر زیان$/, 'برای معاملهٔ زیان‌ده: علت اصلی زیان بر پایهٔ تفکیک حسابداری (NAV، همگرایی تخفیف، اسپرد، کارمزد). روی ردیف کلیک کنید تا جزئیات و برچسب‌های جانبی باز شود.'],
+  [/^چرا معامله‌ها زیان/, 'علت اصلی زیانِ معاملات ناموفق، گروه‌بندی‌شده؛ «سهم از کل زیان» نشان می‌دهد کدام علت بیشترین پول را برده است.'],
+  [/^علت اصلی$/, 'مهم‌ترین جزء زیان: هزینه، افت NAV، بازتر شدن تخفیف، یا ترکیبی.'],
+  [/^سهم از کل زیان$/, 'چند درصد از مجموع زیان‌ها (به ریال) به این علت برمی‌گردد.'],
+  [/^زیان \(م\.ر\)$/, 'مجموع زیان این گروه به میلیون ریال.'],
+  [/^تعداد$/, 'تعداد معاملات این گروه.'],
   // --- chart stats table ---------------------------------------------------------
   [/^سری$/, 'نام صندوق یا شاخص.'],
   [/^نقطه$/, 'تعداد نقطه‌های داده در بازهٔ دیده‌شدهٔ نمودار.'],
@@ -7122,6 +7128,101 @@ function discInitTips() {
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', discInitTips); else setTimeout(discInitTips, 0);
 
+let _discOnlyLoss = false;
+
+function discLossHtml(res) {
+  const lc = res.loss_causes;
+  if (!lc || !lc.losing_trades) return '';
+  const lab = lc.tag_labels || {};
+  const rows = lc.causes.map(c => `<tr><td style="text-align:start" title="${c.meaning}">${c.label}</td><td>${c.count}</td>
+    <td>${discLtr(c.share_pct + '%')}</td><td class="neg">${discLtr(discM(-c.loss))}</td></tr>`).join('');
+  const chips = lc.tags.map(t => `<span style="border:1px solid var(--brd);border-radius:12px;padding:1px 8px;margin:2px;display:inline-block;font-size:11px"
+      title="${lab[t.code] || t.code}: در ${t.count} معاملهٔ زیان‌ده دیده شد (مجموع زیان این معامله‌ها ${discM(-t.loss)} میلیون ریال؛ یک معامله می‌تواند چند برچسب داشته باشد)">${lab[t.code] || t.code} <b>${t.count}</b></span>`).join('');
+  const n = lc.losing_trades, cnt = c => (lc.tags.find(x => x.code === c) || {count: 0}).count;
+  const tips = [];
+  if (cnt('weak_edge') >= 0.3 * n) tips.push('در بخش بزرگی از زیان‌ها لبهٔ ورود از هزینهٔ رفت‌وبرگشت کمتر بود؛ آستانهٔ ورود را بالاتر از هزینه بگذارید.');
+  if (cnt('idio_nav') + cnt('stale_nav') >= 0.25 * n) tips.push('نشانهٔ تخفیفِ ظاهری از NAV کهنه زیاد است؛ «حداکثر سن NAV» را کمتر کنید یا فقط ساعاتی را که NAV تازه می‌شود معامله کنید.');
+  if (cnt('market_wide') >= 0.3 * n) tips.push('بخش بزرگی از زیان‌ها از افت همزمان NAV همهٔ صندوق‌های گروه (مثلاً قیمت جهانی/داخلی طلا) آمده؛ این ریسک بازار است نه ایراد سیگنال. حد ضرر بر پایهٔ NAV یا فیلتر روند را بسنجید.');
+  if (cnt('stop') >= 0.3 * n) tips.push('بسیاری از زیان‌ها با حد ضرر بسته شده‌اند؛ حد ضرر را با «تخفیف پس از ورود عمیق‌تر شد» مقایسه کنید (شاید خیلی تنگ است).');
+  if (cnt('time') >= 0.3 * n) tips.push('بسیاری از زیان‌ها به‌خاطر سقف نگه‌داری بسته شده‌اند؛ تخفیف دیر یا هرگز بسته نشد.');
+  return `<div class="disc-h" style="margin-top:8px">چرا معامله‌ها زیان داده‌اند؟ — ${n} از ${lc.total_trades} معامله زیان‌ده (مجموع ${discLtr(discM(-lc.total_loss))} م.ر)</div>
+    <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">علت اصلی</th><th>تعداد</th><th>سهم از کل زیان</th><th>زیان (م.ر)</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="margin-top:4px">${chips}</div>
+    ${tips.map(t => `<div style="font-size:11px;color:var(--sub);margin-top:3px">• ${t}</div>`).join('')}
+    <div style="font-size:10px;color:var(--muted);margin-top:3px">اعداد حسابداریِ دقیق‌اند؛ برچسب‌های علت (مثل «NAV کهنه» یا «حرکت بازار») تفسیرند. روی هر معاملهٔ زیان‌ده کلیک کنید تا تفسیر کامل و تفکیک سود/زیانش باز شود.</div>`;
+}
+
+function discWhyDetail(t, i, ncol) {
+  const w = t.why; if (!w) return '';
+  const c = w.components, pa = w.path || {};
+  const lab = ((window._discLastRes.loss_causes || {}).tag_labels) || {};
+  const bar = (name, v, tip) => `<tr title="${tip}"><td style="text-align:start">${name}</td><td class="${discCls(v)}" style="direction:ltr">${v >= 0 ? '+' : ''}${(+v).toFixed(3)}%</td></tr>`;
+  const px = pa.snapshots ? `<div style="margin-top:6px;font-size:11px;color:var(--sub)">مسیر نگه‌داری (${pa.snapshots} لحظه): بدترین قیمت <b dir="ltr">${(+pa.worst_pct).toFixed(2)}%</b>
+      (${fmtTime(pa.worst_date)} ${discTime(pa.worst_time)}) · بهترین قیمت <b dir="ltr">${(+pa.best_pct).toFixed(2)}%</b> نسبت به قیمت میانیِ ورود
+      ${pa.deepest_rel_pct == null ? '' : ` · عمیق‌ترین تخفیف نسبت به معمول <b dir="ltr">${(+pa.deepest_rel_pct).toFixed(2)}%</b>`}
+      ${w.peer_nav_pct == null ? '' : ` · میانگین تغییر NAV سایر صندوق‌های انتخاب‌شده در همین بازه <b dir="ltr">${(+w.peer_nav_pct).toFixed(2)}%</b>`}</div>` : '';
+  return `<tr class="disc-why" id="dwhy-${i}" style="display:none"><td colspan="${ncol}" style="text-align:start;white-space:normal;background:var(--surf)">
+   <div style="position:sticky;left:0;right:0;width:min(1000px,calc(100vw - 70px))">
+    <div style="font-weight:700;margin-bottom:4px"><span class="neg">${w.label}</span></div>
+    <div style="font-size:12px;line-height:1.8">${discLtr(w.text)}</div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:6px;align-items:flex-start">
+      <table class="disc-tbl" style="width:auto;min-width:300px"><tbody>
+        ${bar('تغییر قیمت (میانی)', c.gross_pct, 'تغییر قیمت از ورود تا خروج، پیش از هزینه')}
+        ${bar('— تغییر NAV', c.nav_pct, 'ارزش خودِ صندوق چقدر عوض شد (آنچه به ایده ربط ندارد)')}
+        ${bar('— تغییر قیمت/NAV (همگرایی)', c.convergence_pct, 'آیا تخفیف بسته شد؟ (خودِ ایده)')}
+        ${bar('اسپرد', c.spread_pct, 'نیم‌اسپردِ فرضی خرید و فروش')}
+        ${bar('کارمزد', c.fee_pct, 'کارمزد و مالیات خرید و فروش')}
+        ${bar('خالص', c.net_pct, 'نتیجهٔ نهایی همین معامله')}</tbody></table>
+      <ul style="margin:0;padding-inline-start:18px;font-size:12px;line-height:1.8;flex:1;min-width:260px">${w.tags.map(g => `<li title="${lab[g.code] || ''}">${discLtr(g.text)}</li>`).join('') || '<li style="color:var(--muted)">عامل جانبیِ مشخصی دیده نشد.</li>'}</ul></div>
+    ${px}
+    <div style="margin-top:6px"><button type="button" class="pill" onclick="discBubFocus(${i})" title="نمودار حباب همین صندوق را در بازهٔ این معامله (چند روز قبل و بعد) باز می‌کند؛ فلش‌های سبز/قرمز ورود و خروج‌اند">📈 نمایش روی نمودار حباب</button></div>
+   </div></td></tr>`;
+}
+
+function discToggleWhy(i) {
+  const r = document.getElementById('dwhy-' + i);
+  if (r) r.style.display = r.style.display === 'none' ? '' : 'none';
+}
+
+function discRenderTrades(res) {
+  const showIdx = (res.params || {}).entry_mode && res.params.entry_mode !== 'fund';
+  const showMr = !!res.mr_info;
+  const all = res.trades || [];
+  const LIM = 600;
+  const ncol = 22 + (showIdx ? 2 : 0) + (showMr ? 1 : 0);
+  const idxs = all.map((t, i) => i).filter(i => !_discOnlyLoss || all[i].why);
+  const rows = idxs.slice(0, LIM).map(i => {
+    const t = all[i];
+    const c = discCls(t.net_pnl);
+    const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[t.exit_reason] || t.exit_reason;
+    const wcell = t.why ? `<td style="text-align:start;white-space:nowrap" title="${t.why.label} — کلیک روی ردیف: تفسیر کامل"><span class="neg">▸ ${t.why.label}</span></td>` : '<td></td>';
+    return `<tr ${t.why ? `onclick="discToggleWhy(${i})" style="cursor:pointer"` : ''}><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
+      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}${showMr ? `<td>${t.mr_score == null ? '—' : t.mr_score}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
+      <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td>${showIdx ? `<td>${t.idx_exit_pct == null ? '—' : t.idx_exit_pct + '%'}</td>` : ''}<td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
+      <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td>${wcell}</tr>${discWhyDetail(t, i, ncol)}`;
+  }).join('');
+  document.getElementById('disc-trades').innerHTML = `${discLossHtml(res)}
+    <div class="disc-h" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">معاملات${idxs.length > LIM ? ` (${LIM} مورد اول از ${idxs.length})` : ` (${idxs.length})`}
+      <label class="chk" title="فقط معاملات زیان‌ده را نشان بده؛ روی هر ردیف کلیک کنید تا تفسیر علت زیان باز شود"><input type="checkbox" ${_discOnlyLoss ? 'checked' : ''} onchange="_discOnlyLoss = this.checked; discRenderTrades(window._discLastRes)"> فقط زیان‌ده‌ها</label></div>
+    <div class="disc-tblwrap" style="max-height:560px"><table class="disc-tbl"><thead><tr>
+      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (ورود)</th>' : ''}${showMr ? '<th>امتیاز بازگشت</th>' : ''}
+      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (خروج)</th>' : ''}<th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
+      <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th><th>تفسیر زیان</th>
+    </tr></thead><tbody>${rows || `<tr><td colspan="${ncol}" style="color:var(--muted)">${all.length ? 'معاملهٔ زیان‌ده‌ای نیست.' : 'معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.'}</td></tr>`}</tbody></table></div>`;
+}
+
+async function discBubFocus(i) {
+  const t = ((window._discLastRes || {}).trades || [])[i]; if (!t) return;
+  const sh = (d, n) => { const x = new Date(Date.UTC(Math.floor(d / 10000), Math.floor(d % 10000 / 100) - 1, d % 100) + n * 86400000);
+    return x.getUTCFullYear() * 10000 + (x.getUTCMonth() + 1) * 100 + x.getUTCDate(); };
+  const el = document.getElementById('disc-bub');
+  _discBub = Object.assign(_discBub || {}, {pick: new Set([t.symbol])});
+  el.style.display = '';
+  discBubInit();
+  const r = await discBubLoad({start: String(sh(t.entry_date, -3)), end: String(sh(t.exit_date, 3))});
+  el.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
 function discMrHtml(res) {
   const mi = res.mr_info;
   if (!mi) return '';
@@ -7170,11 +7271,12 @@ function discBubInit() {
     <div id="bub-chart"></div>`;
 }
 
-async function discBubLoad() {
-  const p = discParams();
+async function discBubLoad(ov) {
+  const p = Object.assign(discParams(), ov || {});
   if (!p.symbols) { showError('حداقل یک صندوق را فعال کنید.'); return; }
   const pick = [...document.querySelectorAll('.bub-f:checked')].map(x => x.value);
   const q = {cats: p.cats, symbols: p.symbols, show: pick.join(',')};
+  ['smode', 'sstart', 'send', 'navage'].forEach(k => { if (p[k]) q[k] = p[k]; });
   if (p.start) q.start = p.start;
   if (p.end) q.end = p.end;
   const btn = document.getElementById('bub-go'), msg = document.getElementById('bub-msg');
@@ -7200,7 +7302,7 @@ function discBubSeries() {
 }
 
 function discBubDraw() {
-  if (!_discBub) return;
+  if (!_discBub || !_discBub.res) return;
   if (_discBub.chart) { try { _discBub.chart.remove(); } catch (e) {} _discBub.chart = null; if (_discBub.ro) _discBub.ro.disconnect(); }
   const view = document.getElementById('bub-view').value;
   document.getElementById('bub-heatsrc').parentElement.style.display = view === 'heat' ? '' : 'none';
@@ -7355,7 +7457,7 @@ function discBubPro(ser, box) {
   lg.innerHTML = `<span id="bub-lt" style="color:var(--sub);min-width:120px"></span>` + lines.map((s, i) =>
     `<span class="bub-chip" data-i="${i}" title="کلیک: نمایش / پنهان کردن این سری" style="cursor:pointer;border:1px solid var(--brd);border-radius:12px;padding:1px 8px;${B.hidden.has(s.name) ? 'opacity:.4' : ''}">
       <span style="color:${s.col}">●</span> ${s.name} <b id="bub-v${i}"></b></span>`).join('') +
-    (B.nMarkers ? `<span style="color:var(--muted)">▲▼ ${B.nMarkers / 2} معامله از آخرین بک‌تست</span>` : '');
+    (B.nMarkers ? `<span style="color:var(--muted)">▲▼ ${B.nMarkers} نشانگر ورود/خروج از آخرین بک‌تست</span>` : '');
   const showLast = () => { document.getElementById('bub-lt').textContent = ''; lines.forEach((s, i) => { document.getElementById('bub-v' + i).textContent = fmtv(s.data[s.data.length - 1].value); }); };
   showLast();
   lg.querySelectorAll('.bub-chip').forEach(c => c.onclick = () => {
@@ -7549,24 +7651,7 @@ function renderDiscBacktest(res, p) {
       <td class="${discCls(r.total_net_pnl)}">${discFmt(r.total_net_pnl)}</td><td>${r.total_return_pct}</td>
       <td>${r.annualized_pct}</td><td>${r.avg_hold_days}</td></tr>`).join('')}</tbody></table></div>` : '';
 
-  const showIdx = (res.params || {}).entry_mode && res.params.entry_mode !== 'fund';
-  const showMr = !!res.mr_info;
-  const tr = res.trades || [];
-  const LIM = 600;
-  const rows = tr.slice(0, LIM).map(t => {
-    const c = discCls(t.net_pnl);
-    const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[t.exit_reason] || t.exit_reason;
-    return `<tr><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
-      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}${showMr ? `<td>${t.mr_score == null ? '—' : t.mr_score}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
-      <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td>${showIdx ? `<td>${t.idx_exit_pct == null ? '—' : t.idx_exit_pct + '%'}</td>` : ''}<td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
-      <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td></tr>`;
-  }).join('');
-  document.getElementById('disc-trades').innerHTML = `<div class="disc-h">معاملات${tr.length > LIM ? ` (${LIM} مورد اول از ${tr.length})` : ` (${tr.length})`}</div>
-    <div class="disc-tblwrap" style="max-height:480px"><table class="disc-tbl"><thead><tr>
-      <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (ورود)</th>' : ''}${showMr ? '<th>امتیاز بازگشت</th>' : ''}
-      <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (خروج)</th>' : ''}<th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
-      <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="23" style="color:var(--muted)">معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.</td></tr>'}</tbody></table></div>`;
+  discRenderTrades(res);
   document.getElementById('disc-note').textContent = '';
 }
 

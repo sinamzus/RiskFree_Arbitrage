@@ -1103,13 +1103,17 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     if len(curve) > 400:                       # keep the payload small
         step = len(curve) / 400.0
         curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
+    trade_dicts = [asdict(t) for t in accepted]
+    from discount_explain import explain_trades
+    loss_causes = explain_trades(trade_dicts, loaded, p)        # adds "why" to every losing trade
     return {
         "cats": cats or [],
         "funds_tested": tested, "funds_skipped": skipped_funds,
         "params": asdict(p),
         "period": [d0, d1],
         "signals": len({(t.symbol, t.entry_date, t.entry_time) for t in raw_trades}),
-        "trades": [asdict(t) for t in accepted],
+        "trades": trade_dicts,
+        "loss_causes": loss_causes,
         "per_symbol": _per_symbol(accepted, p.initial_capital),
         "equity_curve": curve,
         "benchmark": build_benchmark(price_series, nav_series, p),
