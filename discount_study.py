@@ -27,6 +27,7 @@ Method notes
 from __future__ import annotations
 
 import bisect
+import itertools
 import math
 import random
 import time
@@ -460,11 +461,17 @@ class Study:
         self._setup()
 
         combos = self._slow_combos()
-        if len(combos) > self.max_universes:
+        fast_dims = [d for d in FAST_ORDER if d in self.space]
+        fast_size = 1
+        for d in fast_dims:
+            fast_size *= len(self.space[d])
+        exhaustive = len(combos) * fast_size <= max(self.n_samples, 800) and len(combos) <= max(self.max_universes, 60)
+        if not exhaustive and len(combos) > self.max_universes:
             self.rng.shuffle(combos)
             combos = combos[:self.max_universes]
-        per = max(4, self.n_samples // max(1, len(combos)))
+        per = fast_size if exhaustive else max(4, self.n_samples // max(1, len(combos)))
         total = per * len(combos)
+        self.exhaustive = exhaustive
         self._prog(phase="search", done=0, total=total + 40, combos=len(combos))
 
         # the reference configuration = the form's own values (always evaluated first)
@@ -472,8 +479,22 @@ class Study:
         self.passive = self._passive(self._universe(_to_params(self.base, default_rec["cfg"]))) if default_rec else \
             {"blocks": [], "train": None, "hold": None}
         done = 0
+        search_end = self.t0 + self.max_seconds * 0.8        # keep 20% for refinement + analysis
         for ci, slow in enumerate(combos):
-            for cfg in self._sample_fast(slow, per):
+            # every structural combination gets an equal share of the time budget
+            slice_end = time.time() + max(2.0, (search_end - time.time()) / max(1, len(combos) - ci))
+            if exhaustive:
+                cfgs = []
+                for vals in itertools.product(*(self.space[d] for d in fast_dims)):
+                    cfg = self._fill(slow)
+                    cfg.update(dict(zip(fast_dims, vals)))
+                    if _valid(cfg):
+                        cfgs.append(cfg)
+            else:
+                cfgs = self._sample_fast(slow, per)
+            for cfg in cfgs:
+                if time.time() > slice_end and not exhaustive:
+                    break
                 if not self._time_left():
                     self.truncated = True
                     break
@@ -483,11 +504,23 @@ class Study:
                     self._prog(done=done)
             if self.truncated:
                 break
-        random_recs = [r for r in self.records if r["src"] == "random"]
+        random_recs = [r for r in self.records if r["src"] in ("random", "default")]
+        self.min_trades_requested = self.min_trades
         qual = [r for r in random_recs if r["ok"]]
-        if len(qual) < 8:
-            raise ValueError(f"فقط {len(qual)} ترکیب حداقل {self.min_trades} معامله در آموزش داشتند. «حداقل معامله» را کم کنید، "
-                             f"بازه یا دستهٔ بیشتری انتخاب کنید، یا آستانه‌های ورود را سهل‌تر کنید.")
+        if len(qual) < 20 and random_recs:
+            # too few configurations reach the trade minimum: lower it (never below 5) instead of failing
+            counts = sorted((r["train"]["trade_count"] for r in random_recs), reverse=True)
+            m = max(5, min(self.min_trades, counts[min(20, len(counts)) - 1]))
+            if m < self.min_trades:
+                self.min_trades = m
+                for r in self.records:
+                    r["ok"] = r["train"]["trade_count"] >= m
+                qual = [r for r in random_recs if r["ok"]]
+        if len(random_recs) < 3:
+            raise ValueError(f"فضای جستجو فقط {len(random_recs)} ترکیب متفاوت دارد؛ پارامتر یا مقدار بیشتری برای جستجو بدهید (پانل «۴) تنظیمات بهینه‌سازی»).")
+        if len(qual) < 3:
+            raise ValueError(f"فقط {len(qual)} ترکیب حتی {self.min_trades} معامله در آموزش داشتند (از {len(random_recs)} ترکیب). "
+                             f"آستانه‌های ورود را سهل‌تر کنید، بازه یا دستهٔ بیشتری انتخاب کنید یا صندوق‌های بیشتری را فعال کنید.")
 
         # ---- refinement of the best few (training region only) -------------------------
         self._prog(phase="refine")
@@ -724,6 +757,11 @@ class Study:
 
         # --- plain-language findings -----------------------------------------------------------------------
         findings = []
+        if self.min_trades < self.min_trades_requested:
+            findings.append(f"کمتر از ۲۰ ترکیب به {self.min_trades_requested} معامله در آموزش رسیدند؛ «حداقل معامله» خودکار به {self.min_trades} کاهش یافت. "
+                            "نتیجه با نمونهٔ معاملاتیِ کم ضعیف‌تر است؛ بازهٔ بلندتر یا صندوق بیشتر بگیرید.")
+        if getattr(self, "exhaustive", False):
+            findings.append("فضای جستجو کوچک بود و همهٔ ترکیب‌ها یکی‌یکی آزموده شد (نه نمونه‌گیری تصادفی).")
         if imp:
             t = imp[0]
             findings.append(f"مهم‌ترین پارامتر: «{t['label']}» (توضیح {((t['eta_train'] or 0) * 100):.0f}٪ از تغییرات امتیاز آموزش و "
@@ -751,7 +789,8 @@ class Study:
                       "train_blocks": self.T, "hold_blocks": self.H,
                       "train_range": list(self.train_rng), "hold_range": list(self.hold_rng),
                       "objective": self.objective, "objective_label": OBJECTIVES[self.objective],
-                      "min_trades": self.min_trades, "n_random": len([r for r in self.records if r["src"] == "random"]),
+                      "min_trades": self.min_trades, "min_trades_requested": self.min_trades_requested,
+                      "exhaustive": getattr(self, "exhaustive", False), "n_random": len([r for r in self.records if r["src"] == "random"]),
                       "n_qualified": len(qual), "n_refine": len([r for r in self.records if r["src"] == "refine"]),
                       "n_universes": len(self.cache_order), "seconds": round(time.time() - self.t0, 1),
                       "truncated": self.truncated,

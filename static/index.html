@@ -7877,7 +7877,8 @@ async function discOptimize() {
     clearInterval(discOptTimer); discOptTimer = null;
     btn.disabled = false; btn.textContent = '🔧 بهینه‌سازی و مطالعهٔ جامع';
     if (j.result?.error) { panel.innerHTML = `<div class="ob-p">خطا: ${j.result.error}</div>`; return; }
-    if (j.result?.mode === 'grid') renderDiscOptimize(j.result, p); else renderDiscStudy(j.result, p);
+    try { if (j.result?.mode === 'grid') renderDiscOptimize(j.result, p); else renderDiscStudy(j.result, p); }
+    catch (e) { panel.innerHTML = `<div class="ob-p">نمایش نتیجه با خطا مواجه شد: ${e.message}<br>این پیام را برای رفع مشکل بفرستید (کنسول مرورگر: F12).</div>`; console.error(e); }
   };
   discOptTimer = setInterval(poll, 1500);
   poll();

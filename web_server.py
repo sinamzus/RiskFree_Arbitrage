@@ -1995,9 +1995,12 @@ def create_app(db, scan_callback=None):
                 _disc_opt_state["result"] = res
             except ValueError as e:
                 _disc_opt_state["result"] = {"error": str(e)}
-            except Exception:
+            except Exception as e:
                 logger.exception("disc optimize failed")
-                _disc_opt_state["result"] = {"error": "optimization failed"}
+                import traceback
+                tb = traceback.extract_tb(e.__traceback__)[-1]
+                _disc_opt_state["result"] = {"error": f"بهینه‌سازی با خطا متوقف شد: {type(e).__name__}: {e} "
+                                                      f"(در {tb.filename.split('/')[-1].split(chr(92))[-1]}:{tb.lineno})"}
             finally:
                 with _disc_opt_lock:
                     _disc_opt_state["running"] = False
