@@ -721,7 +721,12 @@ def _summarize(trades: list[Trade], base_capital: float) -> dict:
     }
 
 
-def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
+def _sec(t: int) -> int:
+    t = int(t)
+    return (t // 10000) * 3600 + (t // 100 % 100) * 60 + t % 100
+
+
+def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False):
     """Replay maximum-liquidity trades against ONE capital pool, in time order.
 
     Returns (accepted_trades, portfolio_dict, equity_curve, skipped_positions).
@@ -750,16 +755,28 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
     curve: dict[int, float] = {d0: cash}
     peak = cash
     max_dd = 0.0
-    exp_area = 0.0                         # ∑ (invested/equity) · calendar days
+    # Exposure = invested book cost / book capital, integrated over REAL clock time (seconds), so a
+    # position held for two hours counts for two hours and a same-day round trip is not ignored.
+    exp_area = 0.0                         # ∑ (invested/equity) · seconds
+    inv_area = 0.0                         # ∑ invested rial · seconds (for the independent cross-check)
     peak_exp = 0.0
-    last_ord = _ord(d0)
-    first_ord = last_ord
+    first_ord = _ord(d0)
+    start_ts = first_ord * 86400
+    end_ts = (_ord(d1) + 1) * 86400
+    last_ts = start_ts
+    exp_curve = [[d0, 0, 0.0]] if want_exposure else None
+    buckets = [0.0, 0.0, 0.0, 0.0]         # seconds flat / <25% / 25-50% / >=50% engaged
     for d, t, kind, _tie, _sym, key, i in events:
-        o = _ord(d)
+        ts = _ord(d) * 86400 + _sec(t)
         eq = cash + invested
-        if eq > 0 and o > last_ord:
-            exp_area += (invested / eq) * (o - last_ord)
-        last_ord = max(last_ord, o)
+        if ts > last_ts:
+            frac = (invested / eq) if eq > 0 else 0.0
+            exp_area += frac * (ts - last_ts)
+            inv_area += invested * (ts - last_ts)
+            if want_exposure:
+                buckets[0 if frac < 1e-9 else 1 if frac < 0.25 else 2 if frac < 0.5 else 3] += ts - last_ts
+            last_ts = ts
+        o = _ord(d)
         if kind == 1:                                            # entry (kind 0/2 = exit chunk)
             chunks = groups[key]
             full_cost = sum(c.buy_notional for c in chunks)
@@ -797,8 +814,20 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
             peak = max(peak, eq2)
             if peak > 0:
                 max_dd = max(max_dd, (peak - eq2) / peak)
+        if want_exposure:
+            e_now = cash + invested
+            exp_curve.append([d, t, round(invested / e_now * 100, 3) if e_now > 0 else 0.0])
 
     final = cash + invested
+    if end_ts > last_ts:                                          # tail up to the end of the last day
+        eq = cash + invested
+        frac = (invested / eq) if eq > 0 else 0.0
+        exp_area += frac * (end_ts - last_ts)
+        inv_area += invested * (end_ts - last_ts)
+        if want_exposure:
+            buckets[0 if frac < 1e-9 else 1 if frac < 0.25 else 2 if frac < 0.5 else 3] += end_ts - last_ts
+            exp_curve.append([d1, 235959, round(frac * 100, 3)])
+    total_s = max(1, end_ts - start_ts)
     span_days = max(1, _ord(d1) - first_ord)
     years = span_days / 365.0
     cagr = None
@@ -811,19 +840,25 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
         "portfolio_return_pct": round((final / p.initial_capital - 1) * 100, 3) if p.initial_capital else 0,
         "cagr_pct": round(cagr, 2) if cagr is not None else None,
         "max_equity_drawdown_pct": round(max_dd * 100, 3),
-        "avg_exposure_pct": round(exp_area / span_days * 100, 1),
+        "avg_exposure_pct": round(exp_area / total_s * 100, 1),
         "peak_exposure_pct": round(peak_exp * 100, 1),
         "skipped_positions": skipped,
         "accepted_positions": len(factor),
         "period_days": span_days,
     }
+    if want_exposure:
+        pf["exposure"] = {"curve": exp_curve, "flat_time_pct": round(buckets[0] / total_s * 100, 1),
+                          "low_time_pct": round(buckets[1] / total_s * 100, 1),
+                          "mid_time_pct": round(buckets[2] / total_s * 100, 1),
+                          "high_time_pct": round(buckets[3] / total_s * 100, 1),
+                          "exposure_seconds_area": exp_area, "invested_rial_seconds": inv_area, "total_seconds": total_s}
     ds = sorted(curve)
     curve_list = [[d, round(curve[d], 0)] for d in ds]
     return accepted, pf, curve_list, skipped
 
 
-def _portfolio_summary(trades: list[Trade], p: DiscountParams, d0: int, d1: int):
-    accepted, pf, curve, skipped = _replay(trades, p, d0, d1)
+def _portfolio_summary(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False):
+    accepted, pf, curve, skipped = _replay(trades, p, d0, d1, want_exposure)
     s = _summarize(accepted, p.initial_capital)
     s.update(pf)
     s["max_drawdown_pct"] = pf["max_equity_drawdown_pct"]
@@ -1098,7 +1133,19 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     dates = db.get_nav_intraday_dates(start, end)
     d0 = dates[0] if dates else (start or 0)
     d1 = dates[-1] if dates else (end or 0)
-    accepted, summary, curve = _portfolio_summary(raw_trades, p, d0, d1)
+    accepted, summary, curve = _portfolio_summary(raw_trades, p, d0, d1, want_exposure=True)
+    exposure = summary.pop("exposure", None)
+    if exposure is not None:
+        ec = exposure["curve"]
+        if len(ec) > 3000:
+            step = len(ec) / 3000.0
+            ec = [ec[int(i * step)] for i in range(3000)] + [ec[-1]]
+        exposure["curve"] = ec
+        exposure["funds"] = tested
+        exposure["position_pct"] = p.position_pct
+        exposure["ceiling_pct"] = round(min(100.0, tested * p.position_pct), 1)
+        exposure["avg_pct"] = summary.get("avg_exposure_pct")
+        exposure["peak_pct"] = summary.get("peak_exposure_pct")
     accepted.sort(key=lambda t: (t.entry_date, t.entry_time))
     if len(curve) > 400:                       # keep the payload small
         step = len(curve) / 400.0
@@ -1114,6 +1161,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "signals": len({(t.symbol, t.entry_date, t.entry_time) for t in raw_trades}),
         "trades": trade_dicts,
         "loss_causes": loss_causes,
+        "exposure": exposure,
         "per_symbol": _per_symbol(accepted, p.initial_capital),
         "equity_curve": curve,
         "benchmark": build_benchmark(price_series, nav_series, p),

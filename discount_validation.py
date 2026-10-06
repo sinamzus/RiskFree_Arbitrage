@@ -624,6 +624,15 @@ def self_test() -> dict:
     add("اتحاد حسابداری: سرمایهٔ نهایی − اولیه = جمع سود معامله‌ها",
         abs((s_["final_capital"] - p.initial_capital) - net) < max(50, 1e-6 * p.initial_capital),
         f"اختلاف {round((s_['final_capital'] - p.initial_capital) - net, 1)} ریال (گردکردن)")
+    # exposure: the replay's invested-capital integral must equal an independent sum over the trades
+    acc_e, pf_e, _c2, _s2 = D._replay(tr, p, U["d0"], U["d1"], True)
+    ind_area = sum(t.buy_notional * ((D._ord(t.exit_date) * 86400 + D._sec(t.exit_time))
+                                     - (D._ord(t.entry_date) * 86400 + D._sec(t.entry_time))) for t in acc_e)
+    rep_area = pf_e["exposure"]["invested_rial_seconds"]
+    add("سرمایهٔ درگیر: انتگرال زمانیِ بازپخش با جمع مستقلِ معامله‌ها یکی است",
+        ind_area > 0 and abs(rep_area / ind_area - 1) < 2e-3 and 0 <= pf_e["avg_exposure_pct"] <= 100.0
+        and pf_e["avg_exposure_pct"] <= pf_e["peak_exposure_pct"] + 1e-6,
+        f"نسبت {round(rep_area / ind_area, 5) if ind_area else None}، میانگین {pf_e['avg_exposure_pct']}٪ ≤ اوج {pf_e['peak_exposure_pct']}٪")
     it_ = info_tests(U, p, n_iter=99, max_seconds=15)
     add("آزمون بازگشت حباب: در دنیای بازگشت‌پذیر باید معنادار باشد (p ≤ 0.05)",
         not it_.get("insufficient") and it_["mean_reversion"]["p_value"] <= 0.05,

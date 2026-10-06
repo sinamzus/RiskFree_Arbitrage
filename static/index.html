@@ -7050,6 +7050,11 @@ const DISC_TIP_RULES = [
   [/^بازده آزمون$/, 'بازده همان ترکیب در بخش آخرِ دوره که در انتخاب دخالت نداشته.'],
   [/^آمارهٔ t$/, 'میانگین بازدهٔ معاملات تقسیم بر خطای معیارش؛ تقریبی (معاملات هم‌زمان همبسته‌اند). زیر ۱٫۵ یعنی سود از نوسان قابل‌تشخیص نیست.'],
   [/^پسیو \(هم‌وزن\)$/, 'خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها در همین دوره‌ها، بدون کارمزد.'],
+  [/^سرمایهٔ درگیر در طول بازه/, 'چند درصد از سرمایهٔ دفتری در هر لحظه داخل پوزیشن بوده است (پله‌ای). بقیه نقد و بی‌کار بوده.'],
+  [/^میانگین \(وزن‌دار با زمان/, 'میانگین درصد سرمایهٔ درگیر، وزن‌دار با زمان واقعیِ ساعت‌به‌ساعت.'],
+  [/^سقف ساختاری$/, 'تعداد صندوق‌ها × سهم هر پوزیشن (حداکثر ۱۰۰٪). چون هر صندوق هم‌زمان یک پوزیشن دارد، بیشتر از این ممکن نیست.'],
+  [/^زمانِ بدون پوزیشن$/, 'چند درصد از زمانِ بازه هیچ پوزیشنی باز نبود.'],
+  [/^درگیری (کمتر|۲۵|۵۰)/, 'چند درصد از زمان، سطح سرمایهٔ درگیر در این بازه بود.'],
   [/^اهمیت پارامترها/, 'هر پارامتر چند درصد از تغییرات نتیجه را توضیح می‌دهد (η²)؛ نزدیک صفر = بی‌اثر.'],
   [/^روی امتیاز آموزش/, 'سهم تغییرات امتیاز آموزش که با این پارامتر توضیح داده می‌شود.'],
   [/^روی بازدهٔ آزمون/, 'سهم تغییرات بازدهٔ آزمون که با این پارامتر توضیح داده می‌شود؛ اگر از ستون آموزش خیلی کمتر است، اثر ظاهری و برازشی است.'],
@@ -7268,6 +7273,56 @@ async function discBubFocus(i) {
   discBubInit();
   const r = await discBubLoad({start: String(sh(t.entry_date, -3)), end: String(sh(t.exit_date, 3))});
   el.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+let _discExpChart = null;
+
+function discExposureHtml(res) {
+  const e = res.exposure;
+  if (!e || !e.curve || e.curve.length < 2) return '';
+  const cap = e.ceiling_pct, avg = e.avg_pct || 0;
+  const capNote = cap < 100
+    ? `<div class="dv-note" style="font-size:11px;color:var(--sub)">سقف ساختاری: ${discLtr(e.funds)} صندوق × ${discLtr(e.position_pct + '%')} = <b>${discLtr(cap + '%')}</b> — هر صندوق هم‌زمان فقط یک پوزیشن دارد، پس حتی اگر همیشه سیگنال بود، بیش از این سرمایه درگیر نمی‌شد.
+        میانگین واقعی ${discLtr(avg + '%')} یعنی ${discLtr(cap ? Math.round(avg / cap * 100) + '%' : '—')} از آن سقف.</div>` : '';
+  return `<div class="disc-h" style="margin-top:8px">سرمایهٔ درگیر در طول بازه (٪ از سرمایهٔ دفتری: هزینهٔ پوزیشن‌های باز ÷ (نقد + هزینهٔ پوزیشن‌ها))</div>
+    <div class="opt-metric-row">
+      ${discCard('میانگین (وزن‌دار با زمان واقعی)', avg + '%')}
+      ${discCard('اوج', (e.peak_pct || 0) + '%')}
+      ${discCard('سقف ساختاری', cap + '%')}
+      ${discCard('زمانِ بدون پوزیشن', e.flat_time_pct + '%')}
+      ${discCard('درگیری کمتر از ۲۵٪', e.low_time_pct + '%')}
+      ${discCard('درگیری ۲۵ تا ۵۰٪', e.mid_time_pct + '%')}
+      ${discCard('درگیری ۵۰٪ و بیشتر', e.high_time_pct + '%')}
+    </div>${capNote}
+    <div id="disc-exp-chart" style="height:240px;width:100%;border:1px solid var(--brd);border-radius:6px;overflow:hidden;margin-top:6px"></div>
+    <div class="dv-note">نمودار پله‌ای است: هر ورود یا خروج، سطح را عوض می‌کند. زمان از ساعت واقعی معاملات محاسبه می‌شود (شب و تعطیلی هم تا وقتی پوزیشن باز است درگیر حساب می‌شود)؛ معاملهٔ چندساعته هم به‌اندازهٔ همان ساعت‌ها حساب می‌شود.</div>`;
+}
+
+function discExposureDraw(res) {
+  if (_discExpChart) { try { _discExpChart.remove(); } catch (e) {} _discExpChart = null; }
+  const e = res.exposure, el = document.getElementById('disc-exp-chart');
+  if (!e || !el || !e.curve || e.curve.length < 2) return;
+  _syncTV();
+  const opts = tvOpts(el, true);
+  opts.height = el.clientHeight;
+  const chart = createChart(el, opts);
+  _discExpChart = chart;
+  const hi = Math.max(10, (e.peak_pct || 0) * 1.12, (e.ceiling_pct < 100 ? e.ceiling_pct * 1.08 : 0));
+  const ser = chart.addAreaSeries({
+    lineColor: '#26a69a', topColor: 'rgba(38,166,154,.45)', bottomColor: 'rgba(38,166,154,.04)', lineWidth: 2,
+    lineType: LightweightCharts.LineType ? LightweightCharts.LineType.WithSteps : 0,
+    lastValueVisible: false, priceLineVisible: false,
+    priceFormat: {type: 'custom', formatter: v => v.toFixed(0) + '%', minMove: 1},
+    autoscaleInfoProvider: () => ({priceRange: {minValue: 0, maxValue: hi}}),
+  });
+  const m = new Map();
+  e.curve.forEach(p => m.set(discBubUnix(p[0], p[1]), p[2]));
+  ser.setData([...m].sort((a, b) => a[0] - b[0]).map(([t, v]) => ({time: t, value: v})));
+  ser.createPriceLine({price: e.avg_pct || 0, color: '#e0a030', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'میانگین'});
+  if (e.ceiling_pct < 100) ser.createPriceLine({price: e.ceiling_pct, color: '#ef5350', lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: 'سقف ساختاری'});
+  chart.timeScale().fitContent();
+  const ro = new ResizeObserver(() => chart.applyOptions({width: el.clientWidth}));
+  ro.observe(el);
 }
 
 function discMrHtml(res) {
@@ -7684,10 +7739,12 @@ function renderDiscBacktest(res, p) {
     ${discCard('نوع خروج', reasonTxt)}
   </div>
   ${discCompareHtml(res)}
+  ${discExposureHtml(res)}
   ${discBubbleHtml(res)}
   ${discMrHtml(res)}
 `;
 
+  discExposureDraw(res);
   const ps = (res.per_symbol || []).slice(0, 40);
   const psEl = document.getElementById('disc-persym');
   psEl.style.display = ps.length ? '' : 'none';
