@@ -1397,6 +1397,20 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 .disc-tbl td.src-manual { color:var(--blue); }
 .disc-tbl td.src-config { color:var(--green); }
 .disc-tbl tr.saved td { background:rgba(38,166,154,.12); }
+.dv-card { flex:1 1 260px; background:var(--surf); border:1px solid var(--brd); border-radius:8px; padding:10px 12px; }
+.dv-card .dv-t { font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+.dv-card .dv-x { font-size:var(--fs-xs); color:var(--sub); line-height:1.8; }
+.dv-dot { display:inline-block; width:11px; height:11px; border-radius:50%; }
+.dv-dot.ok { background:var(--green); } .dv-dot.warn { background:#e0a030; }
+.dv-dot.bad { background:var(--red); } .dv-dot.na { background:var(--muted); }
+.dv-head { border-radius:8px; padding:10px 14px; font-size:var(--fs-sm); font-weight:700; line-height:1.9;
+           background:var(--surf); border:1px solid var(--brd); border-inline-start:4px solid var(--muted); }
+.dv-head.ok { border-inline-start-color:var(--green); } .dv-head.bad { border-inline-start-color:var(--red); }
+.dv-head.warn, .dv-head.mixed { border-inline-start-color:#e0a030; }
+.dv-sec { margin-top:12px; }
+.dv-note { font-size:10px; color:var(--muted); line-height:1.8; margin-top:3px; }
+.dv-heat td { min-width:64px; }
+.dv-cur { outline:2px solid var(--blue); outline-offset:-2px; }
 .disc-h { font-size:var(--fs-xs); font-weight:700; color:var(--sub); margin:4px 0 -2px; }
 
 /* ── Options arbitrage tab (mirrors the market-making look) ── */
@@ -2419,6 +2433,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-testfrac" type="number" step="0.05" value="0.3" style="width:64px"></div>
       <button class="scan-btn" id="disc-funds-btn" onclick="discToggleFunds()" title="فهرست همهٔ صندوق‌ها، نمادِ مچ‌شده و دسته‌شان — قابل‌ویرایش">📋 فهرست صندوق‌ها</button>
       <button class="scan-btn" id="disc-stats-btn" onclick="discStats()" title="توزیع تخفیف و تازگی NAV هر صندوق — برای انتخاب آستانه‌ها">📊 آمار تخفیف</button>
+      <div class="bbt-field" title="تعداد دنیاهای جایگشتی برای p-value (بیشتر = دقیق‌تر ولی کندتر؛ سقف زمان ۶۰ ثانیه)"><label>جایگشت‌ها</label>
+        <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
+      <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
+      <button class="scan-btn" id="disc-self-btn" onclick="discSelfTest()" title="آزمون خودِ شبیه‌ساز: دنیای با پاسخ معلوم، حسابداری، نگاه به آینده، کالیبراسیون">🧪 آزمون سلامت شبیه‌ساز</button>
       <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="جستجوی شبکه‌ای روی ورود/خروج/نگه‌داری/حد ضرر + آزمون خارج از نمونه">🔧 بهینه‌سازی</button>
       <button class="scan-btn" id="disc-run" onclick="discBacktest()">🧪 اجرای بک‌تست</button>
     </div>
@@ -2428,6 +2446,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <div id="disc-funds" style="display:none"></div>
   <div id="disc-stats" style="display:none"></div>
   <div id="disc-opt" style="display:none"></div>
+  <div id="disc-val" style="display:none"></div>
   <div id="disc-cards"></div>
   <div id="disc-persym" style="display:none"></div>
   <div id="disc-trades"></div>
@@ -6595,6 +6614,133 @@ async function discEditFund(sid, patch) {
   const tr = document.getElementById('dfr-' + sid);
   if (tr) { tr.classList.add('saved'); setTimeout(() => tr.classList.remove('saved'), 900); }
   discLoadCats(true);          // refresh the counts above the category checkboxes
+}
+
+let discValTimer = null;
+const DV_LV = { ok: 'var(--green)', warn: '#e0a030', bad: 'var(--red)', na: 'var(--muted)' };
+const dvPct = v => v == null ? '—' : discLtr(v + '%');
+const dvCls = v => v == null ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
+
+async function discSelfTest() {
+  const btn = document.getElementById('disc-self-btn');
+  const panel = document.getElementById('disc-val');
+  btn.disabled = true; btn.textContent = '⏳ ...';
+  const r = await fetch('/api/disc/selftest').catch(() => null);
+  btn.disabled = false; btn.textContent = '🧪 آزمون سلامت شبیه‌ساز';
+  panel.style.display = 'block';
+  if (!r?.ok) { panel.innerHTML = '<div class="dv-head bad">آزمون سلامت اجرا نشد.</div>'; return; }
+  const j = await r.json();
+  const allOk = j.passed === j.total;
+  panel.innerHTML = `<div class="dv-head ${allOk ? 'ok' : 'bad'}">آزمون سلامت شبیه‌ساز: ${discLtr(j.passed + ' از ' + j.total)} مورد درست ${allOk ? '— شبیه‌ساز قابل‌اعتماد است.' : '— قبل از قضاوت دربارهٔ ایده باید خطای شبیه‌ساز رفع شود.'}</div>
+    <div class="disc-tblwrap" style="max-height:none;margin-top:6px"><table class="disc-tbl"><thead><tr><th style="text-align:start">آزمون</th><th>نتیجه</th><th style="text-align:start">جزئیات</th></tr></thead><tbody>
+    ${(j.checks || []).map(c => `<tr><td style="text-align:start">${c.name}</td><td class="${c.ok ? 'pos' : 'neg'}">${c.ok ? '✓ درست' : '✗ خطا'}</td><td style="text-align:start">${c.detail}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="dv-note">این آزمون‌ها روی دادهٔ ساختگی با پاسخ معلوم اجرا می‌شوند: دنیایی که ایده در آن کار می‌کند (باید سود بدهد)، دنیای بدون ایده (نباید)، اتحاد حسابداری، علّی بودن سیگنال (بدون نگاه به آینده)، و کالیبره بودن p-valueها روی دنیاهای بدون ایده.</div>`;
+}
+
+async function discValidate() {
+  const p = discCheckSel(); if (!p) return;
+  const btn = document.getElementById('disc-val-btn');
+  const body = Object.assign({}, p, { n_perm: document.getElementById('disc-nperm').value || 300, max_seconds: 60 });
+  const r = await fetch('/api/disc/validate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  }).catch(() => null);
+  if (!r?.ok) { showError('اعتبارسنجی شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
+  btn.disabled = true; btn.textContent = '⏳ در حال اعتبارسنجی ...';
+  const panel = document.getElementById('disc-val');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">⏳ شروع ...</div>';
+  if (discValTimer) clearInterval(discValTimer);
+  const poll = async () => {
+    const s = await fetch('/api/disc/validate/status').catch(() => null);
+    if (!s?.ok) return;
+    const j = await s.json();
+    const pr = j.progress || {};
+    if (j.running) {
+      panel.innerHTML = `<div class="ob-p">⏳ ${pr.phase || ''} ${pr.total ? '— ' + (pr.done || 0) + '/' + pr.total : ''}</div>`;
+      return;
+    }
+    clearInterval(discValTimer); discValTimer = null;
+    btn.disabled = false; btn.textContent = '🔬 اعتبارسنجی';
+    if (!j.result || j.result.error) { panel.innerHTML = `<div class="dv-head bad">خطا: ${(j.result || {}).error || 'نامشخص'}</div>`; return; }
+    renderDiscValidation(j.result, p);
+  };
+  discValTimer = setInterval(poll, 1500);
+  poll();
+}
+
+function dvHeat(sf) {
+  if (!sf || !sf.grid || !sf.grid.length) return '';
+  const vals = sf.grid.flat().filter(c => c && c.trades > 0).map(c => c.ret);
+  const mx = Math.max(1e-9, ...vals.map(Math.abs));
+  const cell = (c, cur) => {
+    if (!c) return `<td style="opacity:.3">—</td>`;
+    if (!c.trades) return `<td style="opacity:.5">0 معامله</td>`;
+    const a = Math.min(0.75, 0.15 + 0.6 * Math.abs(c.ret) / mx);
+    const bg = c.ret >= 0 ? `rgba(38,166,154,${a})` : `rgba(239,83,80,${a})`;
+    return `<td class="${cur ? 'dv-cur' : ''}" style="background:${bg}" title="${c.trades} معامله · نرخ برد ${c.win}%">${discLtr(c.ret + '%')}</td>`;
+  };
+  const sg = x => { const n = +(-x).toFixed(3); return (n > 0 ? '+' : '') + n; };       // threshold as a signed bubble level
+  const head = `<tr><th>${sf.entry_key === 'index_entry_pct' ? 'ورود شاخص ↓ / خروج →' : 'ورود ↓ / خروج →'}</th>${sf.exit_vals.map(v => `<th>${discLtr(sg(v) + '%')}</th>`).join('')}</tr>`;
+  const rows = sf.entry_vals.map((ev, i) => `<tr><th>${discLtr(sg(ev) + '%')}</th>${sf.grid[i].map((c, j) => cell(c, sf.current.i === i && sf.current.j === j)).join('')}</tr>`).join('');
+  return `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl dv-heat"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderDiscValidation(r, p) {
+  const v = r.verdict || { findings: [] }, s = r.summary || {};
+  const au = r.audit || {}, inf = r.info || {}, st = r.stress || [], sf = r.surface || {}, wf = r.walk_forward || {}, sb = r.stability || {};
+  const headCls = v.primary === 'ok' ? 'ok' : (v.primary === 'mixed' ? 'warn' : 'bad');
+  const cards = (v.findings || []).map(f => `<div class="dv-card"><div class="dv-t"><span class="dv-dot ${f.level}"></span>${f.area}) ${f.title}</div><div class="dv-x">${discLtr(f.text)}</div></div>`).join('');
+
+  const ar = (k, val, hint, cls) => `<tr><td style="text-align:start">${k}</td><td class="${cls || ''}">${val}</td><td style="text-align:start;color:var(--muted)">${hint || ''}</td></tr>`;
+  const auditTbl = au.n ? `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">جزء</th><th>میانگین هر معامله (وزن‌دار)</th><th style="text-align:start">معنی</th></tr></thead><tbody>
+    ${ar('سود ناخالص (قیمت میانی)', dvPct(au.gross_mid_pct), 'تغییر قیمت از ورود تا خروج، قبل از اسپرد و کارمزد', dvCls(au.gross_mid_pct))}
+    ${ar('— رشد NAV صندوق (carry)', dvPct(au.nav_drift_pct), 'اگر فقط نگه می‌داشتی هم می‌گرفتی؛ ربطی به ایده ندارد', '')}
+    ${ar('— همگرایی تخفیف (خودِ ایده)', dvPct(au.convergence_pct), 'تغییر قیمت/NAV؛ این بخش است که ایده می‌آورد', dvCls(au.convergence_pct))}
+    ${ar('اسپرد (رفت‌وبرگشت)', dvPct('-' + au.spread_cost_pct), 'فرضی؛ بدون اردربوک', 'neg')}
+    ${ar('کارمزد (رفت‌وبرگشت)', dvPct('-' + au.fee_pct), '', 'neg')}
+    ${ar('سود خالص', dvPct(au.net_pct), '', dvCls(au.net_pct))}
+    ${ar('معاملاتی که هزینه را جبران کردند', discLtr(au.share_beating_costs + '%'), `سودده پیش از هزینه: ${au.share_gross_positive}% · میانگین نگه‌داری ${au.avg_hold_days} روز`, '')}
+    ${ar('سهم رشد NAV از سود ناخالص', au.carry_share_pct == null ? '—' : discLtr(au.carry_share_pct + '%'), 'اگر زیاد است، سود بیشتر «پسیو» است تا همگرایی', '')}
+    </tbody></table></div>` : '<div class="dv-note">معامله‌ای برای حسابرسی نیست.</div>';
+
+  const mr = inf.mean_reversion;
+  const mrTxt = mr ? `شیب AR(1) روزانه <b>${discLtr(mr.beta_per_day)}</b> · نیمه‌عمر بازگشت <b>${mr.half_life_days == null ? '—' : discLtr(mr.half_life_days + ' روز')}</b> · p-value <b>${discLtr(mr.p_value)}</b> (از ${discLtr(inf.n_iter)} جایگشت؛ ${inf.n_funds} صندوق، ${inf.n_days} روز)` : 'دادهٔ کافی نیست';
+  const evTbl = (inf.events || []).length ? `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr>
+      <th>افق (روز)</th><th>روزهای سیگنال</th><th>میانگین بازده پس از سیگنال</th><th>میانگین خودِ صندوق</th><th>مزیت</th><th>p-value</th><th>پس از کسر هزینه</th></tr></thead><tbody>
+    ${inf.events.map(e => e.insufficient ? `<tr><td>${e.h}</td><td colspan="6" style="color:var(--muted)">دادهٔ کافی نیست</td></tr>` :
+      `<tr><td>${e.h}</td><td>${discLtr(e.n_signal_days)}</td><td>${dvPct(e.mean_signal_pct)}</td><td>${dvPct(e.mean_baseline_pct)}</td>
+        <td class="${dvCls(e.edge_pct)}">${dvPct(e.edge_pct)}</td><td class="${e.p_value <= 0.05 ? 'pos' : ''}">${discLtr(e.p_value)}</td><td class="${dvCls(e.net_of_cost_pct)}">${dvPct(e.net_of_cost_pct)}</td></tr>`).join('')}
+    </tbody></table></div>` : '';
+
+  const stTbl = st.length ? `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">سناریو</th><th>بازده</th><th>سرمایهٔ نهایی (م.ر)</th><th>معامله</th><th>نرخ برد</th><th>میانگین هر معامله</th></tr></thead><tbody>
+    ${st.map(x => `<tr><td style="text-align:start">${x.name}</td><td class="${dvCls(x.return_pct)}">${dvPct(x.return_pct)}</td><td>${discLtr(discM(x.final_capital))}</td><td>${x.trades}</td><td>${discLtr(x.win_rate + '%')}</td><td>${dvPct(x.avg_trade_pct)}</td></tr>`).join('')}</tbody></table></div>` : '';
+
+  const sfTxt = sf.n_cells ? `${discLtr(sf.share_positive_pct + '%')} از خانه‌ها سودده · میانه ${dvPct(sf.median_pct)} · بهترین ${dvPct(sf.best_pct)} · بدترین ${dvPct(sf.worst_pct)} · تنظیم فعلی (کادر آبی) ${dvPct(sf.current_pct)} در برابر میانگین همسایه‌ها ${dvPct(sf.neighbors_mean_pct)}` : 'دادهٔ کافی نیست';
+  const wfTbl = (wf.blocks || []).length ? `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th>بلوک</th><th>از</th><th>تا</th><th>معامله</th><th>بازده با پارامتر ثابت</th><th>پارامتر انتخابی walk-forward</th><th>بازده خارج از نمونه</th></tr></thead><tbody>
+    ${wf.blocks.map(b => `<tr><td>${b.block}</td><td>${gregIntToJalaliStr(b.from)}</td><td>${gregIntToJalaliStr(b.to)}</td><td>${b.trades}</td><td class="${dvCls(b.return_pct)}">${dvPct(b.return_pct)}</td>
+      <td>${b.wf_params ? discLtr(Object.values(b.wf_params).join(' / ')) : '—'}</td><td class="${dvCls(b.wf_oos_return_pct)}">${dvPct(b.wf_oos_return_pct)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="dv-note">${wf.fixed_positive_blocks} از ${wf.fixed_blocks} بلوک با پارامتر ثابت سودده · میانگین خارج از نمونهٔ walk-forward ${dvPct(wf.oos_mean_pct)}. در هر بلوک، پارامتر فقط با دادهٔ بلوک‌های قبلی انتخاب می‌شود.</div>` : '';
+
+  const sbTxt = sb.n ? `${sb.funds_profitable} از ${sb.funds} صندوق سودده · ${sb.months_profitable} از ${sb.months.length} ماه سودده · سه صندوق برتر ${sb.top3_funds_share_pct == null ? '—' : discLtr(sb.top3_funds_share_pct + '%')} از کل سود مثبت · سود بدون ۳ معاملهٔ برتر ${discLtr(discM(sb.pnl_without_best3))} م.ر (از کل ${discLtr(discM(sb.total_pnl))}) · نیمهٔ اول ${discLtr(discM(sb.first_half_pnl))} / نیمهٔ دوم ${discLtr(discM(sb.second_half_pnl))} م.ر` : '';
+  const monthsTbl = (sb.months || []).length ? `<div class="disc-tblwrap" style="max-height:200px"><table class="disc-tbl"><thead><tr><th>ماه (شمسی)</th><th>سود/زیان (م.ر)</th></tr></thead><tbody>${sb.months.map(m => `<tr><td>${m[0]}</td><td class="${dvCls(m[1])}">${discLtr(discM(m[1]))}</td></tr>`).join('')}</tbody></table></div>` : '';
+
+  document.getElementById('disc-val').innerHTML = `
+    <div class="dv-head ${headCls}">${v.headline || ''}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">${cards}</div>
+    <div class="dv-sec"><div class="disc-h">۱) حسابرسی هزینه و تفکیک سود (علتِ «ب»)</div>${auditTbl}</div>
+    <div class="dv-sec"><div class="disc-h">۲) آیا «زیر NAV بودن» اطلاعاتی دربارهٔ آینده دارد؟ (علتِ «ج»)</div>
+      <div class="dv-note" style="font-size:11px;color:var(--sub)">${mrTxt}</div>${evTbl}
+      <div class="dv-note">p-valueها از جایگشت تصادفیِ تغییرات حباب هر صندوق می‌آیند (دنیای «بدون بازگشت» با همان نوسان). این روش روی دنیاهای ساختگیِ بدون ایده کالیبره شد: حدود ۵٪ مواقع در سطح ۰٫۰۵ «معنادار» می‌گوید؛ روش‌های ساده‌تر (آزمون ورود تصادفی، t-test ساده) تا ۳۰٪ و ۱۰۰٪ گمراه می‌کردند. افقِ نزدیک به مدت نگه‌داری، قبل از دیدن نتیجه، ملاک حکم است.</div></div>
+    <div class="dv-sec"><div class="disc-h">۳) سخت‌گیری فرض‌های اجرا (علتِ «ب»)</div>${stTbl}
+      <div class="dv-note">اگر با کمی سخت‌گیری (اسپرد ×۲) سود از بین می‌رود، سود فعلی به فرض خوشبینانهٔ اسپرد وابسته است. دادهٔ اردربوک نداریم، پس هر نتیجه حد بالاست.</div></div>
+    <div class="dv-sec"><div class="disc-h">۴) سطح پارامتر: ورود × خروج (علتِ «الف»)</div>
+      <div class="dv-note" style="font-size:11px;color:var(--sub)">${sfTxt}</div>${dvHeat(sf)}
+      <div class="dv-note">ناحیهٔ هموار و سودده = ایده پایدار؛ یک خانهٔ تنها که از همسایه‌ها بسیار بهتر است = نویز / بیش‌برازش.</div></div>
+    <div class="dv-sec"><div class="disc-h">۵) walk-forward (علتِ «الف»)</div>${wfTbl}</div>
+    <div class="dv-sec"><div class="disc-h">۶) پایداری (صندوق، ماه، تمرکز)</div>
+      <div class="dv-note" style="font-size:11px;color:var(--sub)">${sbTxt}</div>${monthsTbl}</div>
+    <div class="dv-note" style="margin-top:10px">ترتیب پیشنهادی: اول «🧪 آزمون سلامت شبیه‌ساز»، بعد این گزارش. اگر «ج» قرمز است، پارامتر و اجرا را دستکاری نکنید؛ سیگنال را عوض کنید.</div>`;
 }
 
 async function discBacktest() {

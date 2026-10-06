@@ -325,13 +325,15 @@ def _bubble_index(rows_by_fund: list[list[tuple]], p: DiscountParams):
 # --------------------------------------------------------------------------- #
 
 def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
-              idx: list | None = None) -> list[Trade]:
+              idx: list | None = None, rel: list | None = None) -> list[Trade]:
+    """``rel`` (optional) replaces last/fair − 1 as the fund-level signal — used by the
+    validation placebo test to feed the same rules a signal that is unrelated to prices."""
     trades: list[Trade] = []
     if not rows:
         return trades
     hs = p.half_spread_pct / 100.0
-    ent_mult = 1.0 - p.entry_discount_pct / 100.0
-    ex_mult = 1.0 - p.exit_discount_pct / 100.0
+    ent_thr = -p.entry_discount_pct / 100.0
+    ex_thr = -p.exit_discount_pct / 100.0
     stop_mult = 1.0 - p.stop_loss_pct / 100.0
     big = 1 << 60
 
@@ -389,13 +391,14 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     for i, (o, d, t, nav, last, fresh, nav_raw) in enumerate(rows):
         if p.require_fresh and not fresh:
             continue
+        r = rel[i] if rel is not None else last / nav - 1.0       # fund-level signal
         if pos == 0:
             if i == last_i:
                 continue                  # never open a position on the final snapshot
             if d == blocked_date:
                 continue
             ix = idx[i] if idx is not None else None
-            fund_ok = last <= nav * ent_mult
+            fund_ok = r <= ent_thr
             idx_ok = ix is not None and ix <= ix_entry
             if not ((mode == "fund" and fund_ok) or (mode == "index" and idx_ok)
                     or (mode == "both" and fund_ok and idx_ok)):
@@ -406,7 +409,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 continue
             pos, cost = units, units * ask
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
-            e_fair, e_rel = nav, last / nav - 1.0
+            e_fair, e_rel = nav, r
             e_idx = ix
         else:
             bid = last * (1 - hs)
@@ -415,12 +418,12 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 reason = "time"
             elif stop_s > 0 and (
                     (p.stop_mode == "price" and bid <= e_px * stop_mult)
-                    or (p.stop_mode == "nav_level" and last <= nav * (1.0 - stop_s))
+                    or (p.stop_mode == "nav_level" and r <= -stop_s)
                     or (p.stop_mode not in ("price", "nav_level")
-                        and last / nav - 1.0 <= e_rel - stop_s)):
+                        and r <= e_rel - stop_s)):
                 reason = "stop"
             elif ((mode == "index" and idx is not None and idx[i] is not None and idx[i] >= ix_exit)
-                  or (mode != "index" and last >= nav * ex_mult)):
+                  or (mode != "index" and r >= ex_thr)):
                 reason = "signal"
             if reason:
                 units = min(pos, _cap(d))

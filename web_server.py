@@ -1811,6 +1811,63 @@ def create_app(db, scan_callback=None):
         db.set_nav_fund(sid, body.get("symbol"), cat)
         return jsonify({"ok": True})
 
+    _val_state = {"running": False, "progress": {}, "result": None}
+    _val_lock = threading.Lock()
+
+    @app.route("/api/disc/validate", methods=["GET", "POST"])
+    def api_disc_validate():
+        """Run the validation suite (event study, placebo, surface, walk-forward, ...) in a thread."""
+        import discount_validation as V
+        body = request.get_json(silent=True) or {}
+
+        def _get(name, default=None):
+            return body[name] if name in body else request.args.get(name, default)
+
+        cats, syms, start, end = _disc_sel(_get)
+        base = _disc_params_from(_get)
+        try:
+            n_placebo = max(30, min(2000, int(float(_get("n_perm", _get("n_placebo", 300))))))
+            max_sec = max(10.0, min(600.0, float(_get("max_seconds", 60))))
+        except (TypeError, ValueError):
+            n_placebo, max_sec = 300, 60.0
+        if _val_state["running"]:
+            return jsonify({"status": "already running", "progress": _val_state["progress"]}), 409
+
+        def _run():
+            with _val_lock:
+                _val_state["running"] = True
+                _val_state["progress"] = {"phase": "شروع", "done": 0, "total": 0}
+                _val_state["result"] = None
+            try:
+                _val_state["result"] = V.run_validation(db, cats, syms, start, end, base, n_placebo,
+                                                        max_sec, _val_state["progress"])
+            except ValueError as e:
+                _val_state["result"] = {"error": str(e)}
+            except Exception:
+                logger.exception("validation failed")
+                _val_state["result"] = {"error": "validation failed"}
+            finally:
+                with _val_lock:
+                    _val_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="disc-validate").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/disc/validate/status")
+    def api_disc_validate_status():
+        return jsonify({"running": _val_state["running"], "progress": _val_state["progress"],
+                        "result": _val_state["result"]})
+
+    @app.route("/api/disc/selftest")
+    def api_disc_selftest():
+        """Known-answer / causality / accounting checks of the simulator itself."""
+        import discount_validation as V
+        try:
+            return jsonify(V.self_test())
+        except Exception as e:
+            logger.exception("selftest failed")
+            return jsonify({"error": str(e)}), 500
+
     @app.route("/api/disc/backtest")
     def api_disc_backtest():
         from discount_backtest import run_discount_backtest
