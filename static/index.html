@@ -6454,7 +6454,7 @@ function discCompareChart(strat, index, initial) {
   const lastOf = c => c && c.length ? c[c.length - 1][1] : null;
   return `<div style="font-size:11px;color:var(--sub);display:flex;gap:16px;flex-wrap:wrap;margin-bottom:4px">
       <span><span style="color:var(--green)">━</span> استراتژی: <b>${discLtr(discM(lastOf(strat)))}</b> م.ر</span>
-      <span><span style="color:#4fa3ff">━</span> شاخص هم‌وزن (پسیو): <b>${discLtr(discM(lastOf(index)))}</b> م.ر</span>
+      <span><span style="color:#4fa3ff">━</span> پسیو با تعادل روزانه (با کارمزد): <b>${discLtr(discM(lastOf(index)))}</b> م.ر</span>
       <span style="color:var(--muted)">┈ سرمایهٔ اولیه ${discLtr(discM(initial))}</span></div>
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
     <line x1="${L}" x2="${W - R}" y1="${sy(initial).toFixed(1)}" y2="${sy(initial).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>
@@ -6464,33 +6464,39 @@ function discCompareChart(strat, index, initial) {
 function discCompareHtml(res) {
   const s = res.summary || {}, bm = res.benchmark, init = s.initial_capital;
   if (!bm) return '<div class="disc-h">مقایسه با پسیو: دادهٔ کافی برای ساخت شاخص نیست.</div>';
-  const ix = bm.index || {}, bh = bm.buyhold || {}, nv = bm.nav_index || {};
+  const ix = bm.index || {}, rb = bm.rebalanced || {}, bh = bm.buyhold || {}, nv = bm.nav_index || {};
   const pct = v => v == null ? '—' : discLtr(v + '%');
   const cell = (v, c) => `<td class="${c || ''}">${v}</td>`;
-  const row = (name, fin, ret, cagr, dd, vol, bold) =>
-    `<tr${bold ? ' style="font-weight:700"' : ''}><td style="text-align:start">${name}</td>
+  const row = (name, fin, ret, cagr, dd, vol, bold, dim) =>
+    `<tr style="${bold ? 'font-weight:700;' : ''}${dim ? 'opacity:.7;' : ''}"><td style="text-align:start">${name}</td>
       ${cell(fin == null ? '—' : discLtr(discM(fin)), fin == null ? '' : discCls(fin - init))}
       ${cell(pct(ret), discCls(ret))}${cell(pct(cagr), discCls(cagr))}${cell(pct(dd))}${cell(vol == null ? '—' : pct(vol))}</tr>`;
   const navFinal = nv.total_return_pct == null ? null : init * (1 + nv.total_return_pct / 100);
-  const edge = (s.portfolio_return_pct != null && ix.total_return_pct != null)
-    ? +(s.portfolio_return_pct - ix.total_return_pct).toFixed(2) : null;
-  const edgeTxt = edge == null ? '' : `<div class="disc-h" style="margin-top:6px">برتری استراتژی نسبت به شاخص پسیو: <b class="${discCls(edge)}" style="color:var(${edge >= 0 ? '--green' : '--red'})">${discLtr((edge >= 0 ? '+' : '') + edge)}</b> نقطهٔ درصد
-      · سرمایهٔ نهایی ${discLtr(discM(s.final_capital))} در برابر ${discLtr(discM(ix.final_capital))} میلیون ﷼</div>`;
-  return `<div class="disc-h">مقایسه با پسیو — شاخص ${bm.funds} صندوق از ${gregIntToJalaliStr(bm.first)} تا ${gregIntToJalaliStr(bm.last)}، میانگین ${ix.avg_funds || 0} صندوق در هر روز</div>
+  const edge = (a, b) => (a == null || b == null) ? null : +(a - b).toFixed(2);
+  const fmtEdge = e => e == null ? '—' : `<b style="color:var(${e >= 0 ? '--green' : '--red'})">${discLtr((e >= 0 ? '+' : '') + e)}</b>`;
+  const e1 = edge(s.portfolio_return_pct, rb.total_return_pct);
+  const e2 = edge(s.portfolio_return_pct, bh.return_pct);
+  const edgeTxt = `<div class="disc-h" style="margin-top:6px">برتری استراتژی (نقطهٔ درصد): نسبت به پسیو با تعادل روزانه ${fmtEdge(e1)} · نسبت به خرید و نگه‌داری ${fmtEdge(e2)}
+      · سرمایهٔ نهایی ${discLtr(discM(s.final_capital))} در برابر ${discLtr(discM(rb.final_capital))} / ${discLtr(discM(bh.final_capital))} میلیون ﷼</div>`;
+  const feeNote = rb.fees_total != null
+    ? ` — کارمزد کل ${discLtr(discM(rb.fees_total))} م.ر، گردش روزانه ${discLtr((rb.avg_daily_turnover_pct || 0) + '%')}` : '';
+  return `<div class="disc-h">مقایسه با پسیو — ${bm.funds} صندوق از ${gregIntToJalaliStr(bm.first)} تا ${gregIntToJalaliStr(bm.last)}، میانگین ${ix.avg_funds || 0} صندوق در هر روز</div>
     <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr>
       <th style="text-align:start">روش</th><th>سرمایهٔ نهایی (م.ر)</th><th>بازده کل</th><th>بازده سالانهٔ مرکب</th><th>حداکثر افت</th><th>نوسان سالانه</th>
     </tr></thead><tbody>
       ${row('🎯 استراتژی (خرید زیر NAV)', s.final_capital, s.portfolio_return_pct, s.cagr_pct, s.max_equity_drawdown_pct, null, true)}
-      ${row('📊 شاخص هم‌وزن صندوق‌ها (پسیو، تعادل روزانه، بدون کارمزد)', ix.final_capital, ix.total_return_pct, ix.cagr_pct, ix.max_dd_pct, ix.vol_pct)}
+      ${row('🔁 پسیو با تعادل روزانه (کارمزد خرید و فروش)' + feeNote, rb.final_capital, rb.total_return_pct, rb.cagr_pct, rb.max_dd_pct, rb.vol_pct)}
       ${row(`🧺 خرید و نگه‌داری هم‌وزن (${bh.funds || 0} صندوق، با کارمزد)`, bh.final_capital, bh.return_pct, bh.cagr_pct, bh.max_dd_pct, null)}
-      ${row('💠 فقط بازده NAV همین صندوق‌ها (بدون اثر حباب/تخفیف)', navFinal, nv.total_return_pct, nv.cagr_pct, nv.max_dd_pct, nv.vol_pct)}
+      ${row('📊 شاخص نظری هم‌وزن (بدون کارمزد؛ فقط مرجع)', ix.final_capital, ix.total_return_pct, ix.cagr_pct, ix.max_dd_pct, ix.vol_pct, false, true)}
+      ${row('💠 فقط بازده NAV همین صندوق‌ها (بدون اثر حباب/تخفیف؛ فقط مرجع)', navFinal, nv.total_return_pct, nv.cagr_pct, nv.max_dd_pct, nv.vol_pct, false, true)}
     </tbody></table></div>
     ${edgeTxt}
-    <div class="disc-h" style="margin-top:8px">رشد سرمایه: استراتژی در برابر شاخص (هر دو از سرمایهٔ اولیهٔ یکسان)</div>
+    <div class="disc-h" style="margin-top:8px">رشد سرمایه: استراتژی در برابر پسیو با تعادل روزانه و کارمزد (هر دو از سرمایهٔ اولیهٔ یکسان)</div>
     ${discCompareChart(res.equity_curve, bm.curve, init)}
     <div style="margin-top:4px;font-size:10px;color:var(--muted);line-height:1.7">
-      شاخص = میانگین بازده روزانهٔ قیمتِ پایانیِ همهٔ صندوق‌های انتخاب‌شده (وزن برابر). استراتژی فقط بخشی از زمان در بازار است
-      (میانگین سرمایهٔ درگیر ${discLtr((s.avg_exposure_pct||0) + '%')})؛ بقیهٔ سرمایه نقد و بدون بازده است.
+      پسیو = وزن برابر روی همهٔ صندوق‌های انتخاب‌شده؛ در «تعادل روزانه» هر روز برنده‌ها کمی فروخته و بازنده‌ها کمی خریده می‌شوند تا وزن‌ها برابر بماند، و برای هر خرید و فروش کارمزد پرداخت می‌شود
+      (روز اول کارمزد خرید، روز آخر کارمزد فروش). «شاخص نظری» همان بدون هزینه است و فقط برای مرجع است.
+      استراتژی فقط بخشی از زمان در بازار است (میانگین سرمایهٔ درگیر ${discLtr((s.avg_exposure_pct||0) + '%')})؛ بقیهٔ سرمایه نقد و بدون بازده است.
       «سرمایهٔ همان لحظه» = نقد + بهای پوزیشن‌های باز. پوزیشن‌های ردشده یعنی نقد برای حداقل یک‌چهارم اندازهٔ هدف کافی نبود.</div>`;
 }
 

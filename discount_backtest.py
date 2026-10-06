@@ -467,16 +467,15 @@ def _daily_series(raw: list[tuple], p: DiscountParams) -> tuple[dict, dict]:
     return price, nav
 
 
-def _equal_weight_index(series: list[dict]) -> tuple[list[tuple[int, float]], list[int]]:
-    """Daily-rebalanced equal-weight index (level 1.0 at the first observation).
+def _returns_by_date(series: list[dict]) -> tuple[int | None, dict[int, dict[int, float]]]:
+    """{date: {fund_index: return}} from per-fund price series.
 
-    Each day's index return is the mean return of every fund observed that day
-    (vs its own previous observation).  Returns beyond ±30% or across >10-day
-    gaps are treated as data errors and ignored.  Returns ([(date, level)], [n_funds/day]).
+    A return is vs the fund's own previous observation; returns beyond ±30% or
+    across >10-day gaps are treated as data errors and dropped.
     """
-    by_date: dict[int, list[float]] = {}
+    by_date: dict[int, dict[int, float]] = {}
     first = None
-    for ser in series:
+    for k, ser in enumerate(series):
         ds = sorted(ser)
         if not ds:
             continue
@@ -484,18 +483,86 @@ def _equal_weight_index(series: list[dict]) -> tuple[list[tuple[int, float]], li
         for a, b in zip(ds, ds[1:]):
             r = ser[b] / ser[a] - 1.0
             if abs(r) <= 0.30 and (_ord(b) - _ord(a)) <= 10:
-                by_date.setdefault(b, []).append(r)
+                by_date.setdefault(b, {})[k] = r
+    return first, by_date
+
+
+def _equal_weight_index(series: list[dict]) -> tuple[list[tuple[int, float]], list[int]]:
+    """Theoretical daily-rebalanced equal-weight index (level 1.0 at the first
+    observation, NO trading costs): each day's return is the mean return of every
+    fund observed that day.  Returns ([(date, level)], [n_funds per day])."""
+    first, by_date = _returns_by_date(series)
     if first is None:
         return [], []
     level = 1.0
     out = [(first, 1.0)]
     counts = []
     for d in sorted(by_date):
-        rs = by_date[d]
+        rs = list(by_date[d].values())
         level *= 1.0 + sum(rs) / len(rs)
         out.append((d, level))
         counts.append(len(rs))
     return out, counts
+
+
+def _rebalanced_with_fees(series: list[dict], initial: float, bf: float, sf: float) -> dict:
+    """Passive account that REALLY rebalances to equal weights every day and pays
+    the buy fee on every purchase and the sell fee on every sale.
+
+    Day-1: ``initial`` is invested (buy fee).  Each day the funds observed that day
+    grow by their return, then are trimmed/topped-up to equal weight (sell fee on
+    what is sold, buy fee on what is bought).  Funds with no observation that day
+    are left untouched.  On the last date everything is sold (sell fee).
+    """
+    first, by_date = _returns_by_date(series)
+    if first is None or not by_date:
+        return {}
+    hold: dict[int, float] = {}
+    fees = 0.0
+    turnover: list[float] = []                 # traded value / portfolio value, per day
+    curve: list[tuple[int, float]] = [(first, float(initial))]
+    # day 1: spend the initial cash equally on the funds that already trade
+    start_pool = [k for k, ser in enumerate(series) if first in ser]
+    if not start_pool:
+        return {}
+    spend = initial / (1.0 + bf)
+    for k in start_pool:
+        hold[k] = spend / len(start_pool)
+    fees += spend * bf
+    for d in sorted(by_date):
+        rets = by_date[d]
+        for k, r in rets.items():              # grow what we hold
+            if k in hold:
+                hold[k] *= 1.0 + r
+        pool = list(rets)                      # funds we equalise today
+        base = sum(hold.get(k, 0.0) for k in pool)
+        n = len(pool)
+        if n == 0 or base <= 0:
+            continue
+        tgt = base / n
+        buys = sum(max(tgt - hold.get(k, 0.0), 0.0) for k in pool)
+        sells = sum(max(hold.get(k, 0.0) - tgt, 0.0) for k in pool)
+        fee = buys * bf + sells * sf
+        tgt = (base - fee) / n                 # fees are paid out of the pool
+        for k in pool:
+            hold[k] = tgt
+        fees += fee
+        total = sum(hold.values())
+        if total > 0:
+            turnover.append((buys + sells) / total)
+        curve.append((d, total))
+    last_d = curve[-1][0]
+    total = sum(hold.values())
+    exit_fee = total * sf                      # sell everything at the end
+    fees += exit_fee
+    curve[-1] = (last_d, total - exit_fee)
+    st = _level_stats(curve)
+    st.update({
+        "final_capital": round(total - exit_fee, 0),
+        "fees_total": round(fees, 0),
+        "avg_daily_turnover_pct": round(sum(turnover) / len(turnover) * 100, 2) if turnover else 0,
+    })
+    return {"stats": st, "curve": curve}
 
 
 def _level_stats(levels: list[tuple[int, float]], daily: bool = True) -> dict:
@@ -564,23 +631,26 @@ def build_benchmark(price_series: list[dict], nav_series: list[dict],
     levels, counts = _equal_weight_index(price_series)
     if len(levels) < 2:
         return None
-    st = _level_stats(levels)
     init = p.initial_capital
+    st = _level_stats(levels)                                  # theoretical, no costs
     st["final_capital"] = round(init * levels[-1][1], 0)
     st["avg_funds"] = round(sum(counts) / len(counts), 1) if counts else 0
     nav_levels, _ = _equal_weight_index(nav_series)
     nav_st = _level_stats(nav_levels)
-    curve = [[d, round(init * lv, 0)] for d, lv in levels]
+    reb = _rebalanced_with_fees(price_series, init, p.buy_fee, p.sell_fee)
+    curve_src = reb.get("curve") or [(d, init * lv) for d, lv in levels]
+    curve = [[d, round(v, 0)] for d, v in curve_src]
     if len(curve) > 400:
         step = len(curve) / 400.0
         curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
     return {
         "first": levels[0][0], "last": levels[-1][0],
         "funds": sum(1 for s in price_series if len(s) >= 2),
-        "index": st,
+        "index": st,                                           # theoretical, no costs
+        "rebalanced": reb.get("stats", {}),                    # daily rebalance WITH fees
         "buyhold": _buy_and_hold(price_series, init, p.buy_fee, p.sell_fee),
         "nav_index": nav_st,
-        "curve": curve,
+        "curve": curve,                                        # = the fee-paying account
     }
 
 
