@@ -1934,9 +1934,15 @@ def create_app(db, scan_callback=None):
     _disc_opt_state = {"running": False, "progress": {}, "result": None}
     _disc_opt_lock = threading.Lock()
 
+    @app.route("/api/disc/study_space")
+    def api_disc_study_space():
+        from discount_study import space_info
+        return jsonify(space_info())
+
     @app.route("/api/disc/optimize", methods=["GET", "POST"])
     def api_disc_optimize():
         from discount_backtest import optimize_discount
+        from discount_study import run_study, clean_space
         body = request.get_json(silent=True) or {}
 
         def _get(name, default=None):
@@ -1945,26 +1951,48 @@ def create_app(db, scan_callback=None):
         cats, syms, start, end = _disc_sel(_get)
         base = _disc_params_from(_get)
         metric = str(_get("opt_metric", "portfolio_return_pct"))
-        try:
-            min_trades = int(float(_get("min_trades", 30)))
-            test_frac = float(_get("test_frac", 0.3))
-        except (ValueError, TypeError):
-            min_trades, test_frac = 30, 0.3
+        mode = str(_get("mode", "study"))
+
+        def _num(name, default, lo, hi, cast=float):
+            try:
+                return min(hi, max(lo, cast(float(_get(name, default)))))
+            except (ValueError, TypeError):
+                return default
+        min_trades = _num("min_trades", 30, 1, 100000, int)
+        test_frac = _num("test_frac", 0.3, 0.1, 0.6)
 
         if _disc_opt_state["running"]:
             return jsonify({"status": "already running",
                             "progress": _disc_opt_state["progress"]}), 409
 
+        space = clean_space(_get("space") if isinstance(_get("space"), dict) else None)
+        n_samples = _num("n_samples", 400, 20, 5000, int)
+        blocks = _num("blocks", 6, 4, 12, int)
+        max_seconds = _num("max_seconds", 300, 20, 3600)
+        max_universes = _num("max_universes", 20, 1, 200, int)
+        objective = str(_get("objective", "robust"))
+        seed = _num("seed", 7, 0, 10**6, int)
+
         def _run():
             with _disc_opt_lock:
                 _disc_opt_state["running"] = True
-                _disc_opt_state["progress"] = {"done": 0, "total": 0, "phase": "grid"}
+                _disc_opt_state["progress"] = {"done": 0, "total": 0, "phase": "setup"}
                 _disc_opt_state["result"] = None
             try:
-                _disc_opt_state["result"] = optimize_discount(
-                    db, cats, syms, start, end, base=base, opt_metric=metric,
-                    min_trades=min_trades, test_frac=test_frac,
-                    progress=_disc_opt_state["progress"], progress_lock=_disc_opt_lock)
+                if mode == "grid":
+                    res = optimize_discount(
+                        db, cats, syms, start, end, base=base, opt_metric=metric,
+                        min_trades=min_trades, test_frac=test_frac,
+                        progress=_disc_opt_state["progress"], progress_lock=_disc_opt_lock)
+                    res["mode"] = "grid"
+                else:
+                    res = run_study(
+                        db, cats, syms, start, end, base=base, space=space, n_samples=n_samples,
+                        blocks=blocks, test_frac=test_frac, objective=objective, min_trades=min_trades,
+                        max_seconds=max_seconds, max_universes=max_universes, seed=seed,
+                        progress=_disc_opt_state["progress"], progress_lock=_disc_opt_lock)
+                    res["mode"] = "study"
+                _disc_opt_state["result"] = res
             except ValueError as e:
                 _disc_opt_state["result"] = {"error": str(e)}
             except Exception:

@@ -2440,6 +2440,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-fresh" type="checkbox" checked> فقط قیمت تازه</label>
     </div>
 
+    <details id="disc-study-cfg" ontoggle="discStudyBuild()" style="margin:8px 0">
+      <summary class="bbt-group-h" style="cursor:pointer" title="انتخاب پارامترهایی که بهینه‌ساز جستجو می‌کند و دامنهٔ مقدارهای هر کدام">۴) تنظیمات بهینه‌سازی و مطالعهٔ جامع — کدام پارامترها و با چه دامنه‌ای جستجو شوند</summary>
+      <div id="disc-study-body"></div></details>
     <div class="bbt-actions">
       <div class="bbt-field bbt-metric"><label>معیار بهینه‌ساز</label>
         <select id="disc-optmetric">
@@ -2459,7 +2462,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
       <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
       <button class="scan-btn" id="disc-self-btn" onclick="discSelfTest()" title="آزمون خودِ شبیه‌ساز: دنیای با پاسخ معلوم، حسابداری، نگاه به آینده، کالیبراسیون">🧪 آزمون سلامت شبیه‌ساز</button>
-      <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="جستجوی شبکه‌ای روی ورود/خروج/نگه‌داری/حد ضرر + آزمون خارج از نمونه">🔧 بهینه‌سازی</button>
+      <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="مطالعهٔ جامعِ همهٔ پارامترهای مدل: جستجوی متوازن، اهمیت و رفتار هر پارامتر، آزمون خارج از نمونه، پایداری اطراف برنده، walk-forward و حساسیت به فرض‌های اجرایی">🔧 بهینه‌سازی و مطالعهٔ جامع</button>
       <button class="scan-btn" id="disc-run" onclick="discBacktest()">🧪 اجرای بک‌تست</button>
     </div>
     <div id="disc-note"></div>
@@ -7033,6 +7036,46 @@ const DISC_TIP_RULES = [
   [/^سهم از کل زیان$/, 'چند درصد از مجموع زیان‌ها (به ریال) به این علت برمی‌گردد.'],
   [/^زیان \(م\.ر\)$/, 'مجموع زیان این گروه به میلیون ریال.'],
   [/^تعداد$/, 'تعداد معاملات این گروه.'],
+  // --- comprehensive study ---------------------------------------------------------
+  [/^(⚡|◐|●|↻)/, 'پیش‌تنظیم دامنهٔ جستجو.'],
+  [/^جستجو؟$/, 'اگر تیک بخورد این پارامتر در مطالعه جستجو می‌شود؛ وگرنه روی مقدار فرم ثابت می‌ماند.'],
+  [/^پارامتر$/, 'نام پارامتر مدل.'],
+  [/^نوع$/, '«ساختاری»: تغییرش داده‌های ورودی را از نو می‌سازد (کندتر). «آستانه»: فقط شبیه‌سازی را تغییر می‌دهد (سریع).'],
+  [/^مقدارهای آزمون/, 'مقدارهایی که بهینه‌ساز برای این پارامتر امتحان می‌کند؛ با کاما جدا کنید.'],
+  [/^🏆 بهترین ترکیب/, 'ترکیبی که فقط با دورهٔ آموزش بیشترین امتیاز را گرفت؛ دورهٔ آزمون هرگز در انتخابش دخالت نداشته است.'],
+  [/^برنده$/, 'ترکیب برندهٔ دورهٔ آموزش.'],
+  [/^مقدار فرم$/, 'مقدار فعلیِ همین پارامتر در فرم (مرجع مقایسه).'],
+  [/^ترکیب$/, 'ردیف مورد مقایسه.'],
+  [/^بازده آموزش$/, 'بازده کل ترکیب در بخش آموزش (قدیمی‌تر) دوره.'],
+  [/^بازده آزمون$/, 'بازده همان ترکیب در بخش آخرِ دوره که در انتخاب دخالت نداشته.'],
+  [/^آمارهٔ t$/, 'میانگین بازدهٔ معاملات تقسیم بر خطای معیارش؛ تقریبی (معاملات هم‌زمان همبسته‌اند). زیر ۱٫۵ یعنی سود از نوسان قابل‌تشخیص نیست.'],
+  [/^پسیو \(هم‌وزن\)$/, 'خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها در همین دوره‌ها، بدون کارمزد.'],
+  [/^اهمیت پارامترها/, 'هر پارامتر چند درصد از تغییرات نتیجه را توضیح می‌دهد (η²)؛ نزدیک صفر = بی‌اثر.'],
+  [/^روی امتیاز آموزش/, 'سهم تغییرات امتیاز آموزش که با این پارامتر توضیح داده می‌شود.'],
+  [/^روی بازدهٔ آزمون/, 'سهم تغییرات بازدهٔ آزمون که با این پارامتر توضیح داده می‌شود؛ اگر از ستون آموزش خیلی کمتر است، اثر ظاهری و برازشی است.'],
+  [/^نمونهٔ فعال$/, 'تعداد ترکیب‌هایی که این پارامتر در آن‌ها معنا دارد.'],
+  [/^رفتار هر مقدار/, 'میانگین نتیجه روی همهٔ ترکیب‌هایی که این مقدار را داشتند، در حالی که بقیهٔ پارامترها متنوع‌اند؛ اثر خالص هر مقدار.'],
+  [/^مقدار$/, 'مقدار آزمون‌شدهٔ پارامتر.'],
+  [/^نمونه$/, 'تعداد ترکیب‌های دارای این مقدار.'],
+  [/^امتیاز آموزش$/, 'امتیاز پایدار آموزش (میانگین بازدهٔ بلوک‌ها منهای ½ انحراف معیار) یا معیار انتخابی.'],
+  [/^سودده در آزمون$/, 'چند درصد از ترکیب‌های این مقدار در دورهٔ آزمون سودده بودند.'],
+  [/^برهم‌کنش/, 'اثر مشترک دو مهم‌ترین پارامتر؛ هر خانه میانگین بازدهٔ آزمون (و تعداد نمونه).'],
+  [/^آیا رتبه‌بندی آموزش/, 'هر نقطه یک ترکیب است: افقی امتیاز آموزش، عمودی بازدهٔ آزمون. روند صعودی = بهینه‌سازی معنا دارد؛ ابر بی‌شکل = نویز.'],
+  [/^پایداری اطراف برنده/, 'هر پارامتر برنده یک گام عوض می‌شود. اگر نتیجه با یک گام فرو بریزد، برنده قله‌ای شکننده است.'],
+  [/^تغییر$/, 'از مقدار برنده به مقدار همسایه.'],
+  [/^بازبهینه‌سازی دوره/, 'شبیه‌سازی معامله‌گری که هر دوره پارامتر را فقط با دادهٔ قبل از آن انتخاب می‌کند؛ واقع‌بینانه‌ترین برآورد.'],
+  [/^دوره$/, 'بازهٔ تاریخی این بلوک.'],
+  [/^ترکیبِ انتخاب‌شده/, 'ترکیبی که با دادهٔ قبل از این بلوک بهترین بود.'],
+  [/^بازده بلوک$/, 'بازدهِ همان ترکیب در این بلوکِ دیده‌نشده.'],
+  [/^ترکیب میانه$/, 'بازدهِ ترکیبِ میانهٔ نمونه‌ها در این بلوک؛ مرجع «بدون بهینه‌سازی».'],
+  [/^پسیو$/, 'خرید و نگه‌داری هم‌وزن در همین بلوک (بدون کارمزد).'],
+  [/^برنده با آینده‌نگری$/, 'ترکیبی که با کل دورهٔ آموزش انتخاب شده؛ فقط مرجع.'],
+  [/^حساسیت برنده/, 'برندهٔ آموزش با فرض‌های اجرایی بدبینانه‌تر دوباره سنجیده می‌شود.'],
+  [/^۲۰ ترکیب برتر/, 'برترین ترکیب‌ها بر اساس امتیاز آموزش، همراه با نتیجه در دورهٔ آزمون.'],
+  [/^#$/, 'رتبه.'],
+  [/^بلوک‌ها$/, 'بازدهِ هر بلوک زمانی (پررنگ‌ها = بلوک‌های آزمون).'],
+  [/^اعمال/, 'مقدارهای این ترکیب را در فرم می‌نویسد و بک‌تست را اجرا می‌کند.'],
+  [/^(۴\)|▸\s*۴\))/, 'انتخاب پارامترها و دامنهٔ جستجو.'],
   // --- chart stats table ---------------------------------------------------------
   [/^سری$/, 'نام صندوق یا شاخص.'],
   [/^نقطه$/, 'تعداد نقطه‌های داده در بازهٔ دیده‌شدهٔ نمودار.'],
@@ -7049,6 +7092,10 @@ const DISC_TIP_RULES = [
 
 // <option> texts (matched before the generic rules)
 const DISC_TIP_OPTS = [
+  [/^پایدار:/, 'میانگین بازدهِ بلوک‌های آموزش منهای نصف انحراف معیارشان؛ ترکیبی که فقط در یک بلوک خوب بوده امتیاز کمی می‌گیرد.'],
+  [/^بازده کل دورهٔ آموزش/, 'بازده کل پرتفوی در کل دورهٔ آموزش.'],
+  [/^بازده سالانهٔ مرکب آموزش/, 'بازده سالانهٔ مرکبِ دورهٔ آموزش.'],
+  [/^Profit Factor آموزش/, 'مجموع سود تقسیم بر مجموع زیان معاملات آموزش.'],
   [/^همه$/, 'بدون فیلتر.'],
   [/^درآمد ثابت$/, 'صندوق‌های درآمد ثابت (اوراق).'],
   [/^سهامی$/, 'صندوق‌های سهامی و مختلط.'],
@@ -7678,10 +7725,129 @@ async function discStats() {
       || '<tr><td colspan="9" style="color:var(--muted)">داده‌ای نیست</td></tr>'}</tbody></table></div>`;
 }
 
+// ---------------------------------------------------------------------------
+//  Comprehensive parameter study (optimizer)
+// ---------------------------------------------------------------------------
+let _discSpace = null, _discStudy = null;
+const DISC_STUDY_KEY = 'discStudyCfg_v1';
+const DS_VAL = {
+  entry_mode: {fund: 'هر صندوق', index: 'شاخص', both: 'هر دو'},
+  mr_center: {off: 'خاموش', zero: 'صفر', category: 'دسته', self: 'خود'},
+  stop_mode: {nav_widen: 'NAV بازتر', nav_level: 'NAV سطح', price: 'قیمت'},
+};
+const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_age_days: 'سن NAV', mr_center: 'مرکز', mr_window_days: 'پنجره',
+  mr_horizon_days: 'افق', mr_min_score: 'امتیاز≥', entry_discount_pct: 'ورود', exit_discount_pct: 'خروج', index_entry_pct: 'ورود شاخص',
+  index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن'};
+const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', mr_center: 'disc-mrcenter',
+  mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
+  exit_discount_pct: 'disc-exit', index_entry_pct: 'disc-ientry', index_exit_pct: 'disc-iexit', max_hold_days: 'disc-hold',
+  stop_loss_pct: 'disc-stop', stop_mode: 'disc-stopmode', position_pct: 'disc-pos'};
+const dsVal = (d, v) => v == null ? '—' : ((DS_VAL[d] || {})[v] || String(+(+v).toFixed ? +(+v).toFixed(3) : v));
+const dsCfgStr = (cfg, dims) => dims.filter(d => cfg[d] != null).map(d => `${DS_SHORT[d] || d} ${dsVal(d, cfg[d])}`).join(' · ');
+const dsPct = (v, d = 2) => v == null ? '—' : `<bdi dir="ltr">${v >= 0 ? '+' : ''}${(+v).toFixed(d)}%</bdi>`;
+const dsHeat = (v, sc) => {
+  if (v == null) return 'transparent';
+  const a = Math.min(1, Math.abs(v) / (sc || 1));
+  return v >= 0 ? `rgba(38,166,154,${(0.12 + 0.6 * a).toFixed(2)})` : `rgba(239,83,80,${(0.12 + 0.6 * a).toFixed(2)})`;
+};
+
+async function discStudyLoadSpace() {
+  if (_discSpace) return _discSpace;
+  const r = await fetch('/api/disc/study_space').catch(() => null);
+  if (r?.ok) _discSpace = await r.json();
+  return _discSpace;
+}
+
+function discStudyState() {
+  let st = null;
+  try { st = JSON.parse(localStorage.getItem(DISC_STUDY_KEY) || 'null'); } catch (e) {}
+  return st || {on: null, vals: {}, opts: {}};
+}
+function discStudySave(st) { try { localStorage.setItem(DISC_STUDY_KEY, JSON.stringify(st)); } catch (e) {} }
+
+async function discStudyBuild() {
+  const box = document.getElementById('disc-study-body');
+  if (!box || !document.getElementById('disc-study-cfg').open) return;
+  const sp = await discStudyLoadSpace();
+  if (!sp) { box.innerHTML = '<div class="dv-note">تنظیمات در دسترس نیست.</div>'; return; }
+  const st = discStudyState();
+  const on = st.on || Object.fromEntries(sp.dims.map(d => [d.key, true]));
+  const o = Object.assign({objective: 'robust', n_samples: 400, blocks: 6, max_seconds: 300, max_universes: 20}, st.opts || {});
+  const preset = (k, l, tip) => `<button type="button" class="pill" onclick="discStudyPreset('${k}')" title="${tip}">${l}</button>`;
+  box.innerHTML = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0">
+      ${preset('quick', '⚡ سریع (۴ پارامتر)', 'فقط ورود، خروج، نگه‌داری و حد ضرر؛ سریع‌ترین و کم‌ابعادترین مطالعه')}
+      ${preset('medium', '◐ متوسط', 'سریع + نوع حد ضرر، تعدیل حباب دائمی، فیلتر بازگشت به میانگین')}
+      ${preset('full', '● کامل (همهٔ پارامترها)', 'همهٔ پارامترهای مدل‌شده با هم جستجو و تحلیل می‌شوند')}
+      ${preset('reset', '↻ دامنه‌های پیش‌فرض', 'برگرداندن مقدارهای هر پارامتر به دامنهٔ پیش‌فرض')}
+    </div>
+    <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl" id="ds-dims"><thead><tr>
+      <th>جستجو؟</th><th style="text-align:start">پارامتر</th><th>نوع</th><th style="text-align:start">مقدارهای آزمون (با کاما جدا کنید)</th></tr></thead><tbody>
+    ${sp.dims.map(d => `<tr><td><input type="checkbox" data-dim="${d.key}" ${on[d.key] ? 'checked' : ''} onchange="discStudyCollect()"></td>
+      <td style="text-align:start" title="${d.kind === 'slow' ? 'تغییرش داده‌های ورودی را از نو می‌سازد (کندتر)؛ مقدارهای آن گروه‌بندی می‌شوند' : 'فقط شبیه‌سازی را تغییر می‌دهد (سریع)'}">${d.label}</td>
+      <td>${d.kind === 'slow' ? 'ساختاری' : 'آستانه'}</td>
+      <td><input type="text" data-vals="${d.key}" value="${(st.vals[d.key] != null ? st.vals[d.key] : d.choices.join(', ')).replace(/"/g, '&quot;')}" style="width:100%;min-width:260px;direction:ltr" onchange="discStudyCollect()"></td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="bbt-group" style="margin-top:6px">
+      <div class="bbt-field" title="ملاک انتخاب برنده روی دورهٔ آموزش. «پایدار» میانگین بازدهِ بلوک‌ها منهای نصف انحراف معیارشان است تا ترکیبی که فقط در یک بلوک خوب بوده برنده نشود."><label>معیار انتخاب</label>
+        <select id="ds-objective" onchange="discStudyCollect()">${Object.entries(sp.objectives).map(([k, l]) => `<option value="${k}" ${k === o.objective ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="bbt-field" title="تعداد ترکیب‌های تصادفیِ متوازن که از کل فضا نمونه‌گیری می‌شود؛ بیشتر = مطالعهٔ دقیق‌تر ولی کندتر"><label>تعداد نمونه</label>
+        <input id="ds-n" type="number" min="20" max="5000" step="50" value="${o.n_samples}" style="width:80px" onchange="discStudyCollect()"></div>
+      <div class="bbt-field" title="کل بازه به این تعداد بلوک زمانیِ مساوی تقسیم می‌شود؛ بلوک‌های آخر (طبق «آزمون خارج از نمونه») فقط برای ارزیابی‌اند و هرگز در انتخاب دخالت ندارند. هر بلوک حداقل ۳ روز معاملاتی لازم دارد."><label>تعداد بلوک زمانی</label>
+        <input id="ds-blocks" type="number" min="4" max="12" value="${o.blocks}" style="width:64px" onchange="discStudyCollect()"></div>
+      <div class="bbt-field" title="سقف زمان اجرا؛ پس از آن جستجو متوقف و تحلیل روی نمونه‌های انجام‌شده ساخته می‌شود"><label>سقف زمان (ثانیه)</label>
+        <input id="ds-sec" type="number" min="20" max="3600" step="30" value="${o.max_seconds}" style="width:80px" onchange="discStudyCollect()"></div>
+      <div class="bbt-field" title="پارامترهای ساختاری (تعدیل حباب، فیلتر بازگشت، حالت ورود، سن NAV) هر ترکیبشان داده را از نو می‌سازد؛ حداکثر این‌قدر ترکیبِ ساختاری نمونه‌گیری می‌شود."><label>حداکثر ترکیب ساختاری</label>
+        <input id="ds-univ" type="number" min="1" max="200" value="${o.max_universes}" style="width:64px" onchange="discStudyCollect()"></div>
+    </div>
+    <div class="dv-note">پارامترهایی که تیک نخورده‌اند روی مقدار فعلیِ فرم ثابت می‌مانند. فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) عمداً جستجو نمی‌شوند؛ حساسیتِ برنده به آن‌ها جداگانه گزارش می‌شود.</div>`;
+}
+
+function discStudyCollect() {
+  const st = discStudyState();
+  st.on = {}; st.vals = {};
+  document.querySelectorAll('#ds-dims [data-dim]').forEach(c => { st.on[c.dataset.dim] = c.checked; });
+  document.querySelectorAll('#ds-dims [data-vals]').forEach(c => { st.vals[c.dataset.vals] = c.value; });
+  const g = id => { const e = document.getElementById(id); return e ? e.value : null; };
+  st.opts = {objective: g('ds-objective') || 'robust', n_samples: +g('ds-n') || 400, blocks: +g('ds-blocks') || 6,
+    max_seconds: +g('ds-sec') || 300, max_universes: +g('ds-univ') || 20};
+  discStudySave(st);
+  return st;
+}
+
+function discStudyPreset(k) {
+  const sp = _discSpace; if (!sp) return;
+  const st = discStudyState();
+  if (k === 'reset') st.vals = {};
+  else st.on = Object.fromEntries(sp.dims.map(d => [d.key, (sp.presets[k] || []).includes(d.key)]));
+  discStudySave(st);
+  discStudyBuild();
+}
+
+async function discStudyPayload() {
+  const sp = await discStudyLoadSpace();
+  let st = discStudyState();
+  if (document.getElementById('ds-dims')) st = discStudyCollect();
+  const on = st.on || Object.fromEntries((sp ? sp.dims : []).map(d => [d.key, true]));
+  const space = {};
+  (sp ? sp.dims : []).forEach(d => {
+    if (!on[d.key]) return;
+    const txt = st.vals[d.key] != null ? st.vals[d.key] : d.choices.join(',');
+    const arr = String(txt).split(/[,،\s]+/).filter(x => x !== '').map(x => (d.choices.length && typeof d.choices[0] === 'string') ? x : +x)
+      .filter(x => typeof x === 'string' || Number.isFinite(x));
+    if (arr.length) space[d.key] = arr;
+  });
+  return {space, opts: st.opts || {}};
+}
+
 async function discOptimize() {
   const p = discCheckSel(); if (!p) return;
   const btn = document.getElementById('disc-opt-btn');
+  const pl = await discStudyPayload();
+  if (!Object.keys(pl.space).length) { showError('حداقل یک پارامتر را برای جستجو تیک بزنید.'); return; }
+  const o = pl.opts;
   const body = Object.assign({}, p, {
+    mode: 'study', space: pl.space, objective: o.objective || 'robust', n_samples: o.n_samples || 400, blocks: o.blocks || 6,
+    max_seconds: o.max_seconds || 300, max_universes: o.max_universes || 20,
     opt_metric: document.getElementById('disc-optmetric').value,
     min_trades: document.getElementById('disc-mintrades').value,
     test_frac: document.getElementById('disc-testfrac').value,
@@ -7690,27 +7856,162 @@ async function discOptimize() {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
   }).catch(() => null);
   if (!r?.ok) { showError('بهینه‌سازی شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
-  btn.disabled = true; btn.textContent = '⏳ بهینه‌سازی ...';
+  btn.disabled = true; btn.textContent = '⏳ مطالعه ...';
   const panel = document.getElementById('disc-opt');
   panel.style.display = 'block';
-  panel.innerHTML = '<div class="ob-p">⏳ جستجوی شبکه‌ای ...</div>';
+  panel.innerHTML = '<div class="ob-p">⏳ آماده‌سازی ...</div>';
   if (discOptTimer) clearInterval(discOptTimer);
+  const PH = {setup: 'آماده‌سازی داده', search: 'جستجوی تصادفیِ متوازن', refine: 'پالایش بهترین‌ها', neighbours: 'سنجش پایداری اطراف برنده',
+    sensitivity: 'حساسیت به فرض‌های اجرایی', analysis: 'تحلیل', grid: 'جستجوی شبکه‌ای'};
   const poll = async () => {
     const s = await fetch('/api/disc/optimize/status').catch(() => null);
     if (!s?.ok) return;
     const j = await s.json();
     const pr = j.progress || {};
     if (j.running) {
-      panel.innerHTML = `<div class="ob-p">⏳ بهینه‌سازی — صندوق ${pr.done||0}/${pr.total||0} · ${pr.combos||0} ترکیب</div>`;
+      const pc = pr.total ? Math.min(100, Math.round(100 * (pr.done || 0) / pr.total)) : 0;
+      panel.innerHTML = `<div class="ob-p">⏳ ${PH[pr.phase] || pr.phase || ''} — ${pr.done || 0}/${pr.total || 0} ${pr.combos ? `· ${pr.combos} ترکیب ساختاری` : ''}
+        <div style="height:6px;background:var(--brd);border-radius:3px;margin-top:6px"><div style="height:6px;width:${pc}%;background:var(--green);border-radius:3px"></div></div></div>`;
       return;
     }
     clearInterval(discOptTimer); discOptTimer = null;
-    btn.disabled = false; btn.textContent = '🔧 بهینه‌سازی';
+    btn.disabled = false; btn.textContent = '🔧 بهینه‌سازی و مطالعهٔ جامع';
     if (j.result?.error) { panel.innerHTML = `<div class="ob-p">خطا: ${j.result.error}</div>`; return; }
-    renderDiscOptimize(j.result, p);
+    if (j.result?.mode === 'grid') renderDiscOptimize(j.result, p); else renderDiscStudy(j.result, p);
   };
   discOptTimer = setInterval(poll, 1500);
   poll();
+}
+
+function discApplyStudy(cfg) {
+  Object.keys(cfg).forEach(k => {
+    const el = document.getElementById(DS_FORM[k]);
+    if (el && cfg[k] != null) el.value = cfg[k];
+  });
+  discBacktest();
+}
+
+function dsSpark(blocks, T) {
+  const mx = Math.max(1, ...blocks.map(b => Math.abs(b || 0)));
+  const w = 9, h = 22;
+  return `<svg width="${blocks.length * (w + 1)}" height="${h}" style="vertical-align:middle">${blocks.map((b, i) => {
+    const hh = Math.max(1, Math.abs(b || 0) / mx * (h / 2 - 1));
+    return `<rect x="${i * (w + 1)}" y="${(b || 0) >= 0 ? h / 2 - hh : h / 2}" width="${w}" height="${hh}" fill="${(b || 0) >= 0 ? '#26a69a' : '#ef5350'}" opacity="${i >= T ? 1 : 0.55}"><title>بلوک ${i + 1}${i >= T ? ' (آزمون)' : ''}: ${b}%</title></rect>`;
+  }).join('')}<line x1="0" x2="${blocks.length * (w + 1)}" y1="${h / 2}" y2="${h / 2}" stroke="var(--muted)" stroke-width=".5"/></svg>`;
+}
+
+function dsScatter(res) {
+  const pts = res.scatter || [];
+  if (pts.length < 5) return '';
+  const W = 460, H = 320, L = 44, R = 10, T = 10, B = 28;
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  let x0 = Math.min(...xs, 0), x1 = Math.max(...xs, 0), y0 = Math.min(...ys, 0), y1 = Math.max(...ys, 0);
+  const px = (x1 - x0) * 0.05 || 1, py = (y1 - y0) * 0.05 || 1; x0 -= px; x1 += px; y0 -= py; y1 += py;
+  const sx = v => L + (W - L - R) * (v - x0) / (x1 - x0), sy = v => T + (H - T - B) * (1 - (v - y0) / (y1 - y0));
+  const dots = pts.filter(p => !p[2]).map(p => `<circle cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}" r="2.6" fill="#4fa3ff" opacity=".45"/>`).join('');
+  const b = pts.find(p => p[2]);
+  const best = b ? `<circle cx="${sx(b[0]).toFixed(1)}" cy="${sy(b[1]).toFixed(1)}" r="6" fill="#e0a030" stroke="#fff" stroke-width="1.5"><title>برندهٔ آموزش: آموزش ${b[0]} · آزمون ${b[1]}%</title></circle>` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
+    <line x1="${L}" x2="${W - R}" y1="${sy(0)}" y2="${sy(0)}" stroke="var(--muted)" stroke-dasharray="4 4"/><line x1="${sx(0)}" x2="${sx(0)}" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="4 4"/>
+    ${dots}${best}
+    <text x="${W / 2}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--sub)">امتیاز آموزش (٪)</text>
+    <text x="12" y="${H / 2}" font-size="10" fill="var(--sub)" transform="rotate(-90 12 ${H / 2})" text-anchor="middle">بازدهٔ آزمون (٪)</text>
+    <text x="${L - 3}" y="${sy(y1) + 8}" font-size="9" text-anchor="end" fill="var(--sub)">${y1.toFixed(0)}</text><text x="${L - 3}" y="${sy(y0)}" font-size="9" text-anchor="end" fill="var(--sub)">${y0.toFixed(0)}</text>
+    <text x="${sx(x0) + 2}" y="${H - B + 11}" font-size="9" fill="var(--sub)">${x0.toFixed(0)}</text><text x="${sx(x1) - 2}" y="${H - B + 11}" font-size="9" text-anchor="end" fill="var(--sub)">${x1.toFixed(0)}</text></svg>`;
+}
+
+function renderDiscStudy(res, p) {
+  _discStudy = res;
+  const panel = document.getElementById('disc-opt');
+  const S = res.setup, v = res.verdict, b = res.best, g = res.generalisation, dims = S.searched;
+  const lights = v.lights.map(l => `<div class="dv-card"><div class="dv-t"><span class="dv-dot ${l.level}"></span>${l.title}</div><div class="dv-x">${discLtr(l.text)}</div></div>`).join('');
+  const cards = [
+    ['صندوق در مطالعه', S.funds], ['ترکیب تصادفی / واجد شرایط', `${S.n_random} / ${S.n_qualified}`], ['ترکیب پالایشی', S.n_refine],
+    ['داده‌سازی ساختاری', S.n_universes + ' بار'], ['زمان', S.seconds + ' ثانیه'],
+    ['بلوک آموزش / آزمون', `${S.train_blocks} / ${S.hold_blocks}`]].map(([k, x]) => discCard(k, String(x))).join('');
+  const bestRows = dims.filter(d => b.cfg[d] != null).map(d => `<tr><td style="text-align:start">${res.setup.labels[d]}</td><td>${dsVal(d, b.cfg[d])}</td>
+      <td>${res.default && res.default.cfg[d] != null ? dsVal(d, res.default.cfg[d]) : '—'}</td></tr>`).join('');
+  const tH = r => `<td>${dsPct(r.train.portfolio_return_pct)}</td><td>${r.train.trade_count}</td><td>${dsPct(r.hold.portfolio_return_pct)}</td><td>${r.hold.trade_count}</td><td>${r.hold_t == null ? '—' : r.hold_t}</td>`;
+  const ps = res.passive || {};
+  // importance
+  const mxI = Math.max(0.01, ...res.importance.map(x => Math.max(x.eta_train || 0, x.eta_hold || 0)));
+  const impHtml = res.importance.map(x => `<tr><td style="text-align:start">${x.label}</td>
+      <td style="min-width:200px"><div style="height:8px;background:#4fa3ff;width:${((x.eta_train || 0) / mxI * 100).toFixed(0)}%;border-radius:2px;display:inline-block"></div> <bdi dir="ltr">${((x.eta_train || 0) * 100).toFixed(0)}%</bdi></td>
+      <td style="min-width:200px"><div style="height:8px;background:#e0a030;width:${((x.eta_hold || 0) / mxI * 100).toFixed(0)}%;border-radius:2px;display:inline-block"></div> <bdi dir="ltr">${((x.eta_hold || 0) * 100).toFixed(0)}%</bdi></td><td>${x.n_active}</td></tr>`).join('');
+  // marginal tables
+  const order = res.importance.map(x => x.dim);
+  const mx = Math.max(1, ...Object.values(res.marginals).flat().map(r => Math.abs(r.hold_mean || 0)));
+  const marg = order.filter(d => res.marginals[d]).map(d => {
+    const rows = res.marginals[d];
+    const bestH = Math.max(...rows.map(r => r.hold_mean));
+    const imp = res.importance.find(x => x.dim === d);
+    return `<div class="dv-card" style="flex:1 1 330px"><div class="dv-t">${res.setup.labels[d]} <span style="font-weight:400;font-size:10px;color:var(--muted)" title="اهمیت: چند درصد از تغییرات نتیجه را همین پارامتر توضیح می‌دهد (آموزش / آزمون)">(${((imp.eta_train || 0) * 100).toFixed(0)}٪ / ${((imp.eta_hold || 0) * 100).toFixed(0)}٪)</span></div>
+      <table class="disc-tbl" style="width:100%"><thead><tr><th>مقدار</th><th>نمونه</th><th>امتیاز آموزش</th><th>بازده آزمون</th><th>سودده در آزمون</th></tr></thead><tbody>
+      ${rows.map(r => `<tr style="${r.hold_mean === bestH ? 'font-weight:700' : ''}"><td>${dsVal(d, r.value)}</td><td>${r.n}</td><td style="background:${dsHeat(r.train_mean, mx)}">${dsPct(r.train_mean, 1)}</td>
+        <td style="background:${dsHeat(r.hold_mean, mx)}">${dsPct(r.hold_mean, 1)}</td><td>${r.hold_pos_pct}%</td></tr>`).join('')}</tbody></table></div>`;
+  }).join('');
+  // pair heat maps
+  const pairs = (res.pairs || []).map(q => {
+    const sc = Math.max(1, ...q.grid.flat().filter(Boolean).map(c => Math.abs(c.hold || 0)));
+    return `<div class="dv-card" style="flex:1 1 360px"><div class="dv-t">${q.a_label} × ${q.b_label}</div>
+      <div class="dv-note">میانگین بازدهٔ آزمون در هر خانه (و تعداد نمونه)</div>
+      <table class="disc-tbl dv-heat" style="width:100%"><thead><tr><th>${q.a_label} ↓ / ${q.b_label} →</th>${q.b_values.map(x => `<th>${dsVal(q.b, x)}</th>`).join('')}</tr></thead><tbody>
+      ${q.a_values.map((va, i) => `<tr><th>${dsVal(q.a, va)}</th>${q.grid[i].map(c => c ? `<td style="background:${dsHeat(c.hold, sc)}" title="آموزش ${c.train}% · آزمون ${c.hold}% · ${c.n} نمونه">${(+c.hold).toFixed(1)}<span style="color:var(--muted);font-size:9px"> (${c.n})</span></td>` : '<td></td>').join('')}</tr>`).join('')}</tbody></table></div>`;
+  }).join('');
+  const nbRows = (res.neighbours.rows || []).map(x => `<tr><td style="text-align:start">${x.label}</td><td>${dsVal(x.dim, x.from)} ← ${dsVal(x.dim, x.to)}</td>
+      <td>${x.ok ? dsPct(x.train) : 'کم‌معامله'}</td><td>${dsPct(x.hold)}</td><td>${x.trades}</td></tr>`).join('');
+  const wfRows = (res.walk_forward.rows || []).map(w => `<tr><td>${w.block}${w.holdout ? ' ⭐' : ''}</td><td>${gregIntToJalaliStr(w.range[0])} تا ${gregIntToJalaliStr(w.range[1])}</td>
+      <td style="text-align:start;font-size:10px">${dsCfgStr(w.picked, dims)}</td><td>${dsPct(w.oos)}</td><td>${dsPct(w.default)}</td><td>${dsPct(w.median_cfg)}</td><td>${dsPct(w.passive)}</td><td>${dsPct(w.hindsight_best)}</td></tr>`).join('');
+  const ws = res.walk_forward.stats;
+  const sensRows = (res.sensitivity || []).map(x => `<tr><td style="text-align:start">${x.name}</td><td>${dsPct(x.train)}</td><td>${dsPct(x.hold)}</td><td>${x.trades}</td></tr>`).join('');
+  const topRows = res.top.map((r, i) => `<tr class="${i === 0 ? 'best' : ''}"><td>${i + 1}</td><td style="text-align:start;font-size:10px">${dsCfgStr(r.cfg, dims)}</td>
+      <td>${dsPct(r.score, 1)}</td>${tH(r)}<td>${dsSpark(r.blocks, S.train_blocks)}</td>
+      <td><button type="button" class="pill" onclick="discApplyStudy(_discStudy.top[${i}].cfg)" title="مقدارهای این ترکیب را در فرم می‌نویسد و بک‌تست را اجرا می‌کند">اعمال ▸</button></td></tr>`).join('');
+
+  panel.innerHTML = `
+    <div class="dv-head ${v.overall}">${v.headline}${S.truncated ? ' <span style="font-weight:400">(به سقف زمان رسید؛ تحلیل روی نمونه‌های انجام‌شده است)</span>' : ''}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">${lights}</div>
+    <div class="opt-metric-row" style="margin-top:8px">${cards}</div>
+
+    <div class="dv-sec"><div class="disc-h">🏆 بهترین ترکیب (انتخاب‌شده فقط با دورهٔ آموزش ${gregIntToJalaliStr(S.train_range[0])} تا ${gregIntToJalaliStr(S.train_range[1])}؛ معیار: ${S.objective_label})</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">
+        <table class="disc-tbl" style="width:auto"><thead><tr><th style="text-align:start">پارامتر</th><th>برنده</th><th>مقدار فرم</th></tr></thead><tbody>${bestRows}</tbody></table>
+        <table class="disc-tbl" style="width:auto"><thead><tr><th>ترکیب</th><th>بازده آموزش</th><th>معامله</th><th>بازده آزمون</th><th>معامله</th><th>آمارهٔ t</th></tr></thead><tbody>
+          <tr class="best"><td style="text-align:start">برنده</td>${tH(b)}</tr>
+          ${res.default ? `<tr><td style="text-align:start">مقدار فرم</td>${tH(res.default)}</tr>` : ''}
+          <tr><td style="text-align:start" title="خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها در همین دوره‌ها، بدون کارمزد">پسیو (هم‌وزن)</td><td>${dsPct(ps.train)}</td><td></td><td>${dsPct(ps.hold)}</td><td></td><td></td></tr></tbody></table>
+        <div><button id="bbt-opt-apply" onclick='discApplyStudy(_discStudy.best.cfg)'>اعمال و اجرای بک‌تست ▸</button>
+          <div class="dv-note" style="max-width:300px">آزمون (${gregIntToJalaliStr(S.hold_range[0])} تا ${gregIntToJalaliStr(S.hold_range[1])}) هیچ‌گاه در انتخاب دخالت نداشته است.</div></div></div>
+      ${res.findings.length ? `<ul style="margin:6px 0 0;padding-inline-start:18px;font-size:12px;line-height:1.9">${res.findings.map(f => `<li>${f}</li>`).join('')}</ul>` : ''}</div>
+
+    <div class="dv-sec"><div class="disc-h">اهمیت پارامترها — هر پارامتر چند درصد از تغییرات نتیجه را توضیح می‌دهد</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">پارامتر</th><th>روی امتیاز آموزش (آبی)</th><th>روی بازدهٔ آزمون (نارنجی)</th><th>نمونهٔ فعال</th></tr></thead><tbody>${impHtml}</tbody></table></div>
+      <div class="dv-note">اگر هر دو ستون برای پارامتری نزدیک صفر است، تغییرش بی‌اثر است. اگر فقط آبی بزرگ است و نارنجی صفر، اثرِ ظاهری فقط روی گذشته بوده (برازش).</div></div>
+
+    <div class="dv-sec"><div class="disc-h">رفتار هر مقدار (میانگین روی همهٔ نمونه‌ها؛ ردیف پررنگ = بهترین بازدهٔ آزمون)</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">${marg}</div></div>
+
+    ${pairs ? `<div class="dv-sec"><div class="disc-h">برهم‌کنش دو‌به‌دوی مهم‌ترین پارامترها</div><div style="display:flex;gap:10px;flex-wrap:wrap">${pairs}</div></div>` : ''}
+
+    <div class="dv-sec"><div class="disc-h">آیا رتبه‌بندی آموزش دربارهٔ آینده اطلاعات دارد؟ (هر نقطه = یک ترکیب)</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">${dsScatter(res)}
+        <div class="dv-note" style="max-width:380px;font-size:11px">
+          همبستگی رتبه‌ای: <b dir="ltr">${g.spearman == null ? '—' : g.spearman}</b> · صدک برنده در آزمون: <b>${g.best_hold_percentile}</b> · ترکیب‌های سودده در آزمون: <b>${g.share_hold_positive_pct}%</b> · میانهٔ بازدهٔ آزمون: <b dir="ltr">${g.hold_median_all}%</b><br>
+          نقطه‌ها اگر روی یک روند صعودی (پایین‌چپ تا بالاراست) باشند، «خوب در گذشته» یعنی «خوب در آینده». اگر ابرِ بی‌شکل‌اند، بهینه‌سازی فقط نویز را برازش می‌کند. نقطهٔ زرد = برنده.</div></div></div>
+
+    <div class="dv-sec"><div class="disc-h">پایداری اطراف برنده — با تغییر هر پارامتر یک گام (${res.neighbours.plateau_pct == null ? '—' : res.neighbours.plateau_pct + '٪'} همسایهٔ خوب)</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">پارامتر</th><th>تغییر</th><th>بازده آموزش</th><th>بازده آزمون</th><th>معامله</th></tr></thead><tbody>${nbRows}</tbody></table></div></div>
+
+    <div class="dv-sec"><div class="disc-h">بازبهینه‌سازی دوره‌به‌دوره (walk-forward) — ⭐ = بلوک آزمون</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th>بلوک</th><th>دوره</th><th style="text-align:start">ترکیبِ انتخاب‌شده با دادهٔ قبل از بلوک</th><th>بازده بلوک</th><th>مقدار فرم</th><th>ترکیب میانه</th><th>پسیو</th><th>برنده با آینده‌نگری</th></tr></thead><tbody>${wfRows}</tbody></table></div>
+      ${ws ? `<div class="dv-note">میانگین: بازبهینه‌سازی ${dsPct(ws.oos_mean)} · مقدار فرم ${dsPct(ws.default_mean)} · ترکیب میانه ${dsPct(ws.median_cfg_mean)}؛ ${ws.positive_blocks} از ${ws.n_blocks} بلوک سودده. ستون «برنده با آینده‌نگری» فقط مرجع است (برنده‌ای که با کل دورهٔ آموزش انتخاب شده).</div>` : ''}</div>
+
+    <div class="dv-sec"><div class="disc-h">حساسیت برنده به فرض‌های اجرایی</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">سناریو</th><th>بازده آموزش</th><th>بازده آزمون</th><th>معامله (آزمون)</th></tr></thead><tbody>${sensRows}</tbody></table></div></div>
+
+    <div class="dv-sec"><div class="disc-h">۲۰ ترکیب برتر (بر اساس امتیاز آموزش)</div>
+      <div class="disc-tblwrap" style="max-height:420px"><table class="disc-tbl" id="bbt-opt-table"><thead><tr><th>#</th><th style="text-align:start">ترکیب</th><th>امتیاز آموزش</th><th>بازده آموزش</th><th>معامله</th><th>بازده آزمون</th><th>معامله</th><th>آمارهٔ t</th><th>بلوک‌ها</th><th></th></tr></thead><tbody>${topRows}</tbody></table></div>
+      <div class="dv-note">ستون «بلوک‌ها»: بازدهٔ هر بلوک زمانی؛ پررنگ‌ترها بلوک‌های آزمون‌اند.</div></div>`;
 }
 
 function renderDiscOptimize(res, p) {
