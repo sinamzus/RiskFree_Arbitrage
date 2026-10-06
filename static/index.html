@@ -7699,7 +7699,8 @@ function renderDiscBacktest(res, p) {
       <td>${r.annualized_pct}</td><td>${r.avg_hold_days}</td></tr>`).join('')}</tbody></table></div>` : '';
 
   discRenderTrades(res);
-  document.getElementById('disc-note').textContent = '';
+  document.getElementById('disc-note').textContent = window._discApplyNote || '';
+  window._discApplyNote = '';
 }
 
 async function discStats() {
@@ -7885,10 +7886,17 @@ async function discOptimize() {
 }
 
 function discApplyStudy(cfg) {
+  const changed = [], same = [];
   Object.keys(cfg).forEach(k => {
     const el = document.getElementById(DS_FORM[k]);
-    if (el && cfg[k] != null) el.value = cfg[k];
+    if (!el || cfg[k] == null) return;
+    const before = el.value;
+    el.value = cfg[k];
+    (String(before) === String(el.value) ? same : changed).push(`${DS_SHORT[k] || k}: ${dsVal(k, before)} ← ${dsVal(k, cfg[k])}`);
   });
+  const stopOff = cfg.stop_loss_pct != null && +cfg.stop_loss_pct === 0;
+  window._discApplyNote = `اعمال شد — تغییر کرد: ${changed.join(' · ') || 'هیچ'}${same.length ? ' | از قبل همین بود: ' + same.map(x => x.split(':')[0]).join('، ') : ''}`
+    + (stopOff ? ' | توجه: در این ترکیب حد ضرر خاموش است (۰)، پس «نوع حد ضرر» اثری ندارد' : '');
   discBacktest();
 }
 

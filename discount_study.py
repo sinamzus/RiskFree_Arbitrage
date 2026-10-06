@@ -420,6 +420,19 @@ class Study:
         full.update({k: v for k, v in partial.items() if v is not None or k in full})
         return full
 
+    def _complete(self, cand: dict) -> dict:
+        """fill + give every dimension that BECOMES active (e.g. stop_mode once the stop-loss is on,
+        the index thresholds once the entry mode is index, the mean-reversion window once the filter
+        is on) a concrete value — otherwise it would silently fall back to the form's value and the
+        reported configuration would not be the one that was simulated."""
+        c = self._fill(cand)
+        base = self._base_cfg()
+        for d in ORDER:
+            if _active(d, c) and c.get(d) is None:
+                ch = self.space.get(d)
+                c[d] = base[d] if (ch is None or base[d] in ch) else ch[0]
+        return _normalize(c, self.base)
+
     def _sample_fast(self, slow: dict, m: int) -> list[dict]:
         fast_dims = [d for d in FAST_ORDER if d in self.space]
         cols = {}
@@ -541,8 +554,7 @@ class Study:
                             continue
                         cand = dict(cur["cfg"])
                         cand[d] = ch[j]
-                        cand = self._fill(cand)
-                        cand = _normalize(cand, self.base)
+                        cand = self._complete(cand)
                         if not _valid(cand):
                             continue
                         r = self.evaluate(cand, "refine")
@@ -642,7 +654,7 @@ class Study:
             for j in cand_idx:
                 cand = dict(best["cfg"])
                 cand[d] = ch[j]
-                cand = _normalize(self._fill(cand), self.base)
+                cand = self._complete(cand)
                 if not _valid(cand):
                     continue
                 r = self.evaluate(cand, "neighbour")
