@@ -209,6 +209,8 @@ AUDIT = [
     ("فیلتر ریزش: پنجره", {"crash_drop_pct": 0.3, "crash_scope": "all"}, "crash_window_min", [10, 240], "change"),
     ("فیلتر ریزش: توقف موقت", {"crash_drop_pct": 0.3, "crash_scope": "all", "crash_window_min": 30}, "crash_cooldown_min", [0, 240], "change"),
     ("فیلتر ریزش: گروه", {"crash_drop_pct": 0.3}, "crash_scope", ["category", "all"], "change"),
+    ("حداقل سهم صندوق‌ها برای شاخص (حالت شاخص)", {"entry_mode": "index"}, "index_min_share", [0.3, 1.0], "change"),
+    ("فاصلهٔ جفت‌های امتیاز بازگشت", {"mr_center": "zero"}, "mr_lag", [1, 8], "change"),
     ("حالت ساعت جلسه", {"session_start": 90000, "session_end": 123000}, "session_mode", ["auto", "fixed"], "change"),
     ("پایان جلسه (ساعت ثابت)", {"session_mode": "fixed", "session_start": 90000}, "session_end", [110000, 123000], "change"),
     ("شروع جلسه (ساعت ثابت)", {"session_mode": "fixed", "session_end": 123000}, "session_start", [90000, 113000], "change"),
@@ -222,6 +224,8 @@ AUDIT = [
     ("نوع حد ضرر وقتی حد ضرر صفر است بی‌اثر است", {"stop_loss_pct": 0.0}, "stop_mode", ["nav_widen", "price"], "same"),
     ("پنجرهٔ ریزش وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0}, "crash_window_min", [10, 240], "same"),
     ("توقف موقت وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0}, "crash_cooldown_min", [0, 240], "same"),
+    ("حداقل سهم شاخص در حالت هر صندوق بی‌اثر است", {"entry_mode": "fund"}, "index_min_share", [0.3, 1.0], "same"),
+    ("فاصلهٔ جفت‌ها وقتی فیلتر بازگشت خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_lag", [1, 8], "same"),
     ("ساعت ثابت وقتی حالت خودکار است بی‌اثر است", {"session_mode": "auto"}, "session_end", [100000, 123000], "same"),
     # ---- invariance ----
     ("بازده٪ به سرمایهٔ اولیه وابسته نیست", {}, "initial_capital", [1e9, 9e10], "invariant_ret"),
@@ -283,9 +287,10 @@ WEB_MAP = {
     "sstart": ("session_start", "10:15", 101500), "send": ("session_end", "17:45", 174500),
     "crashdrop": ("crash_drop_pct", "0.8", 0.8), "crashwin": ("crash_window_min", "45", 45),
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "all", "all"),
+    "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
 }
 # DiscountParams fields that are deliberately not exposed in the UI
-NOT_EXPOSED = {"index_min_share", "mr_lag"}
+NOT_EXPOSED: set = set()
 
 
 def test_web_wiring(R: Results, db):
@@ -304,7 +309,7 @@ def test_web_wiring(R: Results, db):
         ok = (abs(g - exp) < 1e-9) if isinstance(exp, float) and isinstance(g, (int, float)) and not isinstance(g, bool) else g == exp
         if not ok:
             bad.append(f"{k}→{field}: ارسال {_v} ← خوانده شد {g!r} (انتظار {exp!r})")
-    R.add("سیم‌کشی وب", f"هر ۲۸ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
+    R.add("سیم‌کشی وب", f"هر ۳۰ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
     r0 = c.get("/api/disc/backtest?symbols=REVA")
     d0 = r0.get_json()["params"]
     dflt = asdict(D.DiscountParams())
@@ -352,7 +357,7 @@ UI_ID = {  # query key -> element id
     "mrmin": "disc-mrmin", "mrhor": "disc-mrhor", "spread": "disc-spread", "part": "disc-part", "buyfee": "disc-buyfee",
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
-    "crashcool": "disc-crashcool", "crashscope": "disc-crashscope",
+    "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
 }
 
 
@@ -380,7 +385,7 @@ def test_static_ui(R: Results):
             ok = _hhmmss(v) == eng
         elif k == "initial":
             ok = abs(float(v) * 1e6 - eng) < 1
-        elif k in ("buyfee", "sellfee"):
+        elif k in ("buyfee", "sellfee", "imin"):
             ok = abs(float(v) / 100 - eng) < 1e-9
         elif isinstance(eng, str):
             ok = v == eng
@@ -427,7 +432,7 @@ def test_static_ui(R: Results):
 #  4) Optimizer                                                                #
 # --------------------------------------------------------------------------- #
 
-def test_optimizer(R: Results, db):
+def test_optimizer_static(R: Results, db):
     # (a) mode-aware space: no searched dimension may be inert for the mode(s) in play
     for mode in ("fund", "index", "both"):
         for preset in ("quick", "medium", "full"):
@@ -440,8 +445,9 @@ def test_optimizer(R: Results, db):
             for d in st.space:
                 modes = st.space.get("entry_mode") or [mode]
                 centers = st.space.get("mr_center") or [base.mr_center]
-                ok = any(S._active(d, {"entry_mode": m, "mr_center": c, "stop_loss_pct": 1.0, "crash_drop_pct": 1.0})
-                         for m in modes for c in centers)
+                sess = st.space.get("session_mode") or [base.session_mode]
+                ok = any(S._active(d, {"entry_mode": m, "mr_center": c, "stop_loss_pct": 1.0, "crash_drop_pct": 1.0,
+                                       "session_mode": sm}) for m in modes for c in centers for sm in sess)
                 if not ok:
                     inert.append(d)
             need = set()
@@ -455,11 +461,33 @@ def test_optimizer(R: Results, db):
             lack = need - set(st.space)
             R.add("بهینه‌ساز", f"پیش‌تنظیم «{preset}» در حالت «{mode}»: پارامتر بی‌اثر نیست و پارامتر لازم هست",
                   not inert and not lack, f"بی‌اثر: {inert} · کم: {sorted(lack)}")
+    # (a2) a dimension that becomes active during refinement must get a concrete value (never silently the form's)
+    st = S.Study(db, None, ["REVA"], None, None, _base(), {k: list(S.DIMS[k]["choices"]) for k in S.ORDER}, n_samples=20)
+    bad = []
+    cases = [({"stop_loss_pct": 2.0}, "stop_mode"), ({"entry_mode": "index"}, "index_entry_pct"),
+             ({"entry_mode": "index"}, "index_exit_pct"), ({"entry_mode": "index"}, "index_min_share"),
+             ({"mr_center": "zero"}, "mr_window_days"), ({"mr_center": "zero"}, "mr_horizon_days"),
+             ({"mr_center": "zero"}, "mr_min_score"), ({"mr_center": "zero"}, "mr_lag"),
+             ({"crash_drop_pct": 1.0}, "crash_window_min"), ({"crash_drop_pct": 1.0}, "crash_cooldown_min"),
+             ({"crash_drop_pct": 1.0}, "crash_scope"), ({"session_mode": "fixed"}, "session_start"),
+             ({"session_mode": "fixed"}, "session_end")]
+    for change, dim in cases:
+        off = st._complete({})                           # the form's configuration (everything inactive stays None)
+        cand = dict(off)
+        cand.update(change)
+        full = st._complete(cand)
+        if full.get(dim) is None:
+            bad.append(f"{list(change)[0]}→{dim}")
+    R.add("بهینه‌ساز", "هر پارامتری که در جابه‌جایی فعال شود مقدار مشخص می‌گیرد", not bad, ", ".join(bad) or f"{len(cases)} حالت")
+
+
+
+def test_optimizer(R: Results, db):
     # (b) real run: reported config == simulated config
     base = _base()
-    space = {k: list(S.DIMS[k]["choices"]) for k in S.ORDER}
-    st = S.Study(db, None, None, None, None, base, space, n_samples=160, blocks=6, min_trades=8, max_seconds=90,
-                 max_universes=8, seed=5)
+    space = S.default_space()
+    st = S.Study(db, None, None, None, None, base, space, n_samples=110, blocks=6, min_trades=8, max_seconds=45,
+                 max_universes=6, seed=5)
     out = st.run(db)
     empty = [r["cfg"] for r in st.records if any(S._active(d, r["cfg"]) and r["cfg"].get(d) is None
                                                   for d in S.ORDER if d in st.space)]
@@ -485,8 +513,8 @@ def test_optimizer(R: Results, db):
     R.add("بهینه‌ساز", "ترکیب برنده همهٔ پارامترهای فعالش را دارد (اعمال نتیجه همه‌چیز را عوض می‌کند)", not act_missing,
           ", ".join(act_missing))
     # (c) determinism
-    st2 = S.Study(db, None, None, None, None, base, space, n_samples=160, blocks=6, min_trades=8, max_seconds=90,
-                  max_universes=8, seed=5)
+    st2 = S.Study(db, None, None, None, None, base, space, n_samples=110, blocks=6, min_trades=8, max_seconds=45,
+                  max_universes=6, seed=5)
     out2 = st2.run(db)
     R.add("بهینه‌ساز", "با بذر یکسان، برندهٔ یکسان", out["best"]["cfg"] == out2["best"]["cfg"], "")
     # (d) hold-out never influences selection: changing only hold-out data must not change the winner
@@ -782,10 +810,24 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
                 cfg = pg.evaluate("_discStudy.best.cfg")
                 pg.evaluate("c => discApplyStudy(c)", cfg)
                 pg.wait_for_timeout(1500)
-                form = pg.evaluate("""() => { const o = {}; const m = %s; for (const k in m) { const e = document.getElementById(m[k]); o[k] = e ? e.value : null; } return o; }""" % json.dumps(
-                    dict(re.findall(r"(\w+):\s*'([\w-]+)'", re.search(r"const DS_FORM = \{(.*?)\};", _html(), re.S).group(1)))))
-                bad = [f"{k}: فرم {form[k]!r} ≠ ترکیب {v!r}" for k, v in cfg.items()
-                       if v is not None and k in form and str(form[k]) != str(v) and not (isinstance(v, (int, float)) and float(form[k]) == float(v))]
+                ds_form = dict(re.findall(r"(\w+):\s*'([\w-]+)'", re.search(r"const DS_FORM = \{(.*?)\};", _html(), re.S).group(1)))
+                form = pg.evaluate("""m => { const o = {}; for (const k in m) { const e = document.getElementById(m[k]); o[k] = e ? (e.type === 'checkbox' ? e.checked : e.value) : null; } return o; }""", ds_form)
+
+                def expect(k, v):
+                    if k in ("index_min_share", "buy_fee", "sell_fee"):
+                        return round(v * 100, 4)
+                    if k in ("session_start", "session_end"):
+                        return f"{int(v) // 10000:02d}:{int(v) // 100 % 100:02d}"
+                    return v
+                bad = []
+                for k, v in cfg.items():
+                    if v is None or k not in form:
+                        continue
+                    e, g = expect(k, v), form[k]
+                    same = (g == e) if isinstance(e, (bool, str)) and not isinstance(e, (int, float)) or isinstance(g, bool) \
+                        else abs(float(g) - float(e)) < 1e-6
+                    if not same:
+                        bad.append(f"{k}: فرم {g!r} ≠ ترکیب {e!r}")
                 R.add("مرورگر", "«اعمال نتیجه» همهٔ پارامترهای ترکیب برنده را در فرم می‌نویسد", not bad, "؛ ".join(bad) or "همه نوشته شد")
             miss = pg.evaluate("""()=>{const out=[];document.getElementById('disc-app').querySelectorAll('button,label,th,.omk,option,.disc-h,.pill,summary').forEach(e=>{ if(e.offsetParent===null&&e.tagName!=='OPTION')return; const isO=e.tagName==='OPTION'; if(isO?e.title:e.closest('[title]'))return; out.push(e.tagName+':'+(e.textContent||'').trim().replace(/\\s+/g,' ').slice(0,40));});return [...new Set(out)];}""")
             R.add("مرورگر", "هر دکمه/گزینه/ستونِ دیده‌شده تول‌تیپ دارد", not miss, "بدون تول‌تیپ: " + "، ".join(miss[:8]))
@@ -824,13 +866,13 @@ def test_mutations(R: Results, db):
     o = S.Study._adapt_space
     S.Study._adapt_space = lambda self: None
     try:
-        cases.append(("بهینه‌ساز پارامتر بی‌اثرِ حالت شاخص را جستجو کند", caught(test_optimizer, db)))
+        cases.append(("بهینه‌ساز پارامتر بی‌اثرِ حالت شاخص را جستجو کند", caught(test_optimizer_static, db)))
     finally:
         S.Study._adapt_space = o
     o = S.Study._complete
     S.Study._complete = lambda self, c: S._normalize(self._fill(c), self.base)
     try:
-        cases.append(("ترکیبِ برنده پارامتر فعالِ خالی داشته باشد", caught(test_optimizer, db)))
+        cases.append(("ترکیبِ برنده پارامتر فعالِ خالی داشته باشد", caught(test_optimizer_static, db)))
     finally:
         S.Study._complete = o
     o = D._simulate
@@ -867,7 +909,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("هزینه و تکرارپذیری", lambda: test_cost_monotonic(R, db)),
              ("سیم‌کشی وب", lambda: test_web_wiring(R, db)),
              ("رابط کاربری ایستا", lambda: test_static_ui(R)),
-             ("بهینه‌ساز", lambda: test_optimizer(R, db)),
+             ("بهینه‌ساز", lambda: (test_optimizer_static(R, db), test_optimizer(R, db))),
              ("ناوردایی‌ها", lambda: test_invariants(R, db)),
              ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),

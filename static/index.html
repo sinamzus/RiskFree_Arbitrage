@@ -2388,6 +2388,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <option value="fund">بر اساس حباب هر صندوق (حالت فعلی)</option>
           <option value="index">بر اساس شاخص حباب (میانگین همهٔ صندوق‌ها)</option>
           <option value="both">هر دو (صندوق ارزان و شاخص ارزان)</option></select></div>
+      <div class="bbt-field" title="شاخص حباب فقط وقتی تعریف می‌شود که دست‌کم این درصد از صندوق‌های فعال همان روز قیمت داده باشند؛ وگرنه شاخص «نامعلوم» است و ورود با شاخص انجام نمی‌شود."><label>حداقل سهم صندوق‌های دارای قیمت برای شاخص ٪</label>
+        <input id="disc-imin" type="number" step="5" min="5" max="100" value="50" style="width:70px"></div>
       <div class="bbt-field" title="فقط حالت شاخص / هر دو: خرید وقتی شاخص حباب ≤ منفیِ این درصد"><label>ورود: شاخص حباب ≤ −٪</label>
         <input id="disc-ientry" type="number" step="0.05" value="0.3" style="width:80px"></div>
       <div class="bbt-field" title="فقط حالت شاخص: فروش وقتی شاخص حباب ≥ منفیِ این درصد (۰ = برگشت شاخص به حباب معمول)"><label>خروج: شاخص حباب ≥ −٪</label>
@@ -2415,6 +2417,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <option value="zero">بازگشت حول صفر (NAV)</option>
           <option value="category">بازگشت حول میانگین حبابِ دستهٔ صندوق</option>
           <option value="self">بازگشت حول میانگین حبابِ خود صندوق</option></select></div>
+      <div class="bbt-field" title="جفت‌های محاسبهٔ ضریب بازگشتِ AR(1) هر این‌قدر اسنپ‌شاتِ همان روز از هم فاصله دارند (۴ ≈ یک ساعت). عدد کوچک‌تر = حساس‌تر به نوسان کوتاه، بزرگ‌تر = حساس‌تر به روند."><label>فاصلهٔ جفت‌های امتیاز (اسنپ‌شات)</label>
+        <input id="disc-mrlag" type="number" step="1" min="1" value="4" style="width:70px"></div>
       <div class="bbt-field" title="تعداد روزهای معاملاتیِ اخیر که امتیاز از آن‌ها ساخته می‌شود"><label>پنجرهٔ امتیاز (روز)</label>
         <input id="disc-mrwin" type="number" step="1" min="5" value="20" style="width:70px"></div>
       <div class="bbt-field" title="حداقل امتیاز (۰–۱۰۰) برای مجاز بودن صندوق. روی دادهٔ قدم‌زدن تصادفی حدود ۱۰٪ لحظه‌ها در ۷۰ و حدود ۶٪ در ۸۰ پذیرفته می‌شوند."><label>حداقل امتیاز</label>
@@ -6553,6 +6557,7 @@ function discParams() {
     initial: String((+v('disc-capital') || 0) * 1e6), pos: v('disc-pos'), entry: v('disc-entry'), exit: v('disc-exit'),
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
+    imin: v('disc-imin'), mrlag: v('disc-mrlag'),
     crashdrop: v('disc-crashdrop'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
@@ -7069,6 +7074,10 @@ const DISC_TIP_RULES = [
   [/^گروه ریزش$/, 'گروهِ سنجشِ ریزش: دستهٔ صندوق یا همهٔ صندوق‌ها.'],
   [/^دستهٔ صندوق$/, 'فقط صندوق‌های هم‌دسته میانگین‌گیری می‌شوند (طلا با طلا).'],
   [/^همهٔ صندوق‌ها$/, 'همهٔ صندوق‌های انتخاب‌شده میانگین‌گیری می‌شوند.'],
+  [/^⚠ همه، با فرض‌های اجرایی/, 'همهٔ پارامترها + اسپرد، کارمزد و سقف حجم؛ هشدار: بهینه‌ساز ارزان‌ترین هزینه را برمی‌گزیند.'],
+  [/^⚠ فرض اجرایی/, 'فرض اجرایی (نه راهبرد): جستجوی آن معمولاً بی‌معناست.'],
+  [/^حداقل سهم صندوق‌های دارای قیمت/, 'شاخص حباب فقط وقتی تعریف می‌شود که این درصد از صندوق‌ها همان روز قیمت داده باشند.'],
+  [/^فاصلهٔ جفت‌های امتیاز/, 'فاصلهٔ اسنپ‌شات‌های جفتِ محاسبهٔ AR(1) امتیاز بازگشت.'],
   [/^اوج$/, 'بیشترین درصد سرمایهٔ دفتری که هم‌زمان در پوزیشن بود.'],
   [/^سرمایهٔ درگیر در طول بازه/, 'چند درصد از سرمایهٔ دفتری در هر لحظه داخل پوزیشن بوده است (پله‌ای). بقیه نقد و بی‌کار بوده.'],
   [/^میانگین \(وزن‌دار با زمان/, 'میانگین درصد سرمایهٔ درگیر، وزن‌دار با زمان واقعیِ ساعت‌به‌ساعت.'],
@@ -7819,6 +7828,7 @@ async function discStats() {
 let _discSpace = null, _discStudy = null;
 const DISC_STUDY_KEY = 'discStudyCfg_v1';
 const DS_VAL = {
+  crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
   entry_mode: {fund: 'هر صندوق', index: 'شاخص', both: 'هر دو'},
   mr_center: {off: 'خاموش', zero: 'صفر', category: 'دسته', self: 'خود'},
   stop_mode: {nav_widen: 'NAV بازتر', nav_level: 'NAV سطح', price: 'قیمت'},
@@ -7826,13 +7836,23 @@ const DS_VAL = {
 const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_age_days: 'سن NAV', mr_center: 'مرکز', mr_window_days: 'پنجره',
   mr_horizon_days: 'افق', mr_min_score: 'امتیاز≥', entry_discount_pct: 'ورود', exit_discount_pct: 'خروج', index_entry_pct: 'ورود شاخص',
   index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن',
-  crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف'};
+  crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
+  session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
+  require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
 const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
   exit_discount_pct: 'disc-exit', index_entry_pct: 'disc-ientry', index_exit_pct: 'disc-iexit', max_hold_days: 'disc-hold',
   stop_loss_pct: 'disc-stop', stop_mode: 'disc-stopmode', position_pct: 'disc-pos',
-  crash_drop_pct: 'disc-crashdrop', crash_window_min: 'disc-crashwin', crash_cooldown_min: 'disc-crashcool'};
-const dsVal = (d, v) => v == null ? '—' : ((DS_VAL[d] || {})[v] || String(+(+v).toFixed ? +(+v).toFixed(3) : v));
+  crash_drop_pct: 'disc-crashdrop', crash_window_min: 'disc-crashwin', crash_cooldown_min: 'disc-crashcool',
+  crash_scope: 'disc-crashscope', session_mode: 'disc-smode', session_start: 'disc-sstart', session_end: 'disc-send',
+  index_min_share: 'disc-imin', mr_lag: 'disc-mrlag', require_fresh: 'disc-fresh', participation_pct: 'disc-part',
+  half_spread_pct: 'disc-spread', buy_fee: 'disc-buyfee', sell_fee: 'disc-sellfee'};
+const dsHM = v => { const x = String(Math.round(+v)).padStart(6, '0'); return x.slice(0, 2) + ':' + x.slice(2, 4); };
+const dsVal = (d, v) => v == null ? '—'
+  : (d === 'session_start' || d === 'session_end') ? dsHM(v)
+  : (d === 'index_min_share') ? Math.round(v * 100) + '%'
+  : (d === 'buy_fee' || d === 'sell_fee') ? (+(v * 100).toFixed(3)) + '%'
+  : ((DS_VAL[d] || {})[v] || String(+(+v).toFixed ? +(+v).toFixed(3) : v));
 const dsCfgStr = (cfg, dims) => dims.filter(d => cfg[d] != null).map(d => `${DS_SHORT[d] || d} ${dsVal(d, cfg[d])}`).join(' · ');
 const dsPct = (v, d = 2) => v == null ? '—' : `<bdi dir="ltr">${v >= 0 ? '+' : ''}${(+v).toFixed(d)}%</bdi>`;
 const dsHeat = (v, sc) => {
@@ -7861,7 +7881,7 @@ async function discStudyBuild() {
   const sp = await discStudyLoadSpace();
   if (!sp) { box.innerHTML = '<div class="dv-note">تنظیمات در دسترس نیست.</div>'; return; }
   const st = discStudyState();
-  const on = st.on || Object.fromEntries(sp.dims.map(d => [d.key, true]));
+  const on = st.on || Object.fromEntries(sp.dims.map(d => [d.key, !d.assumption]));
   const o = Object.assign({objective: 'robust', n_samples: 400, blocks: 6, max_seconds: 300, max_universes: 20}, st.opts || {});
   const preset = (k, l, tip) => `<button type="button" class="pill" onclick="discStudyPreset('${k}')" title="${tip}">${l}</button>`;
   const mnow = document.getElementById('disc-entrymode').value;
@@ -7870,15 +7890,16 @@ async function discStudyBuild() {
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0">
       ${preset('quick', '⚡ سریع (۴ پارامتر)', 'فقط ورود، خروج، نگه‌داری و حد ضرر؛ سریع‌ترین و کم‌ابعادترین مطالعه')}
       ${preset('medium', '◐ متوسط', 'سریع + نوع حد ضرر، تعدیل حباب دائمی، فیلتر بازگشت به میانگین')}
-      ${preset('full', '● کامل (همهٔ پارامترها)', 'همهٔ پارامترهای مدل‌شده با هم جستجو و تحلیل می‌شوند')}
+      ${preset('full', '● کامل (همهٔ پارامترهای راهبرد و داده)', 'همهٔ پارامترهای راهبرد و داده با هم جستجو و تحلیل می‌شوند؛ فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) جستجو نمی‌شوند')}
+      ${preset('everything', '⚠ همه، با فرض‌های اجرایی', 'علاوه بر همهٔ پارامترها، اسپرد، کارمزد و سقف حجم هم جستجو می‌شوند. هشدار: بهینه‌ساز ارزان‌ترین هزینه را برمی‌گزیند و این یافته نیست؛ فقط برای دیدن اندازهٔ اثر هزینه‌هاست.')}
       ${preset('reset', '↻ دامنه‌های پیش‌فرض', 'برگرداندن مقدارهای هر پارامتر به دامنهٔ پیش‌فرض')}
     </div>
     <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl" id="ds-dims"><thead><tr>
       <th>جستجو؟</th><th style="text-align:start">پارامتر</th><th>نوع</th><th style="text-align:start">مقدارهای آزمون (با کاما جدا کنید)</th></tr></thead><tbody>
     ${sp.dims.map(d => `<tr><td><input type="checkbox" data-dim="${d.key}" ${on[d.key] ? 'checked' : ''} onchange="discStudyCollect()"></td>
-      <td style="text-align:start" title="${d.kind === 'slow' ? 'تغییرش داده‌های ورودی را از نو می‌سازد (کندتر)؛ مقدارهای آن گروه‌بندی می‌شوند' : 'فقط شبیه‌سازی را تغییر می‌دهد (سریع)'}">${d.label}</td>
-      <td>${d.kind === 'slow' ? 'ساختاری' : 'آستانه'}</td>
-      <td><input type="text" data-vals="${d.key}" value="${(st.vals[d.key] != null ? st.vals[d.key] : d.choices.join(', ')).replace(/"/g, '&quot;')}" style="width:100%;min-width:260px;direction:ltr" onchange="discStudyCollect()"></td></tr>`).join('')}
+      <td style="text-align:start" title="${d.assumption ? 'فرض اجرایی: جستجوی آن معمولاً بی‌معناست (بهینه‌ساز ارزان‌ترین گزینه را انتخاب می‌کند). فقط برای دیدن اندازهٔ اثر روشن کنید. ' : ''}${d.kind === 'slow' ? 'تغییرش داده‌های ورودی را از نو می‌سازد (کندتر)؛ مقدارهای آن گروه‌بندی می‌شوند' : 'فقط شبیه‌سازی را تغییر می‌دهد (سریع)'}">${d.label}</td>
+      <td>${d.assumption ? '⚠ فرض اجرایی' : d.kind === 'slow' ? 'ساختاری' : 'آستانه'}</td>
+      <td><input type="text" data-vals="${d.key}" value="${(st.vals[d.key] != null ? st.vals[d.key] : d.choices.map(c => (d.key === 'session_start' || d.key === 'session_end') ? dsHM(c) : c).join(', ')).replace(/"/g, '&quot;')}" style="width:100%;min-width:260px;direction:ltr" onchange="discStudyCollect()"></td></tr>`).join('')}
     </tbody></table></div>
     <div class="bbt-group" style="margin-top:6px">
       <div class="bbt-field" title="ملاک انتخاب برنده روی دورهٔ آموزش. «پایدار» میانگین بازدهِ بلوک‌ها منهای نصف انحراف معیارشان است تا ترکیبی که فقط در یک بلوک خوب بوده برنده نشود."><label>معیار انتخاب</label>
@@ -7917,7 +7938,7 @@ function discStudyPresetDims(k, sp) {
   const mode = document.getElementById('disc-entrymode').value;
   const strip = ['entry_discount_pct', 'exit_discount_pct', 'index_entry_pct', 'index_exit_pct'];
   const base = (sp.presets[k] || []).filter(d => !strip.includes(d));
-  return k === 'full' ? sp.presets.full : discStudyEntryDims(mode).concat(base);
+  return (k === 'full' || k === 'everything') ? sp.presets[k] : discStudyEntryDims(mode).concat(base);
 }
 
 function discStudyPreset(k) {
@@ -7938,8 +7959,13 @@ async function discStudyPayload() {
   (sp ? sp.dims : []).forEach(d => {
     if (!on[d.key]) return;
     const txt = st.vals[d.key] != null ? st.vals[d.key] : d.choices.join(',');
-    const arr = String(txt).split(/[,،\s]+/).filter(x => x !== '').map(x => (d.choices.length && typeof d.choices[0] === 'string') ? x : +x)
-      .filter(x => typeof x === 'string' || Number.isFinite(x));
+    const isT = d.key === 'session_start' || d.key === 'session_end';
+    const arr = String(txt).split(/[,،\s]+/).filter(x => x !== '').map(x => {
+      if (typeof d.choices[0] === 'boolean') return /^(1|true|yes|بله)$/i.test(x);
+      if (typeof d.choices[0] === 'string') return x;
+      if (isT && x.includes(':')) { const [h, m] = x.split(':'); return (+h) * 10000 + (+m) * 100; }
+      return +x;
+    }).filter(x => typeof x === 'string' || typeof x === 'boolean' || Number.isFinite(x));
     if (arr.length) space[d.key] = arr;
   });
   return {space, opts: st.opts || {}};
@@ -8023,15 +8049,26 @@ async function discOptimize() {
   poll();
 }
 
+// value -> what the form control shows (percent fields, HH:MM times, checkbox)
+function dsFormValue(k, v) {
+  if (k === 'index_min_share' || k === 'buy_fee' || k === 'sell_fee') return +(v * 100).toFixed(4);
+  if (k === 'session_start' || k === 'session_end') return dsHM(v);
+  return v;
+}
+
 function discApplyStudy(cfg) {
   const changed = [], same = [];
   Object.keys(cfg).forEach(k => {
     const el = document.getElementById(DS_FORM[k]);
     if (!el || cfg[k] == null) return;
-    const before = el.value;
-    el.value = cfg[k];
-    (String(before) === String(el.value) ? same : changed).push(`${DS_SHORT[k] || k}: ${dsVal(k, before)} ← ${dsVal(k, cfg[k])}`);
+    const fv = dsFormValue(k, cfg[k]);
+    let before, after;
+    if (el.type === 'checkbox') { before = el.checked; el.checked = !!cfg[k]; after = el.checked; }
+    else { before = el.value; el.value = fv; after = el.value; }
+    (String(before) === String(after) ? same : changed).push(`${DS_SHORT[k] || k}: ${dsVal(k, el.type === 'checkbox' ? before : (before === '' ? null : (k === 'index_min_share' || k === 'buy_fee' || k === 'sell_fee' ? +before / 100 : before)))} ← ${dsVal(k, cfg[k])}`);
   });
+  const mode = document.getElementById('disc-smode');
+  if (mode) { const f = document.getElementById('disc-sfix'); if (f) f.style.display = mode.value === 'fixed' ? '' : 'none'; }
   const stopOff = cfg.stop_loss_pct != null && +cfg.stop_loss_pct === 0;
   window._discApplyNote = `اعمال شد — تغییر کرد: ${changed.join(' · ') || 'هیچ'}${same.length ? ' | از قبل همین بود: ' + same.map(x => x.split(':')[0]).join('، ') : ''}`
     + (stopOff ? ' | توجه: در این ترکیب حد ضرر خاموش است (۰)، پس «نوع حد ضرر» اثری ندارد' : '');

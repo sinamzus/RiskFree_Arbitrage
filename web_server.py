@@ -1758,6 +1758,8 @@ def create_app(db, scan_callback=None):
             session_mode=("fixed" if str(get("smode") or d.session_mode) == "fixed" else "auto"),
             session_start=_hhmmss(get("sstart"), d.session_start),
             session_end=_hhmmss(get("send"), d.session_end),
+            index_min_share=min(1.0, max(0.05, _f("imin", d.index_min_share * 100) / 100.0)),
+            mr_lag=max(1, int(_f("mrlag", d.mr_lag))),
             index_entry_pct=_f("ientry", d.index_entry_pct),
             index_exit_pct=_f("iexit", d.index_exit_pct),
             half_spread_pct=_f("spread", d.half_spread_pct),

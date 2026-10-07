@@ -57,22 +57,37 @@ DIMS: dict[str, dict] = {
     "crash_drop_pct":     {"kind": "fast", "label": "فیلتر ریزش بازار: افت گروه ≥ ٪ (۰ = خاموش)", "choices": [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]},
     "crash_window_min":   {"kind": "slow", "label": "پنجرهٔ ریزش (دقیقه)", "choices": [30, 60, 120, 240]},
     "crash_cooldown_min": {"kind": "slow", "label": "مدت ممنوعیت پس از ریزش (دقیقه)", "choices": [0, 60, 120, 240]},
+    "crash_scope":        {"kind": "slow", "label": "گروه ریزش", "choices": ["category", "all"]},
+    "session_mode":       {"kind": "slow", "label": "ساعت جلسه (خودکار از حجم / ثابت)", "choices": ["auto", "fixed"]},
+    "session_start":      {"kind": "slow", "label": "شروع جلسهٔ ثابت", "choices": [90000, 100000, 110000, 120000]},
+    "session_end":        {"kind": "slow", "label": "پایان جلسهٔ ثابت", "choices": [123000, 140000, 150000, 180000]},
+    "index_min_share":    {"kind": "slow", "label": "حداقل سهم صندوق‌های دارای قیمت برای شاخص", "choices": [0.3, 0.5, 0.7, 1.0]},
+    "mr_lag":             {"kind": "slow", "label": "فاصلهٔ جفت‌های امتیاز بازگشت (اسنپ‌شات)", "choices": [2, 4, 8]},
+    "require_fresh":      {"kind": "fast", "label": "فقط قیمت تازه", "choices": [True, False]},
+    "participation_pct":  {"kind": "fast", "label": "سقف سهم از حجم روز ٪ (۰ = نامحدود)", "choices": [2.0, 5.0, 10.0, 0.0], "assumption": True},
+    "half_spread_pct":    {"kind": "fast", "label": "نیم‌اسپرد فرضی ٪", "choices": [0.02, 0.05, 0.1, 0.2], "assumption": True},
+    "buy_fee":            {"kind": "fast", "label": "کارمزد خرید (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
+    "sell_fee":           {"kind": "fast", "label": "کارمزد فروش (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
     "stop_loss_pct":      {"kind": "fast", "label": "حد ضرر", "choices": [0.0, 1.0, 2.0, 3.0, 5.0]},
     "stop_mode":          {"kind": "fast", "label": "نوع حد ضرر", "choices": ["nav_widen", "nav_level", "price"]},
     "position_pct":       {"kind": "fast", "label": "سهم هر پوزیشن از سرمایه ٪", "choices": [5, 10, 20, 33, 50]},
 }
-SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "mr_center", "mr_window_days", "mr_horizon_days",
-              "crash_window_min", "crash_cooldown_min"]
+SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "session_mode", "session_start", "session_end",
+              "index_min_share", "mr_center", "mr_window_days", "mr_horizon_days", "mr_lag",
+              "crash_window_min", "crash_cooldown_min", "crash_scope"]
 FAST_ORDER = ["entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct", "max_hold_days",
-              "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "position_pct"]
+              "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "require_fresh", "position_pct",
+              "participation_pct", "half_spread_pct", "buy_fee", "sell_fee"]
 ORDER = SLOW_ORDER + FAST_ORDER
 
 PRESETS = {
     "quick": ["entry_discount_pct", "exit_discount_pct", "max_hold_days", "stop_loss_pct"],
     "medium": ["entry_discount_pct", "exit_discount_pct", "max_hold_days", "stop_loss_pct", "stop_mode",
                "baseline_days", "mr_center", "mr_min_score"],
-    "full": ORDER,
+    "full": [d for d in ORDER if not DIMS[d].get("assumption")],      # every strategy / data parameter
+    "everything": ORDER,                                              # + execution assumptions (see warning)
 }
+ASSUMPTION_DIMS = [d for d in ORDER if DIMS[d].get("assumption")]
 
 OBJECTIVES = {
     "robust": "پایدار: میانگین بازدهِ بلوک‌ها − ½ انحراف معیارشان (پیش‌فرض)",
@@ -83,7 +98,9 @@ OBJECTIVES = {
 
 
 def default_space() -> dict:
-    return {k: list(v["choices"]) for k, v in DIMS.items()}
+    """Default searched space: every strategy / data parameter. The execution assumptions (spread, fees, volume cap)
+    are NOT searched by default: an optimizer would simply pick the cheapest costs, which is not a finding."""
+    return {k: list(v["choices"]) for k, v in DIMS.items() if not v.get("assumption")}
 
 
 def _active(dim: str, c: dict) -> bool:
@@ -99,15 +116,21 @@ def _active(dim: str, c: dict) -> bool:
         return mode == "index"
     if dim == "stop_mode":
         return (c.get("stop_loss_pct") or 0) > 0
-    if dim in ("mr_window_days", "mr_horizon_days", "mr_min_score"):
+    if dim in ("mr_window_days", "mr_horizon_days", "mr_min_score", "mr_lag"):
         return (c.get("mr_center") or "off") != "off"
-    if dim in ("crash_window_min", "crash_cooldown_min"):
+    if dim in ("crash_window_min", "crash_cooldown_min", "crash_scope"):
         return (c.get("crash_drop_pct") or 0) > 0
+    if dim in ("session_start", "session_end"):
+        return (c.get("session_mode") or "auto") == "fixed"
+    if dim == "index_min_share":
+        return mode in ("index", "both")
     return True
 
 
 def _valid(c: dict) -> bool:
     mode = c.get("entry_mode") or "fund"
+    if c.get("session_start") is not None and c.get("session_end") is not None and c["session_start"] >= c["session_end"]:
+        return False
     if mode in ("fund", "both") and c.get("entry_discount_pct") is not None and c.get("exit_discount_pct") is not None:
         if c["exit_discount_pct"] >= c["entry_discount_pct"] - 0.05:
             return False
@@ -131,7 +154,7 @@ def _normalize(c: dict, base: D.DiscountParams) -> dict:
 
 def _to_params(base: D.DiscountParams, c: dict) -> D.DiscountParams:
     kw = {k: v for k, v in c.items() if v is not None}
-    for k in ("max_hold_days", "crash_window_min", "crash_cooldown_min"):
+    for k in ("max_hold_days", "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end"):
         if k in kw:
             kw[k] = int(kw[k])
     return replace(base, **kw)
@@ -314,9 +337,22 @@ class Study:
                 if d in self.space:
                     del self.space[d]
                     self.dropped.append(d)
+        modes_now = self.space.get("entry_mode") or [self.base.entry_mode]
+        if all(m == "fund" for m in modes_now) and "index_min_share" in self.space:
+            del self.space["index_min_share"]
+            self.dropped.append("index_min_share")
+        sess = self.space.get("session_mode") or [self.base.session_mode]
+        if all(m == "auto" for m in sess):
+            for d in ("session_start", "session_end"):
+                if d in self.space:
+                    del self.space[d]
+                    self.dropped.append(d)
+        if all(c == "off" for c in centers) and "mr_lag" in self.space:
+            del self.space["mr_lag"]
+            self.dropped.append("mr_lag")
         drops = self.space.get("crash_drop_pct") or [self.base.crash_drop_pct]
         if all(float(x) == 0 for x in drops):
-            for d in ("crash_window_min", "crash_cooldown_min"):
+            for d in ("crash_window_min", "crash_cooldown_min", "crash_scope"):
                 if d in self.space:
                     del self.space[d]
                     self.dropped.append(d)
@@ -361,7 +397,10 @@ class Study:
         return (p.baseline_days, p.max_nav_age_days, p.entry_mode != "fund", p.mr_center,
                 p.mr_window_days if p.mr_center != "off" else 0,
                 p.mr_horizon_days if p.mr_center != "off" else 0,
-                (p.crash_window_min, p.crash_cooldown_min) if self._crash_searched else None)
+                p.mr_lag if p.mr_center != "off" else 0,
+                (p.crash_window_min, p.crash_cooldown_min, p.crash_scope) if self._crash_searched else None,
+                (p.session_mode, p.session_start, p.session_end) if p.session_mode == "fixed" else p.session_mode,
+                p.index_min_share if p.entry_mode != "fund" else None)
 
     def _universe(self, p: D.DiscountParams):
         k = self._ukey(p)
@@ -445,20 +484,51 @@ class Study:
 
     # ---- sampling -------------------------------------------------------------------
     def _slow_combos(self) -> list[dict]:
-        combos = [{}]
-        for d in SLOW_ORDER:
-            ch = self.space.get(d)
-            nxt = []
-            for c in combos:
-                if ch is None:
-                    nxt.append(c)                                  # fixed at base
-                elif not _active(d, self._ctx(c)):
-                    nxt.append({**c, d: None})
-                else:
-                    for v in ch:
-                        nxt.append({**c, d: v})
-            combos = nxt
-        return combos
+        """Structural combinations (the ones that need a freshly built universe).
+
+        The full product of the structural dimensions can be astronomically large (millions), so it is
+        never materialised: small spaces are enumerated, large ones are sampled in a balanced way
+        (every value of every dimension appears about equally often among ``max_universes`` rows)."""
+        dims = [d for d in SLOW_ORDER if d in self.space]
+        ub = 1
+        for d in dims:
+            ub *= len(self.space[d])
+        if ub <= max(self.max_universes, 60):
+            combos = [{}]
+            for d in dims:
+                nxt = []
+                for c in combos:
+                    if not _active(d, self._ctx(c)):
+                        nxt.append({**c, d: None})
+                    else:
+                        for v in self.space[d]:
+                            nxt.append({**c, d: v})
+                combos = nxt
+            return combos
+        M = self.max_universes * 4
+        cols = {}
+        for d in dims:
+            col = []
+            while len(col) < M:
+                blk = list(self.space[d])
+                self.rng.shuffle(blk)
+                col.extend(blk)
+            col = col[:M]
+            self.rng.shuffle(col)
+            cols[d] = col
+        out, seen = [], set()
+        for i in range(M):
+            c = {}
+            for d in dims:
+                c[d] = cols[d][i] if _active(d, self._ctx(c)) else None
+            key = tuple((d, c[d]) for d in dims)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(c)
+            if len(out) >= self.max_universes:
+                break
+        return out
 
     def _ctx(self, c: dict) -> dict:
         """Context for deciding whether a slow dimension is meaningful: a dimension that only matters when
@@ -477,7 +547,11 @@ class Study:
                 "index_exit_pct": b.index_exit_pct, "max_hold_days": b.max_hold_days,
                 "stop_loss_pct": b.stop_loss_pct, "stop_mode": b.stop_mode, "position_pct": b.position_pct,
                 "crash_drop_pct": b.crash_drop_pct, "crash_window_min": b.crash_window_min,
-                "crash_cooldown_min": b.crash_cooldown_min}
+                "crash_cooldown_min": b.crash_cooldown_min, "crash_scope": b.crash_scope,
+                "session_mode": b.session_mode, "session_start": b.session_start, "session_end": b.session_end,
+                "index_min_share": b.index_min_share, "mr_lag": b.mr_lag, "require_fresh": b.require_fresh,
+                "participation_pct": b.participation_pct, "half_spread_pct": b.half_spread_pct,
+                "buy_fee": b.buy_fee, "sell_fee": b.sell_fee}
 
     def _fill(self, partial: dict) -> dict:
         """Complete a configuration with base values for dimensions that are not searched."""
@@ -908,8 +982,9 @@ def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.Discoun
 
 
 _INT_DIMS = ("max_hold_days", "baseline_days", "max_nav_age_days", "mr_window_days", "mr_horizon_days",
-             "crash_window_min", "crash_cooldown_min")
-_STR_CHOICES = {"entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},
+             "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end")
+_BOOL_DIMS = ("require_fresh",)
+_STR_CHOICES = {"crash_scope": {"category", "all"}, "session_mode": {"auto", "fixed"}, "entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},
                 "stop_mode": {"nav_widen", "nav_level", "price"}}
 
 
@@ -924,7 +999,11 @@ def clean_space(raw: dict | None, enabled: list[str] | None = None) -> dict:
             vals = [vals]
         out = []
         for v in vals:
-            if d in _STR_CHOICES:
+            if d in _BOOL_DIMS:
+                b = str(v).strip().lower() in ("1", "true", "yes", "بله")
+                if b not in out:
+                    out.append(b)
+            elif d in _STR_CHOICES:
                 if str(v) in _STR_CHOICES[d] and str(v) not in out:
                     out.append(str(v))
             else:
@@ -942,6 +1021,6 @@ def clean_space(raw: dict | None, enabled: list[str] | None = None) -> dict:
 
 
 def space_info() -> dict:
-    return {"dims": [{"key": k, "label": DIMS[k]["label"], "kind": DIMS[k]["kind"], "choices": DIMS[k]["choices"]}
-                     for k in ORDER],
+    return {"dims": [{"key": k, "label": DIMS[k]["label"], "kind": DIMS[k]["kind"], "choices": DIMS[k]["choices"],
+                      "assumption": bool(DIMS[k].get("assumption"))} for k in ORDER],
             "presets": PRESETS, "objectives": OBJECTIVES}
