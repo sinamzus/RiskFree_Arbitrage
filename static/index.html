@@ -2401,6 +2401,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <option value="price">قیمت: افت از قیمت خرید ٪</option></select></div>
       <div class="bbt-field" title="مقدار حد ضرر (٪ یا واحد درصد، طبق نوع انتخابی)؛ ۰ = خاموش"><label>حد ضرر</label>
         <input id="disc-stop" type="number" step="0.5" value="0" style="width:70px"></div>
+      <div class="bbt-field" title="پر کردن سرمایهٔ بیکار: وقتی نقد بی‌کار مانده، آن را در «بهترین» صندوق (کمترین حباب نسبت به معمولِ خودش) می‌گذارد، بدون اینکه جلوی معاملهٔ سیگنال‌دار را بگیرد: هر وقت ورودِ عادی نقد لازم داشت، پارک‌شده‌ها فروخته می‌شوند. همان قواعد زمان/حد ضرر/فیلترها اعمال می‌شود. «خاموش» = رفتار قبلی."><label>پر کردن سرمایهٔ بیکار</label>
+        <select id="disc-fillmode" style="width:230px"><option value="off">خاموش</option><option value="best">با بهترین صندوق (کمترین حباب نسبی)</option></select></div>
+      <div class="bbt-field" title="فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد؛ ۰ = فقط وقتی در/زیر معمولِ خودش است (صندوقِ گران‌شده خریده نمی‌شود)."><label>پر کردن: حداکثر حباب نسبی ٪</label>
+        <input id="disc-fillmax" type="number" step="0.1" value="0" style="width:70px"></div>
+      <div class="bbt-field" title="پوزیشن پارک‌شده وقتی فروخته می‌شود که حبابش نسبت به معمولِ خودش به این درصد (یا بیشتر) برسد (سودبردن)."><label>پر کردن: فروش وقتی حباب نسبی ≥ ٪</label>
+        <input id="disc-fillexit" type="number" step="0.1" value="0.3" style="width:70px"></div>
       <div class="bbt-field" title="فیلتر ریزش بازار: اگر میانگین قیمتِ صندوق‌های گروه در «پنجرهٔ ریزش» بیش از این‌قدر درصد افت کرده باشد، ورودِ جدید موقتاً متوقف می‌شود (خروج‌ها و پوزیشن‌های باز دست نمی‌خورند). در ریزش، «تخفیف از NAV» اغلب ظاهری است (قیمت زودتر از NAV می‌افتد). ۰ = خاموش. برای داده‌ای با اسنپ‌شات‌های کم، مقدار را بزرگ‌تر از نوسان عادی بگذارید."><label>فیلتر ریزش: افت گروه ≥ ٪</label>
         <input id="disc-crashdrop" type="number" step="0.1" min="0" value="0" style="width:70px"></div>
       <div class="bbt-field" title="افت قیمتِ گروه در این‌قدر دقیقهٔ اخیر سنجیده می‌شود (نسبت به آخرین قیمتِ ثبت‌شده در/قبل از آن لحظه؛ اگر در همین روز نباشد، آخرین قیمت روز قبل). مثلاً ۳۰ = «در نیم‌ساعت اخیر ریزش سریع نباشد»."><label>پنجرهٔ ریزش (دقیقه)</label>
@@ -6558,6 +6564,7 @@ function discParams() {
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
     imin: v('disc-imin'), mrlag: v('disc-mrlag'),
+    fillmode: v('disc-fillmode'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
     crashdrop: v('disc-crashdrop'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
@@ -7078,6 +7085,14 @@ const DISC_TIP_RULES = [
   [/^⚠ فرض اجرایی/, 'فرض اجرایی (نه راهبرد): جستجوی آن معمولاً بی‌معناست.'],
   [/^حداقل سهم صندوق‌های دارای قیمت/, 'شاخص حباب فقط وقتی تعریف می‌شود که این درصد از صندوق‌ها همان روز قیمت داده باشند.'],
   [/^فاصلهٔ جفت‌های امتیاز/, 'فاصلهٔ اسنپ‌شات‌های جفتِ محاسبهٔ AR(1) امتیاز بازگشت.'],
+  [/^پر کردن سرمایهٔ بیکار$/, 'نقدِ بی‌کار را در «بهترین» صندوق می‌گذارد بدون اینکه جلوی ورودهای سیگنال‌دار را بگیرد.'],
+  [/^پر کردن: حداکثر حباب نسبی/, 'فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد.'],
+  [/^پر کردن: فروش وقتی/, 'پوزیشن پارک‌شده وقتی حبابش به این درصد بالای معمولِ خودش رسید فروخته می‌شود.'],
+  [/^چرا سرمایه بی‌کار می‌ماند/, 'شمارش لحظه‌هایی که صندوق پوزیشن نداشت و دلیلِ ورود نکردن.'],
+  [/^سهم$/, 'سهم از لحظه‌هایی که صندوق پوزیشن نداشت و به این دلیل ورود نشد.'],
+  [/^دلیلِ ورود نکردن$/, 'مانعی که جلوی ورود را گرفت (اولین مانعِ زنجیرهٔ شرط‌ها).'],
+  [/^پر کردن سرمایهٔ بیکار با بهترین صندوق/, 'مقایسهٔ نتیجه با و بدون پارک کردن نقدِ بی‌کار.'],
+  [/^(سرمایهٔ نهایی بدون|بازده بدون|سرمایهٔ درگیر بدون|افت حداکثر بدون|معاملهٔ پارک|سود خالص پارک|کارمزد پارک|فروش برای باز)/, 'مقایسهٔ اثر پر کردن سرمایهٔ بیکار.'],
   [/^اوج$/, 'بیشترین درصد سرمایهٔ دفتری که هم‌زمان در پوزیشن بود.'],
   [/^سرمایهٔ درگیر در طول بازه/, 'چند درصد از سرمایهٔ دفتری در هر لحظه داخل پوزیشن بوده است (پله‌ای). بقیه نقد و بی‌کار بوده.'],
   [/^میانگین \(وزن‌دار با زمان/, 'میانگین درصد سرمایهٔ درگیر، وزن‌دار با زمان واقعیِ ساعت‌به‌ساعت.'],
@@ -7143,7 +7158,8 @@ const DISC_TIP_OPTS = [
   [/^NAV: عمیق‌تر شدن تخفیف/, 'فروش اضطراری وقتی تخفیف نسبت به لحظهٔ ورود این‌قدر واحد درصد بازتر شد.'],
   [/^NAV: رسیدن تخفیف/, 'فروش اضطراری وقتی قیمت به NAV×(۱−این٪) رسید.'],
   [/^قیمت: افت از قیمت خرید/, 'حد ضرر کلاسیک: افت درصدی نسبت به قیمت خرید.'],
-  [/^خاموش$/, 'فیلتر بازگشت به میانگین اعمال نمی‌شود؛ همهٔ صندوق‌ها همیشه مجازند.'],
+  [/^خاموش$/, 'این قابلیت اعمال نمی‌شود (رفتار پایه).'],
+  [/^با بهترین صندوق/, 'نقدِ بی‌کار در صندوقی با کمترین حباب نسبت به معمولِ خودش پارک می‌شود و با نیاز معامله‌های عادی پس داده می‌شود.'],
   [/^بازگشت حول صفر/, 'امتیاز: آیا حباب به صفر (قیمت = NAV) برمی‌گردد؟'],
   [/^بازگشت حول میانگین حبابِ دستهٔ/, 'امتیاز: آیا حباب به میانگین حبابِ همهٔ صندوق‌های هم‌دسته برمی‌گردد؟'],
   [/^بازگشت حول میانگین حبابِ خود/, 'امتیاز: آیا حباب به میانگین بلندمدتِ خودِ همین صندوق (از قبل از پنجرهٔ امتیازدهی) برمی‌گردد؟'],
@@ -7275,9 +7291,9 @@ function discRenderTrades(res) {
   const rows = idxs.slice(0, LIM).map(i => {
     const t = all[i];
     const c = discCls(t.net_pnl);
-    const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[t.exit_reason] || t.exit_reason;
+    const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده', rotate:'باز کردن جا'}[t.exit_reason] || t.exit_reason;
     const wcell = t.why ? `<td style="text-align:start;white-space:nowrap" title="${t.why.label} — کلیک روی ردیف: تفسیر کامل"><span class="neg">▸ ${t.why.label}</span></td>` : '<td></td>';
-    return `<tr ${t.why ? `onclick="discToggleWhy(${i})" style="cursor:pointer"` : ''}><td>${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
+    return `<tr ${t.why ? `onclick="discToggleWhy(${i})" style="cursor:pointer"` : ''}><td>${t.origin === 'fill' ? '<span title="معاملهٔ پر کردن سرمایهٔ بیکار">⟳ </span>' : ''}${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
       <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}${showMr ? `<td>${t.mr_score == null ? '—' : t.mr_score}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
       <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td>${showIdx ? `<td>${t.idx_exit_pct == null ? '—' : t.idx_exit_pct + '%'}</td>` : ''}<td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
       <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td>${wcell}</tr>${discWhyDetail(t, i, ncol)}`;
@@ -7361,6 +7377,38 @@ function discCrashHtml(res) {
   const top = (c.per_fund || []).filter(x => x.blocked_pct > 0).sort((a, b) => b.blocked_pct - a.blocked_pct).slice(0, 6)
     .map(x => `${x.symbol} ${discLtr(x.blocked_pct + '%')}`).join(' · ');
   return `<div class="dv-note" style="font-size:11px;color:var(--sub);margin-top:6px" title="سهمی از لحظه‌ها که به‌خاطر ریزش گروه، ورودِ جدید ممنوع بود">🛑 فیلتر ریزش بازار: ${discLtr(c.blocked_share_pct + '%')} از لحظه‌ها ورود ممنوع بود (${discLtr(c.blocked_snapshots + ' از ' + c.snapshots)})${top ? ' — بیشتر: ' + top : ''}. اگر عدد خیلی کم است، آستانه را کمتر یا پنجره را کوتاه‌تر کنید؛ اگر خیلی زیاد است، آستانه را بالاتر ببرید.</div>`;
+}
+
+function discIdleHtml(res) {
+  const ii = res.idle_info, fi = res.fill_info;
+  if (!ii && !fi) return '';
+  let h = '';
+  if (ii && ii.flat_snapshots) {
+    const sz = ii.size || {};
+    const rows = ii.reasons.filter(r => r.count > 0).map(r => `<tr><td style="text-align:start">${r.label}</td><td>${discLtr(r.pct + '%')}</td><td>${r.count.toLocaleString('en-US')}</td></tr>`).join('');
+    h += `<div class="disc-h" style="margin-top:8px" title="هر ردیف: سهم لحظه‌هایی (اسنپ‌شات‌های صندوق‌هایی که پوزیشن نداشتند) که به آن دلیل ورود انجام نشد">چرا سرمایه بی‌کار می‌ماند؟ — از ${ii.flat_snapshots.toLocaleString('en-US')} لحظه‌ای که صندوق پوزیشن نداشت، فقط ${ii.signals_taken.toLocaleString('en-US')} بار وارد شدیم</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">دلیلِ ورود نکردن</th><th>سهم</th><th>تعداد</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="dv-note" style="font-size:11px;color:var(--sub)">${ii.avg_gap_to_threshold_pct != null ? `در لحظه‌هایی که سیگنال نبود، تخفیف به‌طور میانگین ${discLtr(ii.avg_gap_to_threshold_pct + '%')} بالاتر از آستانهٔ ورود (${discLtr('−' + ii.entry_threshold_pct + '%')}) بود. ` : ''}
+        پوزیشن‌های اجراشده به‌طور میانگین ${discLtr((sz.avg_size_ratio_pct == null ? '—' : sz.avg_size_ratio_pct + '%'))} اندازهٔ هدف بودند (${discLtr((sz.small_positions_pct == null ? '—' : sz.small_positions_pct + '%'))} از آن‌ها کمتر از نصف هدف)؛
+        اندازهٔ کمتر از هدف: ${discLtr(sz.limited_by_volume || 0)} بار به‌خاطر سقف حجم روز و ${discLtr(sz.limited_by_cash || 0)} بار به‌خاطر کمبود نقد؛ ${discLtr(sz.skipped_no_cash || 0)} سیگنال به‌خاطر نبودن نقد کافی ردّ شد.</div>`;
+  }
+  if (fi) {
+    h += `<div class="disc-h" style="margin-top:8px">پر کردن سرمایهٔ بیکار با بهترین صندوق — اثر روی نتیجه (استخر سرمایهٔ یکسان)</div>
+      <div class="opt-metric-row">
+      ${discCard('سرمایهٔ نهایی بدون پر کردن', discM(fi.base_final_capital) + ' م.ر')}
+      ${discCard('سرمایهٔ نهایی با پر کردن', discM(fi.final_capital) + ' م.ر', discCls(fi.final_capital - fi.base_final_capital))}
+      ${discCard('بازده بدون / با', fi.base_return_pct + '% / ' + fi.return_pct + '%', discCls(fi.return_pct - fi.base_return_pct))}
+      ${discCard('سرمایهٔ درگیر بدون / با', fi.base_avg_exposure_pct + '% / ' + fi.avg_exposure_pct + '%')}
+      ${discCard('افت حداکثر بدون / با', fi.base_drawdown_pct + '% / ' + fi.drawdown_pct + '%')}
+      ${discCard('معاملهٔ پارک‌شده (برد)', fi.trades + ' (' + fi.wins + ')')}
+      ${discCard('سود خالص پارک‌شده‌ها', discM(fi.net_pnl) + ' م.ر', discCls(fi.net_pnl))}
+      ${discCard('کارمزد پارک‌شده‌ها', discFmt(fi.fees) + ' ﷼')}
+      ${discCard('فروش برای باز کردن جا', fi.rotations + ' بار')}
+    </div><div class="dv-note" style="font-size:11px;color:var(--sub)">پوزیشن پارک‌شده‌ها در جدول معاملات با ⟳ مشخص‌اند. اگر «سود خالص پارک‌شده‌ها» منفی است، بی‌کار ماندن نقد در این دوره بهتر از پارک کردن بوده است (کارمزد و اسپرد رفت‌وبرگشت از لبهٔ کوچکِ «حباب نزدیک معمول» بیشتر بوده)؛ «حداکثر حباب نسبی» را منفی‌تر کنید یا «فروش وقتی حباب نسبی ≥» را بالاتر ببرید تا کم‌تر جابه‌جا شود.</div>`;
+  } else {
+    h += `<div class="dv-note" style="font-size:11px;color:var(--sub)">برای اینکه نقدِ بی‌کار در بهترین صندوق کار کند، «پر کردن سرمایهٔ بیکار» را در بخش قواعد روشن کنید؛ اثرش (سود، کارمزد، افت) همین‌جا مقایسه می‌شود.</div>`;
+  }
+  return h;
 }
 
 function discMrHtml(res) {
@@ -7778,6 +7826,7 @@ function renderDiscBacktest(res, p) {
   </div>
   ${discCompareHtml(res)}
   ${discExposureHtml(res)}
+  ${discIdleHtml(res)}
   ${discCrashHtml(res)}
   ${discBubbleHtml(res)}
   ${discMrHtml(res)}

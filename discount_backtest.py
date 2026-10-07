@@ -117,6 +117,9 @@ class DiscountParams:
     mr_min_score: float = 70.0          # 0-100; below this the fund is not tradable that day
     mr_horizon_days: int = 5            # score = share of the gap expected to close within this
     mr_lag: int = 4                     # snapshots between the AR(1) pairs (≈ 1 hour)
+    fill_mode: str = "off"              # off | best — park idle cash in the best-ranked fund (see _park_overlay)
+    fill_max_rel_pct: float = 0.0       # park only into a fund trading at or below its own norm + this %
+    fill_exit_rel_pct: float = 0.3      # sell a parked position once it trades this % above its norm
     crash_drop_pct: float = 0.0         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
     crash_window_min: int = 30          # look-back (minutes) over which the group's price change is measured
     crash_cooldown_min: int = 30        # temporary stop: entries stay blocked this many minutes after the last trigger
@@ -163,6 +166,7 @@ class Trade:
     mr_score: float | None = None        # mean-reversion score of the fund at entry (None = filter off)
     idx_entry_pct: float | None = None   # bubble index at entry / exit (None = undefined)
     idx_exit_pct: float | None = None
+    origin: str = "signal"               # "signal" = normal entry rule | "fill" = idle-capital parking
 
 
 # --------------------------------------------------------------------------- #
@@ -623,8 +627,13 @@ def _crash_groups(db, loaded: list[dict], p: DiscountParams) -> list:
 
 def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
               idx: list | None = None, rel: list | None = None,
-              mr: list | None = None, crash: list | None = None) -> list[Trade]:
-    """``rel`` (optional) replaces last/fair − 1 as the fund-level signal — used by the
+              mr: list | None = None, crash: list | None = None,
+              diag: dict | None = None) -> list[Trade]:
+    """``diag`` (optional dict) counts, for every snapshot at which the fund was flat, WHY no position was
+    opened (stale price, same-day block, last snapshot, mean-reversion filter, market-fall filter, no signal,
+    no liquidity) — used to explain idle capital.
+
+    ``rel`` (optional) replaces last/fair − 1 as the fund-level signal — used by the
     validation placebo test to feed the same rules a signal that is unrelated to prices."""
     trades: list[Trade] = []
     if not rows:
@@ -693,27 +702,49 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     last_i = len(rows) - 1
     for i, (o, d, t, nav, last, fresh, nav_raw) in enumerate(rows):
         if p.require_fresh and not fresh:
+            if diag is not None and pos == 0:
+                diag["flat"] = diag.get("flat", 0) + 1
+                diag["stale"] = diag.get("stale", 0) + 1
             continue
         r = rel[i] if rel is not None else last / nav - 1.0       # fund-level signal
         if pos == 0:
+            if diag is not None:
+                diag["flat"] = diag.get("flat", 0) + 1
             if i == last_i:
+                if diag is not None:
+                    diag["last_snapshot"] = diag.get("last_snapshot", 0) + 1
                 continue                  # never open a position on the final snapshot
             if d == blocked_date:
+                if diag is not None:
+                    diag["same_day"] = diag.get("same_day", 0) + 1
                 continue
             if mr_on and (mr[i] is None or mr[i] < p.mr_min_score):
+                if diag is not None:
+                    diag["mr"] = diag.get("mr", 0) + 1
                 continue                      # not mean-reverting enough lately: not tradable today
             if crash_on and crash[i] is not None and crash[i] <= crash_thr:
+                if diag is not None:
+                    diag["crash"] = diag.get("crash", 0) + 1
                 continue                      # the group is falling fast (or just did): no new entry
             ix = idx[i] if idx is not None else None
             fund_ok = r <= ent_thr
             idx_ok = ix is not None and ix <= ix_entry
             if not ((mode == "fund" and fund_ok) or (mode == "index" and idx_ok)
                     or (mode == "both" and fund_ok and idx_ok)):
+                if diag is not None:
+                    diag["no_signal"] = diag.get("no_signal", 0) + 1
+                    if mode in ("fund", "both"):          # how far from the threshold are we (median-ish bookkeeping)
+                        diag["gap_sum"] = diag.get("gap_sum", 0.0) + (r - ent_thr)
+                        diag["gap_n"] = diag.get("gap_n", 0) + 1
                 continue
             ask = last * (1 + hs)
             units = min(int(_SIM_CAPITAL // ask), _cap(d))
             if units <= 0:
+                if diag is not None:
+                    diag["liquidity"] = diag.get("liquidity", 0) + 1
                 continue
+            if diag is not None:
+                diag["signal"] = diag.get("signal", 0) + 1
             pos, cost = units, units * ask
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
             e_fair, e_rel = nav, r
@@ -804,13 +835,18 @@ def _sec(t: int) -> int:
     return (t // 10000) * 3600 + (t // 100 % 100) * 60 + t % 100
 
 
-def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False):
+def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False,
+            fill: dict | None = None):
     """Replay maximum-liquidity trades against ONE capital pool, in time order.
 
     Returns (accepted_trades, portfolio_dict, equity_curve, skipped_positions).
     A position (all its exit chunks) is scaled by f = min(1, affordable/intended):
     intended = position_pct % of book capital (cash + open cost); affordable = cash.
     P&L is linear in size, so scaling a trade is exact (no market impact modelled).
+
+    ``fill`` ({"loaded": ..., "crash": ...}) switches on idle-capital parking (see ``_Parker``): between the
+    normal events the parker may put idle cash into the best-ranked fund and gives it back when a normal entry
+    needs it, all in the same cash / equity.
     """
     bf, sf = p.buy_fee, p.sell_fee
     groups: dict[tuple, list[Trade]] = {}
@@ -824,6 +860,11 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
             events.append((t.exit_date, t.exit_time, 2 if same else 0, 0.0, key[0], key, i))
     # at a tie: other exits, then entries (deepest discount vs own norm first), then own-instant exits
     events.sort(key=lambda e: (e[0], e[1], e[2], e[3], e[4]))
+
+    parker = _Parker(fill["loaded"], p, fill.get("crash")) if fill else None
+    real_open: dict[str, int] = {}
+    if parker is not None:
+        parker.real_open = real_open
 
     cash = float(p.initial_capital)
     invested = 0.0                         # book cost of open positions
@@ -844,32 +885,82 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
     last_ts = start_ts
     exp_curve = [[d0, 0, 0.0]] if want_exposure else None
     buckets = [0.0, 0.0, 0.0, 0.0]         # seconds flat / <25% / 25-50% / >=50% engaged
-    for d, t, kind, _tie, _sym, key, i in events:
-        ts = _ord(d) * 86400 + _sec(t)
-        eq = cash + invested
+    sz = {"n": 0, "ratio_sum": 0.0, "small": 0, "liq": 0, "cash": 0, "skip_cash": 0, "skip_tiny": 0}
+
+    def advance(ts: int):
+        nonlocal last_ts, exp_area, inv_area
         if ts > last_ts:
-            frac = (invested / eq) if eq > 0 else 0.0
+            eq_ = cash + invested
+            frac = (invested / eq_) if eq_ > 0 else 0.0
             exp_area += frac * (ts - last_ts)
             inv_area += invested * (ts - last_ts)
             if want_exposure:
                 buckets[0 if frac < 1e-9 else 1 if frac < 0.25 else 2 if frac < 0.5 else 3] += ts - last_ts
             last_ts = ts
+
+    def mark_parked(n0: int):
+        """equity curve / drawdown after parked trades closed (their exit dates)."""
+        nonlocal peak, max_dd
+        for tr in parker.out[n0:]:
+            eq2 = cash + invested
+            curve[tr.exit_date] = eq2
+            peak = max(peak, eq2)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - eq2) / peak)
+
+    def run_parker(limit_ts):
+        nonlocal cash, invested, peak_exp
+        while parker is not None and parker.peek_ts() is not None and (limit_ts is None or parker.peek_ts() < limit_ts):
+            T, grp = parker.pop_group()
+            advance(T)
+            n0 = len(parker.out)
+            cash, invested = parker.step(T, grp, cash, invested)
+            mark_parked(n0)
+            eq_ = cash + invested
+            if eq_ > 0:
+                peak_exp = max(peak_exp, invested / eq_)
+            if want_exposure:
+                k0, i0 = grp[0]
+                r0 = parker.rows[k0][i0]
+                exp_curve.append([r0[1], r0[2], round(invested / eq_ * 100, 3) if eq_ > 0 else 0.0])
+
+    for d, t, kind, _tie, _sym, key, i in events:
+        ts = _ord(d) * 86400 + _sec(t)
+        run_parker(ts)                                            # snapshots strictly before this event
+        advance(ts)
+        eq = cash + invested
         o = _ord(d)
         if kind == 1:                                            # entry (kind 0/2 = exit chunk)
             chunks = groups[key]
             full_cost = sum(c.buy_notional for c in chunks)
             if full_cost <= 0:
                 continue
+            if parker is not None:                               # hand back parked cash (and the same fund) first
+                n0 = len(parker.out)
+                cash, invested = parker.make_room(key[0], p.position_pct / 100.0 * eq * (1 + bf), cash, invested, ts)
+                mark_parked(n0)
+                eq = cash + invested
             intended = p.position_pct / 100.0 * eq * (1 + bf)    # cash needed incl. fee
             amount = min(intended, cash)
             if intended <= 0 or amount < 0.25 * intended:
                 skipped += 1
+                sz["skip_cash"] += 1
                 continue
             f = min(1.0, amount / (full_cost * (1 + bf)))
             if f * chunks[0].volume < 1 and len(chunks) == 1:
                 skipped += 1
+                sz["skip_tiny"] += 1
                 continue
+            realized = f * full_cost * (1 + bf)
+            ratio = min(1.0, realized / intended) if intended > 0 else 0.0
+            sz["n"] += 1
+            sz["ratio_sum"] += ratio
+            if ratio < 0.5:
+                sz["small"] += 1
+            if ratio < 0.999:                       # what limited the size: the volume cap or the cash at hand?
+                sz["liq" if full_cost * (1 + bf) < min(intended, cash) * 0.999 else "cash"] += 1
             factor[key] = f
+            real_open[key[0]] = real_open.get(key[0], 0) + len(chunks)
             cash -= f * full_cost * (1 + bf)
             invested += f * full_cost
             if eq > 0:
@@ -882,6 +973,7 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
             buy_n, sell_n = f * c.buy_notional, f * c.sell_notional
             cash += sell_n * (1 - sf)
             invested -= buy_n
+            real_open[key[0]] = real_open.get(key[0], 0) - 1
             net = sell_n * (1 - sf) - buy_n * (1 + bf)
             accepted.append(replace(
                 c, volume=int(c.volume * f), buy_notional=round(buy_n, 0),
@@ -896,15 +988,18 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
             e_now = cash + invested
             exp_curve.append([d, t, round(invested / e_now * 100, 3) if e_now > 0 else 0.0])
 
+    if parker is not None:
+        run_parker(None)                                          # the remaining snapshots
+        n0 = len(parker.out)
+        cash, invested = parker.flush(cash, invested)             # still parked when the data ends
+        mark_parked(n0)
+        accepted.extend(parker.out)
     final = cash + invested
     if end_ts > last_ts:                                          # tail up to the end of the last day
-        eq = cash + invested
-        frac = (invested / eq) if eq > 0 else 0.0
-        exp_area += frac * (end_ts - last_ts)
-        inv_area += invested * (end_ts - last_ts)
+        advance(end_ts)
         if want_exposure:
-            buckets[0 if frac < 1e-9 else 1 if frac < 0.25 else 2 if frac < 0.5 else 3] += end_ts - last_ts
-            exp_curve.append([d1, 235959, round(frac * 100, 3)])
+            eq = cash + invested
+            exp_curve.append([d1, 235959, round(invested / eq * 100, 3) if eq > 0 else 0.0])
     total_s = max(1, end_ts - start_ts)
     span_days = max(1, _ord(d1) - first_ord)
     years = span_days / 365.0
@@ -921,6 +1016,11 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
         "avg_exposure_pct": round(exp_area / total_s * 100, 1),
         "peak_exposure_pct": round(peak_exp * 100, 1),
         "skipped_positions": skipped,
+        "size_info": {"positions": sz["n"],
+                      "avg_size_ratio_pct": round(sz["ratio_sum"] / sz["n"] * 100, 1) if sz["n"] else None,
+                      "small_positions_pct": round(sz["small"] / sz["n"] * 100, 1) if sz["n"] else None,
+                      "limited_by_volume": sz["liq"], "limited_by_cash": sz["cash"],
+                      "skipped_no_cash": sz["skip_cash"], "skipped_tiny": sz["skip_tiny"]},
         "accepted_positions": len(factor),
         "period_days": span_days,
     }
@@ -935,8 +1035,216 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
     return accepted, pf, curve_list, skipped
 
 
-def _portfolio_summary(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False):
-    accepted, pf, curve, skipped = _replay(trades, p, d0, d1, want_exposure)
+# --------------------------------------------------------------------------- #
+#  Idle-capital parking ("fill")                                               #
+# --------------------------------------------------------------------------- #
+
+def _ts_to_dt(ts: int) -> tuple[int, int]:
+    """(ordinal*86400 + seconds) -> (YYYYMMDD, HHMMSS)."""
+    o, sec = divmod(int(ts), 86400)
+    d = _dt.date.fromordinal(max(1, o))
+    return d.year * 10000 + d.month * 100 + d.day, (sec // 3600) * 10000 + (sec // 60 % 60) * 100 + sec % 60
+
+
+class _Parker:
+    """Put idle cash to work in the best-ranked fund, inside the SAME capital pool as the normal trades.
+
+    Driven by ``_replay``: it is told every fund snapshot (``step``), may be asked to hand cash back
+    (``make_room``) when a normal entry needs it, and is flushed at the end of the data.
+
+      * candidate at a snapshot: fresh quote, in session, not the fund's last snapshot, no same-day re-entry,
+        mean-reversion and market-fall gates respected, not held by a normal trade, and the fund trades at or
+        below its own norm + ``fill_max_rel_pct`` (a fund at a premium is never bought);
+      * "best" = the lowest bubble versus its own norm among candidates seen in the last 90 minutes;
+      * size = ``position_pct`` of book capital, limited by idle cash and by the volume cap;
+      * exit = time limit / stop-loss (same rules as normal trades), the fund trading ``fill_exit_rel_pct`` above
+        its norm, rotation (a normal entry needs the cash — or the same fund), or the end of the data.
+    Parked trades are ``Trade`` objects with ``origin == "fill"``.
+    """
+
+    def __init__(self, loaded: list[dict], p: DiscountParams, crash_all: list | None):
+        self.p = p
+        self.loaded = loaded
+        self.n = len(loaded)
+        self.rows = [l["rows"] for l in loaded]
+        self.labels = [l["label"] for l in loaded]
+        self.k_of = {lab: k for k, lab in enumerate(self.labels)}
+        self.rel = [[r[4] / r[3] - 1.0 for r in rr] for rr in self.rows]
+        self.crash = crash_all
+        self.mr = [l.get("mr") for l in loaded]
+        snaps = sorted((_ord(r[1]) * 86400 + _sec(r[2]), k, i)
+                       for k, rr in enumerate(self.rows) for i, r in enumerate(rr))
+        self.groups: list[tuple] = []
+        for ts, k, i in snaps:
+            if self.groups and self.groups[-1][0] == ts:
+                self.groups[-1][1].append((k, i))
+            else:
+                self.groups.append((ts, [(k, i)]))
+        self.gi = 0
+        self.parked: dict[int, dict] = {}
+        self.out: list[Trade] = []
+        self.blocked_day: dict[int, int] = {}
+        self.cand: dict[int, tuple | None] = {}
+        self.cur_i = [-1] * self.n
+        self.real_open: dict[str, int] = {}           # set by _replay: fund label -> open chunks of a NORMAL trade
+        self.max_rel = p.fill_max_rel_pct / 100.0
+        self.exit_rel = p.fill_exit_rel_pct / 100.0
+        self.big = float(1 << 60)
+
+    # ---- driver interface -------------------------------------------------------
+    def peek_ts(self):
+        return self.groups[self.gi][0] if self.gi < len(self.groups) else None
+
+    def pop_group(self):
+        g = self.groups[self.gi]
+        self.gi += 1
+        return g
+
+    def _cap(self, k: int, d: int) -> float:
+        if self.p.participation_pct <= 0:
+            return self.big
+        return self.loaded[k]["day_vol"].get(d, 0) * self.p.participation_pct / 100.0
+
+    def _close(self, k: int, units: float, i: int, reason: str, at_ts: int | None = None) -> tuple[float, float]:
+        """Sell ``units`` of the parked fund at the bid of its quote at snapshot ``i``.  ``at_ts`` (rotation)
+        is the instant the cash is needed: the sale is booked at that instant with the latest known quote."""
+        p = self.p
+        hs, bf, sf = p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee
+        pos = self.parked[k]
+        o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
+        if at_ts is not None:
+            d, t = _ts_to_dt(at_ts)
+            o = _ord(d)
+        px = last * (1 - hs)
+        frac = units / pos["units"]
+        cost_part = pos["cost"] * frac
+        sell_n = units * px
+        bfee, sfee = cost_part * bf, sell_n * sf
+        net = sell_n - sfee - (cost_part + bfee)
+        self.out.append(Trade(
+            symbol=self.labels[k], entry_date=pos["d"], entry_time=pos["t"], exit_date=d, exit_time=t,
+            volume=int(units), entry_price=round(pos["ask"], 2), exit_price=round(px, 2),
+            nav_entry=round(pos["nav_raw"], 2), nav_exit=round(nav_raw, 2),
+            disc_entry_pct=round((pos["ask"] / pos["nav_raw"] - 1) * 100, 4) if pos["nav_raw"] else 0,
+            disc_exit_pct=round((px / nav_raw - 1) * 100, 4) if nav_raw else 0,
+            rel_entry_pct=round((pos["ask"] / pos["fair"] - 1) * 100, 4) if pos["fair"] else 0,
+            rel_exit_pct=round((px / nav - 1) * 100, 4) if nav else 0,
+            base_pct=round((pos["fair"] / pos["nav_raw"] - 1) * 100, 4) if pos["nav_raw"] else 0,
+            mr_score=pos["mr"], buy_notional=round(cost_part, 0), sell_notional=round(sell_n, 0),
+            fees=round(bfee + sfee, 0), net_pnl=round(net, 0),
+            net_pct=round(net / (cost_part + bfee) * 100, 4) if cost_part + bfee else 0,
+            hold_days=max(0, _ord(d) - pos["o"]), exit_reason=reason, origin="fill"))
+        pos["units"] -= units
+        pos["cost"] -= cost_part
+        if pos["units"] <= 1e-9:
+            del self.parked[k]
+        return sell_n * (1 - sf), -cost_part
+
+    def make_room(self, symbol: str, need_cash: float, cash: float, invested: float, ts: int) -> tuple[float, float]:
+        """A normal entry on ``symbol`` needs ``need_cash`` at instant ``ts``: hand back the same fund, then the
+        biggest others (sold at the latest known bid)."""
+        k = self.k_of.get(symbol)
+        if k is not None and k in self.parked and self.cur_i[k] >= 0:
+            dc, di = self._close(k, self.parked[k]["units"], self.cur_i[k], "rotate", ts)
+            cash, invested = cash + dc, invested + di
+        while cash < need_cash and self.parked:
+            j = max(self.parked, key=lambda x: self.parked[x]["cost"])
+            if self.cur_i[j] < 0:
+                break
+            dc, di = self._close(j, self.parked[j]["units"], self.cur_i[j], "rotate", ts)
+            cash, invested = cash + dc, invested + di
+        return cash, invested
+
+    def step(self, T: int, group: list, cash: float, invested: float) -> tuple[float, float]:
+        p = self.p
+        hs, bf = p.half_spread_pct / 100.0, p.buy_fee
+        stop_s = p.stop_loss_pct / 100.0
+        mr_on = p.mr_center != "off"
+        crash_thr = -p.crash_drop_pct / 100.0
+        for k, i in group:
+            self.cur_i[k] = i
+        # exits of parked positions
+        for k, i in group:
+            if k not in self.parked or (p.require_fresh and not self.rows[k][i][5]):
+                continue
+            o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
+            pos = self.parked[k]
+            r = self.rel[k][i]
+            bid = last * (1 - hs)
+            reason = None
+            if p.max_hold_days > 0 and o - pos["o"] >= p.max_hold_days:
+                reason = "time"
+            elif stop_s > 0 and ((p.stop_mode == "price" and bid <= pos["ask"] * (1 - stop_s))
+                                 or (p.stop_mode == "nav_level" and r <= -stop_s)
+                                 or (p.stop_mode not in ("price", "nav_level") and r <= pos["rel"] - stop_s)):
+                reason = "stop"
+            elif r >= self.exit_rel:
+                reason = "signal"
+            if reason:
+                units = min(pos["units"], self._cap(k, d))
+                if units > 0:
+                    dc, di = self._close(k, units, i, reason)
+                    cash, invested = cash + dc, invested + di
+                    if k not in self.parked:
+                        self.blocked_day[k] = d
+        # the fund's data ends here: sell what is still parked (same convention as normal trades)
+        for k, i in group:
+            if k in self.parked and i == len(self.rows[k]) - 1:
+                dc, di = self._close(k, self.parked[k]["units"], i, "end")
+                cash, invested = cash + dc, invested + di
+        # which funds are candidates right now
+        for k, i in group:
+            if p.require_fresh and not self.rows[k][i][5]:
+                continue
+            d = self.rows[k][i][1]
+            ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and self.rel[k][i] <= self.max_rel
+                  and not (mr_on and (self.mr[k] is None or self.mr[k][i] is None or self.mr[k][i] < p.mr_min_score))
+                  and not (self.crash is not None and p.crash_drop_pct > 0 and self.crash[k][i] is not None
+                           and self.crash[k][i] <= crash_thr))
+            self.cand[k] = (T, self.rel[k][i]) if ok else None
+        # entries: the lowest bubble first, only if it is also the best among recently seen candidates
+        for k, i in sorted(group, key=lambda g: self.rel[g[0]][g[1]]):
+            c = self.cand.get(k)
+            if c is None or c[0] != T or k in self.parked or self.real_open.get(self.labels[k], 0) > 0:
+                continue
+            better = False
+            for k2, c2 in self.cand.items():
+                if k2 == k or c2 is None or T - c2[0] > 5400 or k2 in self.parked \
+                        or self.real_open.get(self.labels[k2], 0) > 0:
+                    continue
+                if c2[1] < c[1] - 1e-12:
+                    better = True
+                    break
+            if better:
+                continue
+            o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
+            slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
+            amount = min(slot, cash)
+            if slot <= 0 or amount < 0.25 * slot:
+                continue
+            ask = last * (1 + hs)
+            units = min(amount / (ask * (1 + bf)), self._cap(k, d))
+            if units <= 0 or units * ask * (1 + bf) < 0.25 * slot:
+                continue
+            mr_score = round(self.mr[k][i], 1) if mr_on and self.mr[k] and self.mr[k][i] is not None else None
+            self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t,
+                              "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score}
+            cash -= units * ask * (1 + bf)
+            invested += units * ask
+        return cash, invested
+
+    def flush(self, cash: float, invested: float) -> tuple[float, float]:
+        """Safety net: anything still parked after the last snapshot (e.g. a partial exit left over)."""
+        for k in list(self.parked):
+            if self.cur_i[k] >= 0:
+                dc, di = self._close(k, self.parked[k]["units"], len(self.rows[k]) - 1, "end")
+                cash, invested = cash + dc, invested + di
+        return cash, invested
+
+
+def _portfolio_summary(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False,
+                       fill: dict | None = None):
+    accepted, pf, curve, skipped = _replay(trades, p, d0, d1, want_exposure, fill)
     s = _summarize(accepted, p.initial_capital)
     s.update(pf)
     s["max_drawdown_pct"] = pf["max_equity_drawdown_pct"]
@@ -1171,6 +1479,48 @@ def build_benchmark(price_series: list[dict], nav_series: list[dict],
 #  Public: single backtest                                                     #
 # --------------------------------------------------------------------------- #
 
+
+_IDLE_LABELS = {
+    "no_signal": "هیچ سیگنالی نبود (تخفیف به آستانهٔ ورود نرسید)",
+    "stale": "قیمت تازه نبود (حجم بالا نرفته بود)",
+    "mr": "فیلتر بازگشت به میانگین صندوق را حذف کرد",
+    "crash": "فیلتر ریزش بازار ورود را بست",
+    "same_day": "بلوک ورود مجدد در همان روزِ فروش",
+    "last_snapshot": "آخرین اسنپ‌شات داده",
+    "liquidity": "سیگنال بود ولی حجم روز اجازهٔ معامله نداد",
+}
+
+
+def _idle_info(loaded: list[dict], diags: list[dict], summary: dict, p: DiscountParams) -> dict | None:
+    """Why was capital idle?  Counts of fund-snapshots at which a flat fund did not open a position,
+    plus how large the positions that WERE opened were compared with the intended size."""
+    if not loaded:
+        return None
+    tot: dict = {}
+    for dg in diags:
+        for k, v in dg.items():
+            tot[k] = tot.get(k, 0) + v
+    flat = tot.get("flat", 0)
+    reasons = []
+    for k in ("no_signal", "stale", "mr", "crash", "same_day", "last_snapshot", "liquidity"):
+        v = tot.get(k, 0)
+        reasons.append({"code": k, "label": _IDLE_LABELS[k], "count": v,
+                        "pct": round(v / flat * 100, 1) if flat else 0.0})
+    reasons.sort(key=lambda r: -r["count"])
+    gap = tot.get("gap_sum", 0.0) / tot["gap_n"] * 100 if tot.get("gap_n") else None
+    per = []
+    for l, dg in zip(loaded, diags):
+        f = dg.get("flat", 0)
+        per.append({"symbol": l["label"], "flat_snapshots": f,
+                    "no_signal_pct": round(dg.get("no_signal", 0) / f * 100, 1) if f else 0.0,
+                    "taken": dg.get("signal", 0)})
+    si = summary.get("size_info") or {}
+    return {"flat_snapshots": flat, "signals_taken": tot.get("signal", 0), "reasons": reasons,
+            "avg_gap_to_threshold_pct": round(gap, 3) if gap is not None else None,
+            "entry_threshold_pct": p.entry_discount_pct, "per_fund": per, "size": si,
+            "skipped_positions": summary.get("skipped_positions"), "accepted_positions": summary.get("accepted_positions")}
+
+
 def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] | None = None,
                           start: int | None = None, end: int | None = None,
                           params: DiscountParams | None = None) -> dict:
@@ -1206,6 +1556,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
                       "per_fund": [{"symbol": l["label"], "blocked_pct": round(
                           sum(1 for v in c if v is not None and v <= thr) / len(c) * 100, 1) if c else 0.0}
                           for l, c in zip(loaded, crash_all)]}
+    diags: list[dict] = [{} for _ in loaded]
     mr_info = None
     if p.mr_center != "off":
         mr_info = sorted((_mr_summary(l["label"], l["rows"], l["mr"], p) for l in loaded),
@@ -1215,18 +1566,32 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         idx, curve_b, share = _bubble_index([l["rows"] for l in loaded], p)
         for fi, (l, ix) in enumerate(zip(loaded, idx)):
             raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, ix, None, l.get("mr"),
-                                        crash_all[fi] if crash_all else None))
+                                        crash_all[fi] if crash_all else None, diags[fi]))
         bubble = {"curve": curve_b, "share_below_entry_pct": round(share * 100, 1),
                   "entry_pct": p.index_entry_pct, "exit_pct": p.index_exit_pct}
     else:
         for fi, l in enumerate(loaded):
             raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, None, None, l.get("mr"),
-                                        crash_all[fi] if crash_all else None))
+                                        crash_all[fi] if crash_all else None, diags[fi]))
     dates = db.get_nav_intraday_dates(start, end)
     d0 = dates[0] if dates else (start or 0)
     d1 = dates[-1] if dates else (end or 0)
-    accepted, summary, curve = _portfolio_summary(raw_trades, p, d0, d1, want_exposure=True)
+    fill_ctx = {"loaded": loaded, "crash": crash_all} if (p.fill_mode == "best" and loaded) else None
+    accepted, summary, curve = _portfolio_summary(raw_trades, p, d0, d1, want_exposure=True, fill=fill_ctx)
     exposure = summary.pop("exposure", None)
+    fill_info = None
+    if fill_ctx is not None:
+        _a0, s0, _c0 = _portfolio_summary(raw_trades, replace(p, fill_mode="off"), d0, d1)
+        parked = [t for t in accepted if t.origin == "fill"]
+        net_fill = sum(t.net_pnl for t in parked)
+        fill_info = {"enabled": True, "trades": len(parked), "wins": sum(1 for t in parked if t.net_pnl > 0),
+                     "net_pnl": round(net_fill, 0), "fees": round(sum(t.fees for t in parked), 0),
+                     "rotations": sum(1 for t in parked if t.exit_reason == "rotate"),
+                     "avg_hold_days": round(sum(t.hold_days for t in parked) / len(parked), 1) if parked else 0,
+                     "base_final_capital": s0["final_capital"], "base_return_pct": s0["portfolio_return_pct"],
+                     "base_avg_exposure_pct": s0["avg_exposure_pct"], "base_drawdown_pct": s0["max_drawdown_pct"],
+                     "final_capital": summary["final_capital"], "return_pct": summary["portfolio_return_pct"],
+                     "avg_exposure_pct": summary["avg_exposure_pct"], "drawdown_pct": summary["max_drawdown_pct"]}
     if exposure is not None:
         ec = exposure["curve"]
         if len(ec) > 3000:
@@ -1242,6 +1607,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     if len(curve) > 400:                       # keep the payload small
         step = len(curve) / 400.0
         curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
+    idle_info = _idle_info(loaded, diags, summary, p)
     trade_dicts = [asdict(t) for t in accepted]
     from discount_explain import explain_trades
     loss_causes = explain_trades(trade_dicts, loaded, p)        # adds "why" to every losing trade
@@ -1255,6 +1621,8 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "loss_causes": loss_causes,
         "exposure": exposure,
         "crash_info": crash_info,
+        "idle_info": idle_info,
+        "fill_info": fill_info,
         "per_symbol": _per_symbol(accepted, p.initial_capital),
         "equity_curve": curve,
         "benchmark": build_benchmark(price_series, nav_series, p),

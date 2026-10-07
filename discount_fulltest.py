@@ -211,6 +211,9 @@ AUDIT = [
     ("فیلتر ریزش: گروه", {"crash_drop_pct": 0.3}, "crash_scope", ["category", "all"], "change"),
     ("حداقل سهم صندوق‌ها برای شاخص (حالت شاخص)", {"entry_mode": "index"}, "index_min_share", [0.3, 1.0], "change"),
     ("فاصلهٔ جفت‌های امتیاز بازگشت", {"mr_center": "zero"}, "mr_lag", [1, 8], "change"),
+    ("پر کردن سرمایهٔ بیکار: روشن/خاموش", {}, "fill_mode", ["off", "best"], "change"),
+    ("پر کردن: حداکثر حباب نسبی", {"fill_mode": "best"}, "fill_max_rel_pct", [-0.1, 0.5], "change"),
+    ("پر کردن: آستانهٔ فروش", {"fill_mode": "best"}, "fill_exit_rel_pct", [0.1, 1.5], "change"),
     ("حالت ساعت جلسه", {"session_start": 90000, "session_end": 123000}, "session_mode", ["auto", "fixed"], "change"),
     ("پایان جلسه (ساعت ثابت)", {"session_mode": "fixed", "session_start": 90000}, "session_end", [110000, 123000], "change"),
     ("شروع جلسه (ساعت ثابت)", {"session_mode": "fixed", "session_end": 123000}, "session_start", [90000, 113000], "change"),
@@ -226,6 +229,8 @@ AUDIT = [
     ("توقف موقت وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0}, "crash_cooldown_min", [0, 240], "same"),
     ("حداقل سهم شاخص در حالت هر صندوق بی‌اثر است", {"entry_mode": "fund"}, "index_min_share", [0.3, 1.0], "same"),
     ("فاصلهٔ جفت‌ها وقتی فیلتر بازگشت خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_lag", [1, 8], "same"),
+    ("حداکثر حباب نسبی وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_max_rel_pct", [-0.1, 0.5], "same"),
+    ("آستانهٔ فروش پارک وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_exit_rel_pct", [0.1, 1.5], "same"),
     ("ساعت ثابت وقتی حالت خودکار است بی‌اثر است", {"session_mode": "auto"}, "session_end", [100000, 123000], "same"),
     # ---- invariance ----
     ("بازده٪ به سرمایهٔ اولیه وابسته نیست", {}, "initial_capital", [1e9, 9e10], "invariant_ret"),
@@ -288,6 +293,8 @@ WEB_MAP = {
     "crashdrop": ("crash_drop_pct", "0.8", 0.8), "crashwin": ("crash_window_min", "45", 45),
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "all", "all"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
+    "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
+    "fillexit": ("fill_exit_rel_pct", "0.45", 0.45),
 }
 # DiscountParams fields that are deliberately not exposed in the UI
 NOT_EXPOSED: set = set()
@@ -309,7 +316,7 @@ def test_web_wiring(R: Results, db):
         ok = (abs(g - exp) < 1e-9) if isinstance(exp, float) and isinstance(g, (int, float)) and not isinstance(g, bool) else g == exp
         if not ok:
             bad.append(f"{k}→{field}: ارسال {_v} ← خوانده شد {g!r} (انتظار {exp!r})")
-    R.add("سیم‌کشی وب", f"هر ۳۰ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
+    R.add("سیم‌کشی وب", f"هر ۳۳ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
     r0 = c.get("/api/disc/backtest?symbols=REVA")
     d0 = r0.get_json()["params"]
     dflt = asdict(D.DiscountParams())
@@ -358,6 +365,7 @@ UI_ID = {  # query key -> element id
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
+    "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
 }
 
 
@@ -731,6 +739,89 @@ def test_crash_filter(R: Results, db):
     R.add(g, "پوزیشن‌هایی که باز شده‌اند همیشه بسته می‌شوند (فیلتر فقط ورود را می‌بندد)",
           all(t["exit_date"] >= t["entry_date"] for t in r_on["trades"]) and r_on["summary"]["trade_count"] > 0, "")
 
+
+# --------------------------------------------------------------------------- #
+#  5c) Idle-capital parking                                                    #
+# --------------------------------------------------------------------------- #
+
+def _cash_path(res: dict, p: D.DiscountParams):
+    ev = []
+    for t in res["trades"]:
+        ev.append((D._ord(t["entry_date"]) * 86400 + D._sec(t["entry_time"]), 1, -t["buy_notional"] * (1 + p.buy_fee)))
+        ev.append((D._ord(t["exit_date"]) * 86400 + D._sec(t["exit_time"]), 0, t["sell_notional"] * (1 - p.sell_fee)))
+    ev.sort(key=lambda x: (x[0], x[1]))                      # exits before entries at the same instant
+    cash = p.initial_capital
+    lo = cash
+    for _ts, _k, v in ev:
+        cash += v
+        lo = min(lo, cash)
+    return lo, cash
+
+
+def test_fill(R: Results, db):
+    g = "پر کردن سرمایهٔ بیکار"
+    rng = random.Random(8)
+    bad_cash, bad_final, bad_overlap, bad_gate, n_fill, n_run = [], [], [], [], 0, 10
+    for it in range(n_run):
+        p = _random_params(rng)
+        p = replace(p, fill_mode="best", fill_max_rel_pct=rng.choice([-0.2, 0.0, 0.2]),
+                    fill_exit_rel_pct=rng.choice([0.1, 0.3, 0.8]), participation_pct=rng.choice([0.0, 5.0]))
+        res = _run(db, p)
+        lo, cash_final = _cash_path(res, p)
+        if lo < -1e-6 * p.initial_capital - 1:
+            bad_cash.append(f"#{it}: کمترین نقد {lo / p.initial_capital * 100:.3f}٪")
+        if abs(cash_final - res["summary"]["final_capital"]) > max(50, 1e-6 * p.initial_capital):
+            bad_final.append(f"#{it}: مسیر نقد {cash_final:,.0f} ≠ گزارش {res['summary']['final_capital']:,.0f}")
+        by = {}
+        for t in res["trades"]:
+            a = D._ord(t["entry_date"]) * 86400 + D._sec(t["entry_time"])
+            b = D._ord(t["exit_date"]) * 86400 + D._sec(t["exit_time"])
+            by.setdefault(t["symbol"], []).append((a, b, t["origin"]))
+        for sym, lst in by.items():
+            lst.sort()
+            hi = None
+            # a fund is never held twice at once: intervals of one ENTRY (partial chunks share an entry) may touch
+            ents = {}
+            for a, b, o in lst:
+                ents[(a, o)] = max(ents.get((a, o), 0), b)
+            seq = sorted((a, b) for (a, o), b in ents.items())
+            for (a1, b1), (a2, b2) in zip(seq, seq[1:]):
+                if a2 < b1:
+                    bad_overlap.append(f"#{it} {sym}")
+        for t in res["trades"]:
+            if t["origin"] != "fill":
+                continue
+            n_fill += 1
+            if t["rel_entry_pct"] > p.fill_max_rel_pct + p.half_spread_pct * 2 + 0.05:
+                bad_gate.append(f"#{it} {t['symbol']}: {t['rel_entry_pct']} > {p.fill_max_rel_pct}")
+            if t["exit_reason"] not in ("signal", "time", "stop", "rotate", "end"):
+                bad_gate.append(f"#{it} {t['symbol']}: علت خروج {t['exit_reason']}")
+        e = res["exposure"]
+        if e and not (0 <= e["avg_pct"] <= 100.0001 and e["peak_pct"] <= 100.0001):
+            bad_gate.append(f"#{it}: سرمایهٔ درگیر {e['avg_pct']} / {e['peak_pct']}")
+    R.add(g, "نقد هرگز منفی نمی‌شود (جمع نقدِ همهٔ معاملات، عادی + پارک‌شده، با استخر مشترک)", not bad_cash,
+          "؛ ".join(bad_cash[:3]) or f"{n_run} تنظیم تصادفی، {n_fill} معاملهٔ پارک‌شده")
+    R.add(g, "سرمایهٔ نهایی گزارش‌شده = مسیرِ نقدِ مستقل از روی معاملات", not bad_final, "؛ ".join(bad_final[:3]))
+    R.add(g, "یک صندوق هم‌زمان دو بار نگه داشته نمی‌شود (پارک‌شده روی معاملهٔ عادی نمی‌نشیند)", not bad_overlap,
+          "؛ ".join(bad_overlap[:3]))
+    R.add(g, "پوزیشن پارک‌شده فقط در صندوقِ در/زیر معمولِ خودش (حد «حداکثر حباب نسبی»)؛ علت‌های خروج مجاز؛ سرمایهٔ درگیر ≤ ۱۰۰٪",
+          not bad_gate and n_fill > 0, "؛ ".join(bad_gate[:3]) or f"{n_fill} معامله")
+    base = _base(entry_discount_pct=0.8, position_pct=20)
+    off = _sig(_run(db, base))
+    none = _sig(_run(db, replace(base, fill_mode="best", fill_max_rel_pct=-50.0)))
+    R.add(g, "اگر هیچ صندوقی شرط «حداکثر حباب نسبی» را نداشته باشد، نتیجه برابر حالت خاموش است", off == none, "")
+    on = _run(db, replace(base, fill_mode="best"))
+    fi = on["fill_info"]
+    R.add(g, "پارک کردن، سرمایهٔ درگیر را بالا می‌برد و معاملهٔ پارک‌شده دارد",
+          fi is not None and fi["trades"] > 0 and fi["avg_exposure_pct"] > fi["base_avg_exposure_pct"],
+          f"درگیری {fi['base_avg_exposure_pct']}→{fi['avg_exposure_pct']}٪، {fi['trades']} معامله" if fi else "")
+    s = on["summary"]
+    ind = sum(t["buy_notional"] * ((D._ord(t["exit_date"]) * 86400 + D._sec(t["exit_time"]))
+                                   - (D._ord(t["entry_date"]) * 86400 + D._sec(t["entry_time"]))) for t in on["trades"])
+    e = on["exposure"]
+    R.add(g, "انتگرال سرمایهٔ درگیر شاملِ پارک‌شده‌ها هم هست (جمع مستقل معاملات)",
+          ind > 0 and abs(e["invested_rial_seconds"] / ind - 1) < 3e-3, f"نسبت {e['invested_rial_seconds'] / ind:.4f}" if ind else "")
+
 # --------------------------------------------------------------------------- #
 #  7) Loss explanation                                                         #
 # --------------------------------------------------------------------------- #
@@ -887,6 +978,12 @@ def test_mutations(R: Results, db):
         cases.append(("موتور تعدیل حباب دائمی را نادیده بگیرد", caught(test_parameter_audit, db)))
     finally:
         D._prep = o
+    o = D._Parker.make_room
+    D._Parker.make_room = lambda self, symbol, need, cash, invested, ts: (cash, invested)
+    try:
+        cases.append(("پارک‌شده‌ها هنگام نیاز معاملهٔ عادی نقد را پس ندهند", caught(test_fill, db)))
+    finally:
+        D._Parker.make_room = o
     cases.append(("پیش‌فرض فرم با موتور فرق کند", with_html(lambda h: h.replace(
         'id="disc-buyfee" type="number" step="0.005" value="0.12"', 'id="disc-buyfee" type="number" step="0.005" value="0.145"'))))
     cases.append(("discParams یک کنترل را نخواند", with_html(lambda h: h.replace("navage: v('disc-navage'), ", ""))))
@@ -912,6 +1009,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("بهینه‌ساز", lambda: (test_optimizer_static(R, db), test_optimizer(R, db))),
              ("ناوردایی‌ها", lambda: test_invariants(R, db)),
              ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
+             ("پر کردن سرمایهٔ بیکار", lambda: test_fill(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),
              ("جهش (آزمونِ آزمون‌ها)", lambda: test_mutations(R, db))]
     if ui:

@@ -916,6 +916,9 @@ class Study:
             findings.append("چون با حالت ورودِ انتخابی لازم بودند، خودکار به جستجو اضافه شدند: " + lab(self.auto_added) + ".")
         if self.dropped:
             findings.append("در حالت/تنظیم فعلی هیچ اثری ندارند و از جستجو حذف شدند: " + lab(self.dropped) + ".")
+        if self.base.fill_mode != "off":
+            findings.append("«پر کردن سرمایهٔ بیکار» در مطالعه لحاظ نمی‌شود (نتیجهٔ همهٔ ترکیب‌ها بدون پارک کردن است)؛ "
+                            "اثرش را جداگانه در بک‌تست ببینید.")
         if self.min_trades < self.min_trades_requested:
             findings.append(f"کمتر از ۲۰ ترکیب به {self.min_trades_requested} معامله در آموزش رسیدند؛ «حداقل معامله» خودکار به {self.min_trades} کاهش یافت. "
                             "نتیجه با نمونهٔ معاملاتیِ کم ضعیف‌تر است؛ بازهٔ بلندتر یا صندوق بیشتر بگیرید.")
