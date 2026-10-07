@@ -117,6 +117,10 @@ class DiscountParams:
     mr_min_score: float = 70.0          # 0-100; below this the fund is not tradable that day
     mr_horizon_days: int = 5            # score = share of the gap expected to close within this
     mr_lag: int = 4                     # snapshots between the AR(1) pairs (≈ 1 hour)
+    crash_drop_pct: float = 0.0         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
+    crash_window_min: int = 30          # look-back (minutes) over which the group's price change is measured
+    crash_cooldown_min: int = 30        # temporary stop: entries stay blocked this many minutes after the last trigger
+    crash_scope: str = "category"       # category = funds of the same category | all = every selected fund
     stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
     baseline_days: int = 20             # per-fund typical discount window (trading days); 0 = off
@@ -544,12 +548,82 @@ def _bubble_index(rows_by_fund: list[list[tuple]], p: DiscountParams):
 
 
 # --------------------------------------------------------------------------- #
+#  Market-fall filter (group price momentum)                                   #
+# --------------------------------------------------------------------------- #
+
+def _minutes(d: int, t: int) -> int:
+    t = int(t)
+    return _ord(d) * 1440 + (t // 10000) * 60 + (t // 100 % 100)
+
+
+def _crash_series(rows_by_fund: list[list[tuple]], groups: list, p: DiscountParams) -> list[list]:
+    """For every row of every fund: the LOWEST group return seen in the last ``crash_cooldown_min``
+    minutes (None while the group is not measurable).  Causal: only prices up to that instant.
+
+    Fund return at a snapshot = price / price at the latest snapshot at or before (now − window)
+    − 1 (the reference may be the previous day's last price, so an opening gap counts).  Group
+    return at an instant = equal-weight mean of the latest return of every group member that quoted
+    within the window (needs at least half of the members that have data).  The entry filter is
+    "that minimum ≤ −crash_drop_pct".
+    """
+    W, C = max(1, int(p.crash_window_min)), max(0, int(p.crash_cooldown_min))
+    n_f = len(rows_by_fund)
+    mins = [[_minutes(r[1], r[2]) for r in rows] for rows in rows_by_fund]
+    ret: list[list] = []
+    for k, rows in enumerate(rows_by_fund):
+        mk = mins[k]
+        rk = []
+        for i, r in enumerate(rows):
+            j = bisect.bisect_right(mk, mk[i] - W) - 1
+            rk.append(r[4] / rows[j][4] - 1.0 if j >= 0 and j < i and rows[j][4] > 0 else None)
+        ret.append(rk)
+    members: dict = {}
+    for k in range(n_f):
+        members.setdefault(groups[k], []).append(k)
+    need = {g: max(1, (len(ks) + 1) // 2) for g, ks in members.items()}
+    events = sorted(((mins[k][i], k, i) for k in range(n_f) for i in range(len(rows_by_fund[k]))))
+    cur: list = [None] * n_f                 # (minute, return) of the latest measurable snapshot
+    recent: dict = {g: [] for g in members}  # [(minute, group_return)] within the cooldown
+    out = [[None] * len(r) for r in rows_by_fund]
+    a = 0
+    while a < len(events):
+        b = a
+        while b < len(events) and events[b][0] == events[a][0]:
+            b += 1
+        T = events[a][0]
+        for _m, k, i in events[a:b]:
+            if ret[k][i] is not None:
+                cur[k] = (T, ret[k][i])
+        gret = {}
+        for g, ks in members.items():
+            vals = [cur[k][1] for k in ks if cur[k] is not None and T - cur[k][0] <= W]
+            gret[g] = (sum(vals) / len(vals)) if len(vals) >= need[g] else None
+            lst = recent[g]
+            if gret[g] is not None:
+                lst.append((T, gret[g]))
+            while lst and T - lst[0][0] > C:
+                lst.pop(0)
+        for _m, k, i in events[a:b]:
+            lst = recent[groups[k]]
+            out[k][i] = min(v for _t, v in lst) if lst else None
+        a = b
+    return out
+
+
+def _crash_groups(db, loaded: list[dict], p: DiscountParams) -> list:
+    if p.crash_scope == "category":
+        cats = _category_of(db)
+        return [cats.get(l["sid"], "other") for l in loaded]
+    return ["all"] * len(loaded)
+
+
+# --------------------------------------------------------------------------- #
 #  Simulation (one fund)                                                       #
 # --------------------------------------------------------------------------- #
 
 def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
               idx: list | None = None, rel: list | None = None,
-              mr: list | None = None) -> list[Trade]:
+              mr: list | None = None, crash: list | None = None) -> list[Trade]:
     """``rel`` (optional) replaces last/fair − 1 as the fund-level signal — used by the
     validation placebo test to feed the same rules a signal that is unrelated to prices."""
     trades: list[Trade] = []
@@ -578,6 +652,8 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     e_idx = None
     mr_on = p.mr_center != "off" and mr is not None
     e_mr = None
+    crash_thr = -p.crash_drop_pct / 100.0
+    crash_on = p.crash_drop_pct > 0 and crash is not None
 
     def _cap(date_int: int) -> int:
         if p.participation_pct <= 0:
@@ -626,6 +702,8 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 continue
             if mr_on and (mr[i] is None or mr[i] < p.mr_min_score):
                 continue                      # not mean-reverting enough lately: not tradable today
+            if crash_on and crash[i] is not None and crash[i] <= crash_thr:
+                continue                      # the group is falling fast (or just did): no new entry
             ix = idx[i] if idx is not None else None
             fund_ok = r <= ent_thr
             idx_ok = ix is not None and ix <= ix_entry
@@ -1116,6 +1194,18 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         loaded.append(d)
     tested = len(loaded)
     _compute_mr(db, loaded, p, start, end)
+    crash_all = None
+    crash_info = None
+    if p.crash_drop_pct > 0 and loaded:
+        crash_all = _crash_series([l["rows"] for l in loaded], _crash_groups(db, loaded, p), p)
+        thr = -p.crash_drop_pct / 100.0
+        tot = sum(len(c) for c in crash_all)
+        blocked = sum(1 for c in crash_all for v in c if v is not None and v <= thr)
+        crash_info = {"blocked_share_pct": round(blocked / tot * 100, 1) if tot else 0.0,
+                      "blocked_snapshots": blocked, "snapshots": tot,
+                      "per_fund": [{"symbol": l["label"], "blocked_pct": round(
+                          sum(1 for v in c if v is not None and v <= thr) / len(c) * 100, 1) if c else 0.0}
+                          for l, c in zip(loaded, crash_all)]}
     mr_info = None
     if p.mr_center != "off":
         mr_info = sorted((_mr_summary(l["label"], l["rows"], l["mr"], p) for l in loaded),
@@ -1123,13 +1213,15 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     bubble = None
     if use_index and loaded:
         idx, curve_b, share = _bubble_index([l["rows"] for l in loaded], p)
-        for l, ix in zip(loaded, idx):
-            raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, ix, None, l.get("mr")))
+        for fi, (l, ix) in enumerate(zip(loaded, idx)):
+            raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, ix, None, l.get("mr"),
+                                        crash_all[fi] if crash_all else None))
         bubble = {"curve": curve_b, "share_below_entry_pct": round(share * 100, 1),
                   "entry_pct": p.index_entry_pct, "exit_pct": p.index_exit_pct}
     else:
-        for l in loaded:
-            raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, None, None, l.get("mr")))
+        for fi, l in enumerate(loaded):
+            raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, None, None, l.get("mr"),
+                                        crash_all[fi] if crash_all else None))
     dates = db.get_nav_intraday_dates(start, end)
     d0 = dates[0] if dates else (start or 0)
     d1 = dates[-1] if dates else (end or 0)
@@ -1162,6 +1254,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "trades": trade_dicts,
         "loss_causes": loss_causes,
         "exposure": exposure,
+        "crash_info": crash_info,
         "per_symbol": _per_symbol(accepted, p.initial_capital),
         "equity_curve": curve,
         "benchmark": build_benchmark(price_series, nav_series, p),

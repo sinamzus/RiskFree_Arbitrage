@@ -54,13 +54,17 @@ DIMS: dict[str, dict] = {
     "index_entry_pct":    {"kind": "fast", "label": "ورود: شاخص ≤ −٪", "choices": [0.1, 0.2, 0.3, 0.5, 1.0]},
     "index_exit_pct":     {"kind": "fast", "label": "خروج: شاخص ≥ −٪", "choices": [0.2, 0.1, 0.0, -0.1]},
     "max_hold_days":      {"kind": "fast", "label": "حداکثر نگه‌داری (روز)", "choices": [1, 2, 3, 5, 7, 10, 15, 30]},
+    "crash_drop_pct":     {"kind": "fast", "label": "فیلتر ریزش بازار: افت گروه ≥ ٪ (۰ = خاموش)", "choices": [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]},
+    "crash_window_min":   {"kind": "slow", "label": "پنجرهٔ ریزش (دقیقه)", "choices": [30, 60, 120, 240]},
+    "crash_cooldown_min": {"kind": "slow", "label": "مدت ممنوعیت پس از ریزش (دقیقه)", "choices": [0, 60, 120, 240]},
     "stop_loss_pct":      {"kind": "fast", "label": "حد ضرر", "choices": [0.0, 1.0, 2.0, 3.0, 5.0]},
     "stop_mode":          {"kind": "fast", "label": "نوع حد ضرر", "choices": ["nav_widen", "nav_level", "price"]},
     "position_pct":       {"kind": "fast", "label": "سهم هر پوزیشن از سرمایه ٪", "choices": [5, 10, 20, 33, 50]},
 }
-SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "mr_center", "mr_window_days", "mr_horizon_days"]
+SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "mr_center", "mr_window_days", "mr_horizon_days",
+              "crash_window_min", "crash_cooldown_min"]
 FAST_ORDER = ["entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct", "max_hold_days",
-              "stop_loss_pct", "stop_mode", "mr_min_score", "position_pct"]
+              "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "position_pct"]
 ORDER = SLOW_ORDER + FAST_ORDER
 
 PRESETS = {
@@ -97,6 +101,8 @@ def _active(dim: str, c: dict) -> bool:
         return (c.get("stop_loss_pct") or 0) > 0
     if dim in ("mr_window_days", "mr_horizon_days", "mr_min_score"):
         return (c.get("mr_center") or "off") != "off"
+    if dim in ("crash_window_min", "crash_cooldown_min"):
+        return (c.get("crash_drop_pct") or 0) > 0
     return True
 
 
@@ -125,8 +131,9 @@ def _normalize(c: dict, base: D.DiscountParams) -> dict:
 
 def _to_params(base: D.DiscountParams, c: dict) -> D.DiscountParams:
     kw = {k: v for k, v in c.items() if v is not None}
-    if "max_hold_days" in kw:
-        kw["max_hold_days"] = int(kw["max_hold_days"])
+    for k in ("max_hold_days", "crash_window_min", "crash_cooldown_min"):
+        if k in kw:
+            kw[k] = int(kw[k])
     return replace(base, **kw)
 
 
@@ -272,6 +279,7 @@ class Study:
         self.auto_added: list[str] = []
         self.dropped: list[str] = []
         self._adapt_space()
+        self._crash_searched = "crash_drop_pct" in self.space and max(self.space["crash_drop_pct"]) > 0
         self.cache_u: dict[tuple, dict] = {}
         self.cache_order: list[tuple] = []
         self.records: list[dict] = []
@@ -303,6 +311,12 @@ class Study:
         centers = self.space.get("mr_center") or [self.base.mr_center]
         if all(c == "off" for c in centers):
             for d in ("mr_window_days", "mr_horizon_days", "mr_min_score"):
+                if d in self.space:
+                    del self.space[d]
+                    self.dropped.append(d)
+        drops = self.space.get("crash_drop_pct") or [self.base.crash_drop_pct]
+        if all(float(x) == 0 for x in drops):
+            for d in ("crash_window_min", "crash_cooldown_min"):
                 if d in self.space:
                     del self.space[d]
                     self.dropped.append(d)
@@ -346,13 +360,17 @@ class Study:
     def _ukey(self, p: D.DiscountParams) -> tuple:
         return (p.baseline_days, p.max_nav_age_days, p.entry_mode != "fund", p.mr_center,
                 p.mr_window_days if p.mr_center != "off" else 0,
-                p.mr_horizon_days if p.mr_center != "off" else 0)
+                p.mr_horizon_days if p.mr_center != "off" else 0,
+                (p.crash_window_min, p.crash_cooldown_min) if self._crash_searched else None)
 
     def _universe(self, p: D.DiscountParams):
         k = self._ukey(p)
         U = self.cache_u.get(k)
         if U is None:
-            U = V.load_universe(self.db_raw, self.cats, self.symbols, self.start, self.end, p)
+            # when the market-fall filter is part of the study the series must exist even for configs whose
+            # own threshold is 0 (they share the universe with the others)
+            p_load = replace(p, crash_drop_pct=max(p.crash_drop_pct, 1e-6)) if self._crash_searched else p
+            U = V.load_universe(self.db_raw, self.cats, self.symbols, self.start, self.end, p_load)
             self.cache_u[k] = U
             self.cache_order.append(k)
             while len(self.cache_order) > 3:                 # keep memory bounded
@@ -434,13 +452,21 @@ class Study:
             for c in combos:
                 if ch is None:
                     nxt.append(c)                                  # fixed at base
-                elif not _active(d, {**self._base_cfg(), **c}):
+                elif not _active(d, self._ctx(c)):
                     nxt.append({**c, d: None})
                 else:
                     for v in ch:
                         nxt.append({**c, d: v})
             combos = nxt
         return combos
+
+    def _ctx(self, c: dict) -> dict:
+        """Context for deciding whether a slow dimension is meaningful: a dimension that only matters when
+        the fast threshold is on counts as active if that threshold is searched with any positive value."""
+        ctx = {**self._base_cfg(), **c}
+        if "crash_drop_pct" in self.space:
+            ctx["crash_drop_pct"] = max(self.space["crash_drop_pct"])
+        return ctx
 
     def _base_cfg(self) -> dict:
         b = self.base
@@ -449,7 +475,9 @@ class Study:
                 "mr_min_score": b.mr_min_score, "entry_discount_pct": b.entry_discount_pct,
                 "exit_discount_pct": b.exit_discount_pct, "index_entry_pct": b.index_entry_pct,
                 "index_exit_pct": b.index_exit_pct, "max_hold_days": b.max_hold_days,
-                "stop_loss_pct": b.stop_loss_pct, "stop_mode": b.stop_mode, "position_pct": b.position_pct}
+                "stop_loss_pct": b.stop_loss_pct, "stop_mode": b.stop_mode, "position_pct": b.position_pct,
+                "crash_drop_pct": b.crash_drop_pct, "crash_window_min": b.crash_window_min,
+                "crash_cooldown_min": b.crash_cooldown_min}
 
     def _fill(self, partial: dict) -> dict:
         """Complete a configuration with base values for dimensions that are not searched."""
@@ -879,6 +907,8 @@ def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.Discoun
     return out
 
 
+_INT_DIMS = ("max_hold_days", "baseline_days", "max_nav_age_days", "mr_window_days", "mr_horizon_days",
+             "crash_window_min", "crash_cooldown_min")
 _STR_CHOICES = {"entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},
                 "stop_mode": {"nav_widen", "nav_level", "price"}}
 
@@ -902,7 +932,7 @@ def clean_space(raw: dict | None, enabled: list[str] | None = None) -> dict:
                     x = float(v)
                 except (TypeError, ValueError):
                     continue
-                if d in ("max_hold_days", "baseline_days", "max_nav_age_days", "mr_window_days", "mr_horizon_days"):
+                if d in _INT_DIMS:
                     x = int(x)
                 if x not in out:
                     out.append(x)

@@ -77,6 +77,7 @@ def make_world(path: str, days: int = 150, seed: int = 11) -> str:
             day_list.append(d)
         d += dt.timedelta(days=1)
     crash_days = set(rng.sample(range(10, days - 5), 8))
+    mkt_days = set(random.Random(seed + 99).sample(range(10, days - 5), 10))   # market-wide fast fall (all funds)
     lag_days = set(rng.sample(range(10, days - 5), 6))
     rows = []
     for sid, sym, cat in FUNDS:
@@ -116,6 +117,8 @@ def make_world(path: str, days: int = 150, seed: int = 11) -> str:
                     nav_t = nav
                 else:
                     nav_t = nav
+                if k in mkt_days:                          # common shock: every price falls 2.5% in the first hour
+                    px_rel -= 0.025 * min(1.0, (j + 1) / 5)
                 if stale:
                     px_rel -= 0.015
                 last = nav_t * (1 + px_rel)
@@ -202,6 +205,10 @@ AUDIT = [
     ("سقف حجم", {}, "participation_pct", [0.0, 0.5], "change"),
     ("سهم هر پوزیشن", {}, "position_pct", [5.0, 40.0], "change"),
     ("فقط قیمت تازه", {}, "require_fresh", [True, False], "change"),
+    ("فیلتر ریزش: آستانه", {"crash_scope": "all"}, "crash_drop_pct", [0.0, 0.3], "change"),
+    ("فیلتر ریزش: پنجره", {"crash_drop_pct": 0.3, "crash_scope": "all"}, "crash_window_min", [10, 240], "change"),
+    ("فیلتر ریزش: توقف موقت", {"crash_drop_pct": 0.3, "crash_scope": "all", "crash_window_min": 30}, "crash_cooldown_min", [0, 240], "change"),
+    ("فیلتر ریزش: گروه", {"crash_drop_pct": 0.3}, "crash_scope", ["category", "all"], "change"),
     ("حالت ساعت جلسه", {"session_start": 90000, "session_end": 123000}, "session_mode", ["auto", "fixed"], "change"),
     ("پایان جلسه (ساعت ثابت)", {"session_mode": "fixed", "session_start": 90000}, "session_end", [110000, 123000], "change"),
     ("شروع جلسه (ساعت ثابت)", {"session_mode": "fixed", "session_end": 123000}, "session_start", [90000, 113000], "change"),
@@ -213,6 +220,8 @@ AUDIT = [
     ("پنجرهٔ بازگشت وقتی فیلتر خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_window_days", [10, 40], "same"),
     ("حداقل امتیاز وقتی فیلتر خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_min_score", [30, 95], "same"),
     ("نوع حد ضرر وقتی حد ضرر صفر است بی‌اثر است", {"stop_loss_pct": 0.0}, "stop_mode", ["nav_widen", "price"], "same"),
+    ("پنجرهٔ ریزش وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0}, "crash_window_min", [10, 240], "same"),
+    ("توقف موقت وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0}, "crash_cooldown_min", [0, 240], "same"),
     ("ساعت ثابت وقتی حالت خودکار است بی‌اثر است", {"session_mode": "auto"}, "session_end", [100000, 123000], "same"),
     # ---- invariance ----
     ("بازده٪ به سرمایهٔ اولیه وابسته نیست", {}, "initial_capital", [1e9, 9e10], "invariant_ret"),
@@ -272,6 +281,8 @@ WEB_MAP = {
     "buyfee": ("buy_fee", "0.2", 0.002), "sellfee": ("sell_fee", "0.25", 0.0025), "navage": ("max_nav_age_days", "2", 2),
     "fresh": ("require_fresh", "0", False), "smode": ("session_mode", "fixed", "fixed"),
     "sstart": ("session_start", "10:15", 101500), "send": ("session_end", "17:45", 174500),
+    "crashdrop": ("crash_drop_pct", "0.8", 0.8), "crashwin": ("crash_window_min", "45", 45),
+    "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "all", "all"),
 }
 # DiscountParams fields that are deliberately not exposed in the UI
 NOT_EXPOSED = {"index_min_share", "mr_lag"}
@@ -293,7 +304,7 @@ def test_web_wiring(R: Results, db):
         ok = (abs(g - exp) < 1e-9) if isinstance(exp, float) and isinstance(g, (int, float)) and not isinstance(g, bool) else g == exp
         if not ok:
             bad.append(f"{k}→{field}: ارسال {_v} ← خوانده شد {g!r} (انتظار {exp!r})")
-    R.add("سیم‌کشی وب", f"هر ۲۴ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
+    R.add("سیم‌کشی وب", f"هر ۲۸ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
     r0 = c.get("/api/disc/backtest?symbols=REVA")
     d0 = r0.get_json()["params"]
     dflt = asdict(D.DiscountParams())
@@ -340,7 +351,8 @@ UI_ID = {  # query key -> element id
     "ientry": "disc-ientry", "iexit": "disc-iexit", "mrcenter": "disc-mrcenter", "mrwin": "disc-mrwin",
     "mrmin": "disc-mrmin", "mrhor": "disc-mrhor", "spread": "disc-spread", "part": "disc-part", "buyfee": "disc-buyfee",
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
-    "sstart": "disc-sstart", "send": "disc-send",
+    "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
+    "crashcool": "disc-crashcool", "crashscope": "disc-crashscope",
 }
 
 
@@ -428,7 +440,7 @@ def test_optimizer(R: Results, db):
             for d in st.space:
                 modes = st.space.get("entry_mode") or [mode]
                 centers = st.space.get("mr_center") or [base.mr_center]
-                ok = any(S._active(d, {"entry_mode": m, "mr_center": c, "stop_loss_pct": 1.0})
+                ok = any(S._active(d, {"entry_mode": m, "mr_center": c, "stop_loss_pct": 1.0, "crash_drop_pct": 1.0})
                          for m in modes for c in centers)
                 if not ok:
                     inert.append(d)
@@ -590,6 +602,107 @@ def test_invariants(R: Results, db, n: int = 24):
         R.add("ناوردایی‌ها", k, not f, (f"{len(f)} مورد؛ نمونه: " + " | ".join(f[:3])) if f else f"{n} تنظیم تصادفی، {n_trades} معامله")
 
 
+
+# --------------------------------------------------------------------------- #
+#  5b) Market-fall filter                                                      #
+# --------------------------------------------------------------------------- #
+
+def _brute_crash(rows_by_fund, groups, W, C):
+    """Naive O(n^2) re-implementation of discount_backtest._crash_series (independent check)."""
+    mins = [[D._minutes(r[1], r[2]) for r in rows] for rows in rows_by_fund]
+    ret = []
+    for k, rows in enumerate(rows_by_fund):
+        rk = []
+        for i in range(len(rows)):
+            val = None
+            for j in range(i - 1, -1, -1):
+                if mins[k][j] <= mins[k][i] - W:
+                    val = rows[i][4] / rows[j][4] - 1.0
+                    break
+            rk.append(val)
+        ret.append(rk)
+    members = {}
+    for k, g in enumerate(groups):
+        members.setdefault(g, []).append(k)
+    stamps = sorted({m for mk in mins for m in mk})
+    gret = {}                                                   # (group, T) -> group return or None
+    for T in stamps:
+        for g, ks in members.items():
+            vals = []
+            for k in ks:
+                for i in range(len(mins[k]) - 1, -1, -1):
+                    if mins[k][i] <= T and ret[k][i] is not None:
+                        if T - mins[k][i] <= W:
+                            vals.append(ret[k][i])
+                        break
+            need = max(1, (len(ks) + 1) // 2)
+            gret[(g, T)] = sum(vals) / len(vals) if len(vals) >= need else None
+    out = []
+    for k, rows in enumerate(rows_by_fund):
+        ok = []
+        for i in range(len(rows)):
+            T = mins[k][i]
+            cand = [gret[(groups[k], t)] for t in stamps if T - C <= t <= T and gret[(groups[k], t)] is not None]
+            ok.append(min(cand) if cand else None)
+        out.append(ok)
+    return out
+
+
+def test_crash_filter(R: Results, db):
+    g = "فیلتر ریزش بازار"
+    names = {s: i for i, s, _c in FUNDS}
+    cats = {s: c for _i, s, c in FUNDS}
+    start, end = 20260301, 20260420                       # a slice with market-wide shock days, keeps the naive check fast
+    for scope in ("all", "category"):
+        p = _base(crash_drop_pct=0.5, crash_window_min=30, crash_cooldown_min=60, crash_scope=scope)
+        loaded = []
+        for sid, sym, _c in FUNDS:
+            d = D._load_ex(db, sid, start, end, p)
+            d["label"] = sym
+            loaded.append(d)
+        groups = [cats[l["label"]] if scope == "category" else "all" for l in loaded]
+        fast = D._crash_series([l["rows"] for l in loaded], groups, p)
+        slow = _brute_crash([l["rows"] for l in loaded], groups, 30, 60)
+        bad = 0
+        for fa, sl in zip(fast, slow):
+            for a, b in zip(fa, sl):
+                if (a is None) != (b is None) or (a is not None and abs(a - b) > 1e-12):
+                    bad += 1
+        n = sum(len(x) for x in fast)
+        R.add(g, f"سری ریزشِ سریع = پیاده‌سازی ساده و مستقل (گروه «{scope}»، {n} لحظه)", bad == 0, f"{bad} اختلاف" if bad else "یکسان")
+    # no trade may start while the filter says "blocked"
+    for scope in ("all", "category"):
+        p = _base(crash_drop_pct=0.4, crash_window_min=30, crash_cooldown_min=45, crash_scope=scope)
+        res = _run(db, p)
+        loaded = []
+        for sid, sym, _c in FUNDS:
+            d = D._load_ex(db, sid, None, None, p)
+            d["label"] = sym
+            loaded.append(d)
+        groups = [cats[l["label"]] if scope == "category" else "all" for l in loaded]
+        cr = D._crash_series([l["rows"] for l in loaded], groups, p)
+        pos = {l["label"]: {(r[1], r[2]): i for i, r in enumerate(l["rows"])} for l in loaded}
+        bad = []
+        for t in res["trades"]:
+            i = pos[t["symbol"]].get((t["entry_date"], t["entry_time"]))
+            k = next(j for j, l in enumerate(loaded) if l["label"] == t["symbol"])
+            v = cr[k][i] if i is not None else None
+            if v is not None and v <= -p.crash_drop_pct / 100.0:
+                bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {v:.4f}")
+        off = _run(db, _base(crash_scope=scope))
+        R.add(g, f"هیچ معامله‌ای وسط ریزش شروع نمی‌شود (گروه «{scope}»؛ {len(res['trades'])} معامله از {len(off['trades'])})",
+              not bad and len(res["trades"]) < len(off["trades"]), "؛ ".join(bad[:3]) or "درست")
+    # thresholds: blocked share never grows with a larger threshold; an enormous one equals "off"
+    shares = [_run(db, _base(crash_drop_pct=x, crash_scope="all"))["crash_info"]["blocked_share_pct"] for x in (0.2, 0.5, 1.0, 2.0)]
+    R.add(g, "با بزرگ‌تر شدن آستانه، سهم لحظه‌های ممنوع کم می‌شود", all(a >= b for a, b in zip(shares, shares[1:])), str(shares))
+    a = _sig(_run(db, _base(crash_drop_pct=80.0)))
+    b = _sig(_run(db, _base()))
+    R.add(g, "آستانهٔ بی‌نهایت بزرگ = فیلتر خاموش", a == b, "")
+    # exits and open positions are never touched: the filter only gates NEW entries
+    r_on = _run(db, _base(crash_drop_pct=0.4, crash_scope="all"))
+    R.add(g, "پوزیشن‌هایی که باز شده‌اند همیشه بسته می‌شوند (فیلتر فقط ورود را می‌بندد)",
+          all(t["exit_date"] >= t["entry_date"] for t in r_on["trades"]) and r_on["summary"]["trade_count"] > 0, "")
+
 # --------------------------------------------------------------------------- #
 #  7) Loss explanation                                                         #
 # --------------------------------------------------------------------------- #
@@ -736,7 +849,7 @@ def test_mutations(R: Results, db):
         'id="disc-buyfee" type="number" step="0.005" value="0.12"', 'id="disc-buyfee" type="number" step="0.005" value="0.145"'))))
     cases.append(("discParams یک کنترل را نخواند", with_html(lambda h: h.replace("navage: v('disc-navage'), ", ""))))
     cases.append(("نگاشت «اعمال» یک پارامتر را نداشته باشد", with_html(lambda h: h.replace(
-        "stop_mode: 'disc-stopmode', position_pct: 'disc-pos'};", "position_pct: 'disc-pos'};"))))
+        "stop_mode: 'disc-stopmode', ", "", 1))))
     for name, f in cases:
         R.add(g, f"اگر «{name}»، آزمون‌ها باید شکست بخورند", bool(f), (f"{len(f)} شکست: " + f[0]["name"][:60]) if f else "آزمون کور است!")
 
@@ -756,6 +869,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("رابط کاربری ایستا", lambda: test_static_ui(R)),
              ("بهینه‌ساز", lambda: test_optimizer(R, db)),
              ("ناوردایی‌ها", lambda: test_invariants(R, db)),
+             ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),
              ("جهش (آزمونِ آزمون‌ها)", lambda: test_mutations(R, db))]
     if ui:

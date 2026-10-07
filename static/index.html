@@ -2399,6 +2399,14 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
           <option value="price">قیمت: افت از قیمت خرید ٪</option></select></div>
       <div class="bbt-field" title="مقدار حد ضرر (٪ یا واحد درصد، طبق نوع انتخابی)؛ ۰ = خاموش"><label>حد ضرر</label>
         <input id="disc-stop" type="number" step="0.5" value="0" style="width:70px"></div>
+      <div class="bbt-field" title="فیلتر ریزش بازار: اگر میانگین قیمتِ صندوق‌های گروه در «پنجرهٔ ریزش» بیش از این‌قدر درصد افت کرده باشد، ورودِ جدید موقتاً متوقف می‌شود (خروج‌ها و پوزیشن‌های باز دست نمی‌خورند). در ریزش، «تخفیف از NAV» اغلب ظاهری است (قیمت زودتر از NAV می‌افتد). ۰ = خاموش. برای داده‌ای با اسنپ‌شات‌های کم، مقدار را بزرگ‌تر از نوسان عادی بگذارید."><label>فیلتر ریزش: افت گروه ≥ ٪</label>
+        <input id="disc-crashdrop" type="number" step="0.1" min="0" value="0" style="width:70px"></div>
+      <div class="bbt-field" title="افت قیمتِ گروه در این‌قدر دقیقهٔ اخیر سنجیده می‌شود (نسبت به آخرین قیمتِ ثبت‌شده در/قبل از آن لحظه؛ اگر در همین روز نباشد، آخرین قیمت روز قبل). مثلاً ۳۰ = «در نیم‌ساعت اخیر ریزش سریع نباشد»."><label>پنجرهٔ ریزش (دقیقه)</label>
+        <input id="disc-crashwin" type="number" step="5" min="1" value="30" style="width:70px"></div>
+      <div class="bbt-field" title="توقف موقت: پس از دیده شدن ریزش، ورودِ جدید تا این‌قدر دقیقه ممنوع می‌ماند؛ ۰ = فقط در همان لحظهٔ ریزش."><label>توقف موقت پس از ریزش (دقیقه)</label>
+        <input id="disc-crashcool" type="number" step="5" min="0" value="30" style="width:70px"></div>
+      <div class="bbt-field" title="گروهی که میانگین قیمتش سنجیده می‌شود: «دستهٔ صندوق» = فقط صندوق‌های هم‌دسته (طلا با طلا)، «همهٔ صندوق‌ها» = همهٔ صندوق‌های انتخاب‌شده."><label>گروه ریزش</label>
+        <select id="disc-crashscope" style="width:150px"><option value="category">دستهٔ صندوق</option><option value="all">همهٔ صندوق‌ها</option></select></div>
       <div class="bbt-field" title="هر صندوق ممکن است دائماً بالا یا پایین NAV معامله شود (حباب دائمی). با این گزینه سیگنال‌ها نسبت به «حباب معمول همان صندوق» سنجیده می‌شوند: NAV × (1 + میانهٔ تخفیف همین چند روز گذشتهٔ صندوق). فقط از روزهای قبل استفاده می‌شود. ۰ = خاموش (مقایسه مستقیم با NAV)."><label>تعدیل حباب دائمی: میانهٔ چند روز قبل</label>
         <input id="disc-base" type="number" step="1" min="0" value="20" style="width:80px"></div>
       <div class="bbt-field" title="فیلتر شایستگی: امتیاز بازگشت به میانگینِ سری حباب هر صندوق در N روز گذشته محاسبه می‌شود (۰ تا ۱۰۰ = درصدِ شکافی که انتظار می‌رود در افق مشخص بسته شود). صندوقی که امتیازش کمتر از حداقل باشد تا وقتی دوباره بالا بیاید معامله نمی‌شود. مرکز: صفر، میانگین حباب همان دسته، یا میانگین حبابِ خود صندوق (از N روز قبل از پنجرهٔ امتیازدهی)."><label>فیلتر بازگشت به میانگین</label>
@@ -6545,6 +6553,7 @@ function discParams() {
     initial: String((+v('disc-capital') || 0) * 1e6), pos: v('disc-pos'), entry: v('disc-entry'), exit: v('disc-exit'),
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
+    crashdrop: v('disc-crashdrop'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
@@ -7054,6 +7063,12 @@ const DISC_TIP_RULES = [
   [/^بازده آزمون$/, 'بازده همان ترکیب در بخش آخرِ دوره که در انتخاب دخالت نداشته.'],
   [/^آمارهٔ t$/, 'میانگین بازدهٔ معاملات تقسیم بر خطای معیارش؛ تقریبی (معاملات هم‌زمان همبسته‌اند). زیر ۱٫۵ یعنی سود از نوسان قابل‌تشخیص نیست.'],
   [/^پسیو \(هم‌وزن\)$/, 'خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها در همین دوره‌ها، بدون کارمزد.'],
+  [/^فیلتر ریزش: افت گروه/, 'اگر میانگین قیمتِ گروه در «پنجرهٔ ریزش» بیش از این درصد افت کند، ورودِ جدید موقتاً متوقف می‌شود. ۰ = خاموش.'],
+  [/^پنجرهٔ ریزش/, 'افت قیمتِ گروه در این‌قدر دقیقهٔ اخیر سنجیده می‌شود.'],
+  [/^توقف موقت پس از ریزش/, 'مدت ممنوعیتِ ورودِ جدید پس از دیده شدن ریزش (دقیقه).'],
+  [/^گروه ریزش$/, 'گروهِ سنجشِ ریزش: دستهٔ صندوق یا همهٔ صندوق‌ها.'],
+  [/^دستهٔ صندوق$/, 'فقط صندوق‌های هم‌دسته میانگین‌گیری می‌شوند (طلا با طلا).'],
+  [/^همهٔ صندوق‌ها$/, 'همهٔ صندوق‌های انتخاب‌شده میانگین‌گیری می‌شوند.'],
   [/^اوج$/, 'بیشترین درصد سرمایهٔ دفتری که هم‌زمان در پوزیشن بود.'],
   [/^سرمایهٔ درگیر در طول بازه/, 'چند درصد از سرمایهٔ دفتری در هر لحظه داخل پوزیشن بوده است (پله‌ای). بقیه نقد و بی‌کار بوده.'],
   [/^میانگین \(وزن‌دار با زمان/, 'میانگین درصد سرمایهٔ درگیر، وزن‌دار با زمان واقعیِ ساعت‌به‌ساعت.'],
@@ -7329,6 +7344,14 @@ function discExposureDraw(res) {
   chart.timeScale().fitContent();
   const ro = new ResizeObserver(() => { try { chart.applyOptions({width: el.clientWidth}); } catch (e) {} });
   ro.observe(el); _discExpRO = ro;
+}
+
+function discCrashHtml(res) {
+  const c = res.crash_info;
+  if (!c) return '';
+  const top = (c.per_fund || []).filter(x => x.blocked_pct > 0).sort((a, b) => b.blocked_pct - a.blocked_pct).slice(0, 6)
+    .map(x => `${x.symbol} ${discLtr(x.blocked_pct + '%')}`).join(' · ');
+  return `<div class="dv-note" style="font-size:11px;color:var(--sub);margin-top:6px" title="سهمی از لحظه‌ها که به‌خاطر ریزش گروه، ورودِ جدید ممنوع بود">🛑 فیلتر ریزش بازار: ${discLtr(c.blocked_share_pct + '%')} از لحظه‌ها ورود ممنوع بود (${discLtr(c.blocked_snapshots + ' از ' + c.snapshots)})${top ? ' — بیشتر: ' + top : ''}. اگر عدد خیلی کم است، آستانه را کمتر یا پنجره را کوتاه‌تر کنید؛ اگر خیلی زیاد است، آستانه را بالاتر ببرید.</div>`;
 }
 
 function discMrHtml(res) {
@@ -7746,6 +7769,7 @@ function renderDiscBacktest(res, p) {
   </div>
   ${discCompareHtml(res)}
   ${discExposureHtml(res)}
+  ${discCrashHtml(res)}
   ${discBubbleHtml(res)}
   ${discMrHtml(res)}
 `;
@@ -7801,11 +7825,13 @@ const DS_VAL = {
 };
 const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_age_days: 'سن NAV', mr_center: 'مرکز', mr_window_days: 'پنجره',
   mr_horizon_days: 'افق', mr_min_score: 'امتیاز≥', entry_discount_pct: 'ورود', exit_discount_pct: 'خروج', index_entry_pct: 'ورود شاخص',
-  index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن'};
+  index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن',
+  crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف'};
 const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
   exit_discount_pct: 'disc-exit', index_entry_pct: 'disc-ientry', index_exit_pct: 'disc-iexit', max_hold_days: 'disc-hold',
-  stop_loss_pct: 'disc-stop', stop_mode: 'disc-stopmode', position_pct: 'disc-pos'};
+  stop_loss_pct: 'disc-stop', stop_mode: 'disc-stopmode', position_pct: 'disc-pos',
+  crash_drop_pct: 'disc-crashdrop', crash_window_min: 'disc-crashwin', crash_cooldown_min: 'disc-crashcool'};
 const dsVal = (d, v) => v == null ? '—' : ((DS_VAL[d] || {})[v] || String(+(+v).toFixed ? +(+v).toFixed(3) : v));
 const dsCfgStr = (cfg, dims) => dims.filter(d => cfg[d] != null).map(d => `${DS_SHORT[d] || d} ${dsVal(d, cfg[d])}`).join(' · ');
 const dsPct = (v, d = 2) => v == null ? '—' : `<bdi dir="ltr">${v >= 0 ? '+' : ''}${(+v).toFixed(d)}%</bdi>`;

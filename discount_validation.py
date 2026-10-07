@@ -117,6 +117,10 @@ def load_universe(db, cats, symbols, start, end, p: DiscountParams) -> dict:
     D._compute_mr(db, loaded, p, start, end)
     items = [{"label": d["label"], "rows": d["rows"], "day_vol": d["day_vol"], "mr": d.get("mr")}
              for d in loaded]
+    if p.crash_drop_pct > 0 and loaded:
+        cr = D._crash_series([d["rows"] for d in loaded], D._crash_groups(db, loaded, p), p)
+        for it, c in zip(items, cr):
+            it["crash"] = c
     if p.entry_mode in ("index", "both") and items:
         idx_all, _curve, _share = D._bubble_index([it["rows"] for it in items], p)
         for it, ix in zip(items, idx_all):
@@ -156,6 +160,7 @@ def _sim_all(U: dict, p: DiscountParams, lo: int | None = None, hi: int | None =
         rel = it["rel"][a:b]
         idx = it["idx"][a:b] if it.get("idx") is not None else None
         mr = it["mr"][a:b] if it.get("mr") is not None else None
+        crash = it["crash"][a:b] if it.get("crash") is not None else None
         if rng is not None:
             n = len(rows)
             o = int(n * (0.1 + 0.8 * rng.random()))
@@ -163,7 +168,7 @@ def _sim_all(U: dict, p: DiscountParams, lo: int | None = None, hi: int | None =
             if idx is not None:
                 o2 = int(n * (0.1 + 0.8 * rng.random()))
                 idx = idx[o2:] + idx[:o2]
-        trades.extend(D._simulate(it["label"], rows, it["day_vol"], p, idx, rel, mr))
+        trades.extend(D._simulate(it["label"], rows, it["day_vol"], p, idx, rel, mr, crash))
     return trades
 
 
