@@ -141,8 +141,8 @@ class DiscountParams:
     session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
     session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
     session_end: int = 123000
-    buy_fee: float = 0.0010             # 0.10% each side (all-in broker + exchange fee for these ETFs)
-    sell_fee: float = 0.0010
+    buy_fee: float = 0.00125            # 0.125% each side (all-in broker + exchange fee for these ETFs)
+    sell_fee: float = 0.00125
 
 
 def fill_on(p: "DiscountParams") -> bool:

@@ -69,8 +69,8 @@ DIMS: dict[str, dict] = {
     "participation_basis": {"kind": "fast", "label": "مبنای سقف حجم (حجم تا همان لحظه / کل حجم روز)", "choices": ["sofar", "day"], "assumption": True},
     "exec_delay_snaps":   {"kind": "fast", "label": "تأخیر اجرا (تعداد اسنپ‌شاتِ بعدی تا پر شدن سفارش)", "choices": [0, 1, 2, 3], "assumption": True},
     "half_spread_pct":    {"kind": "fast", "label": "نیم‌اسپرد فرضی ٪", "choices": [0.02, 0.05, 0.1, 0.2], "assumption": True},
-    "buy_fee":            {"kind": "fast", "label": "کارمزد خرید (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
-    "sell_fee":           {"kind": "fast", "label": "کارمزد فروش (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
+    "buy_fee":            {"kind": "fast", "label": "کارمزد خرید (کسر)", "choices": [0.001, 0.00125, 0.0015], "assumption": True},
+    "sell_fee":           {"kind": "fast", "label": "کارمزد فروش (کسر)", "choices": [0.001, 0.00125, 0.0015], "assumption": True},
     "fill_mode":          {"kind": "fast", "label": "سرمایهٔ بیکار (خاموش / پر کردن با بهترین صندوق / همیشه سرمایه‌گذاری و فروش فقط با کاندیدای بهتر)", "choices": ["off", "best", "hold"]},
     "fill_max_rel_pct":   {"kind": "fast", "label": "پر کردن/نگه‌داری: حداکثر حباب نسبی برای خرید ٪", "choices": [-0.3, -0.1, 0.0, 0.1, 0.3, 1.0]},
     "fill_switch_pct":    {"kind": "fast", "label": "نگه‌داری: حداقل برتری کاندیدا برای جابه‌جایی (نقطهٔ درصد)", "choices": [0.3, 0.5, 0.8, 1.2, 2.0]},
@@ -924,12 +924,16 @@ class Study:
               + (f" آمارهٔ t تقریبیِ معاملات آزمون {tt:.1f}" + (" (کمتر از ۱٫۵: سود قابل‌تشخیص از نوسان نیست)." if weak_t else ".") if tt is not None else ""))
         pas = self.passive.get("hold")
         if pas is not None:
-            lv2 = "ok" if ho_b >= pas and ho_b > 0 else ("warn" if ho_b > 0 else "bad")
+            excess = ho_b - pas
+            margin = max(3.0, 0.1 * abs(pas))              # a few points of noise: less than that is "the same as passive"
+            lv2 = "ok" if excess >= margin and ho_b > 0 else ("warn" if ho_b > 0 else "bad")
             light("نسبت به پسیو (هم‌وزن، بدون کارمزد)", lv2,
-                  f"در دورهٔ آزمون برنده {ho_b:+.2f}٪ و خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها {pas:+.2f}٪ "
+                  f"در دورهٔ آزمون برنده {ho_b:+.2f}٪ و خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها {pas:+.2f}٪ (اختلاف {excess:+.2f} نقطه) "
                   f"(سرمایهٔ درگیرِ استراتژی {(best['hold'].get('avg_exposure_pct') or 0):.0f}٪ از زمان). "
-                  + ("استراتژی از حضور ساده در بازار بهتر است." if lv2 == "ok" else
-                     "سود دارد ولی کمتر از پسیو است؛ اگر سرمایهٔ درگیر کم است، بازده به‌ازای هر ریالِ درگیر را هم ببینید." if lv2 == "warn" else
+                  + ("استراتژی به‌روشنی از حضور ساده در بازار بهتر است." if lv2 == "ok" else
+                     (f"اختلاف کمتر از {margin:.1f} نقطه است: در حدّ نوسان، یعنی نتیجه با پسیو یکی است و بخش اصلی سود از «حضور در بازار» می‌آید، نه از انتخاب."
+                      if ho_b > 0 and abs(excess) < margin else
+                      "سود دارد ولی کمتر از پسیو است؛ اگر سرمایهٔ درگیر کم است، بازده به‌ازای هر ریالِ درگیر را هم ببینید.") if lv2 == "warn" else
                      "ضرر دارد."))
         if plateau is None:
             light("پایداری اطراف برنده", "warn", "همسایه‌ای برای سنجش نبود.")

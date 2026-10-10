@@ -1303,7 +1303,7 @@ def test_mutations(R: Results, db):
     finally:
         D._Parker.make_room = o
     cases.append(("پیش‌فرض فرم با موتور فرق کند", with_html(lambda h: h.replace(
-        'id="disc-buyfee" type="number" step="0.005" value="0.1"', 'id="disc-buyfee" type="number" step="0.005" value="0.145"'))))
+        'id="disc-buyfee" type="number" step="0.005" value="0.125"', 'id="disc-buyfee" type="number" step="0.005" value="0.145"'))))
     cases.append(("discParams یک کنترل را نخواند", with_html(lambda h: h.replace("navage: v('disc-navage'), ", ""))))
     cases.append(("نگاشت «اعمال» یک پارامتر را نداشته باشد", with_html(lambda h: h.replace(
         "stop_mode: 'disc-stopmode', ", "", 1))))
