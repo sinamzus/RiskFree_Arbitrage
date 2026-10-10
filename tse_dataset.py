@@ -173,7 +173,48 @@ def tse_dates(db, symbol_ids: list[int], start: int | None = None, end: int | No
             (*symbol_ids, start or 0, end or 99999999))]
 
 
+_LOADS: dict = {}           # (db, kind, fund, start, end, grid, collected-version) -> (rows, book)
+_LOADS_MAX = 256
+
+
+def _collected_version(db, symbol_id: int) -> tuple:
+    """Changes whenever TSE or NAV-dump data of this fund is added or replaced (so a cached load is never stale)."""
+    with db._conn() as conn:
+        r = conn.execute("SELECT COUNT(*), COALESCE(MAX(fetched_at), '') FROM tse_raw WHERE symbol_id=?",
+                         (symbol_id,)).fetchone()
+        try:                                  # the NAV dump's rows too (hybrid takes its snapshots from there)
+            n = conn.execute("SELECT COUNT(*), COALESCE(MAX(date), 0) FROM nav_intraday WHERE symbol_id=?",
+                             (symbol_id,)).fetchone()
+        except Exception:
+            n = (0, 0)
+    return (int(r[0]), r[1], int(n[0]), int(n[1]))
+
+
+def _memo_load(db, kind: str, symbol_id: int, start, end, grid: int, fn):
+    """The order book of a fund depends only on the dataset and the period, not on the strategy parameters: load
+    it once per process and share it between all backtests / optimizer configurations."""
+    key = (str(getattr(db, "path", id(db))), kind, symbol_id, start, end, grid, _collected_version(db, symbol_id))
+    hit = _LOADS.get(key)
+    if hit is None:
+        if len(_LOADS) >= _LOADS_MAX:
+            _LOADS.pop(next(iter(_LOADS)))
+        hit = _LOADS[key] = fn()
+    rows, book = hit
+    return list(rows), book
+
+
 def load_raw(db, symbol_id: int, start: int | None, end: int | None, grid_sec: int) -> tuple[list[tuple], dict]:
+    ensure_schema(db)
+    return _memo_load(db, "tse", symbol_id, start, end, grid_sec,
+                      lambda: _load_raw(db, symbol_id, start, end, grid_sec))
+
+
+def load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tuple[list[tuple], dict]:
+    ensure_schema(db)
+    return _memo_load(db, "hybrid", symbol_id, start, end, 0, lambda: _load_hybrid(db, symbol_id, start, end))
+
+
+def _load_raw(db, symbol_id: int, start: int | None, end: int | None, grid_sec: int) -> tuple[list[tuple], dict]:
     """(rows shaped like Database.get_nav_intraday, book {(date, time): (bids, asks)}) for the TSE dataset."""
     ensure_schema(db)
     days = tse_days(db, symbol_id, start, end)
@@ -202,16 +243,27 @@ class Book(dict):
     """{(date, time): (bids, asks)} at the dataset's own instants, plus ``at(date, time)``: the real book at ANY
     instant (replayed from the collected event stream) — e.g. the instant a held fund is sold to fund a switch."""
 
+    _DAYS_KEPT = 6                    # event streams kept in memory (the simulation walks forward in time)
+
     def __init__(self, db, symbol_id: int):
         super().__init__()
         self.db, self.sid = db, symbol_id
-        self._day, self._ev = None, []
+        self._ev: dict[int, list] = {}
+        self._memo: dict[tuple[int, int], tuple[list, list]] = {}
 
     def at(self, date: int, time: int) -> tuple[list, list]:
-        if self._day != date:
-            self._day = date
-            self._ev = sorted(G.load_day(self.db, self.sid, date, "book") or [], key=lambda r: (r[0], r[2]))
-        return _book_states(self._ev, [_sec(time)])[0]
+        # memoised: the optimizer replays the same switch instants for config after config
+        key = (date, time)
+        st = self._memo.get(key)
+        if st is None:
+            ev = self._ev.get(date)
+            if ev is None:
+                if len(self._ev) >= self._DAYS_KEPT:
+                    self._ev.pop(next(iter(self._ev)))
+                ev = self._ev[date] = sorted(G.load_day(self.db, self.sid, date, "book") or [],
+                                             key=lambda r: (r[0], r[2]))
+            st = self._memo[key] = _book_states(ev, [_sec(time)])[0]
+        return st
 
 
 def _book_states(book: list[list], secs: list[int]) -> list[tuple[list, list]]:
@@ -231,7 +283,7 @@ def _book_states(book: list[list], secs: list[int]) -> list[tuple[list, list]]:
     return out
 
 
-def load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tuple[list[tuple], dict]:
+def _load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tuple[list[tuple], dict]:
     """Signal from the NAV dump, execution against the TSE book: the dump's own rows (on the days that have TSE
     data) and the real book as it stood at each dump snapshot instant. Snapshots with no two-sided book are dropped
     (nothing could be executed there)."""
