@@ -1032,6 +1032,11 @@ def test_tse_collect(R: Results, db_path: str):
                 pass
 
 
+def _hms_add(t: int, sec: int) -> int:
+    s = min(86399, max(0, (t // 10000) * 3600 + (t // 100 % 100) * 60 + t % 100 + sec))
+    return (s // 3600) * 10000 + (s // 60 % 60) * 100 + s % 60
+
+
 def _fake_tse_from_dump(db, n_days: int | None = None, half: float = 0.001):
     """Write synthetic TSE data for the gold funds, consistent with the dump: at every dump snapshot where the
     volume grew a trade at its price, and a 3-level book around it (bid_k / ask_k = price·(1 ∓ k·half),
@@ -1159,6 +1164,25 @@ def test_tse_dataset(R: Results, db_path: str):
           "؛ ".join(bad[:3]) or f"{n} معامله")
     # order-book datasets: the assumed spread plays no part; every buy is inside the asks and every sale inside the
     # bids of the book at that very instant (also a switch sale, whose instant is the candidate's snapshot)
+    ck = rhy["dataset"].get("clock") or {}
+    R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است و هم‌خوان گزارش می‌شود",
+          ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0,
+          json.dumps({k: ck.get(k) for k in ("best_offset_min", "dev_at_0_pct", "best_dev_pct", "rows_outside_window_pct",
+                                              "trade_legs_outside_pct")}))
+    # a NAV file whose clock runs 2 hours late must be caught (best offset −120 min, not aligned)
+    import tse_dataset as _TD
+    _orig = db.get_nav_intraday
+
+    def _late(sid, s=None, e=None):
+        return [(r[0], _hms_add(r[1], 7200), *r[2:]) for r in _orig(sid, s, e)]
+    db.get_nav_intraday = _late
+    try:
+        ck2 = _TD.clock_check(db, [(f["symbol_id"], f["symbol"]) for f in funds], None, None, [])
+    finally:
+        db.get_nav_intraday = _orig
+    R.add(g, "بررسی ساعت: فایل NAV با ۲ ساعت اختلاف شناسایی می‌شود",
+          ck2.get("aligned") is False and ck2.get("best_offset_min") == -120,
+          json.dumps({k: ck2.get(k) for k in ("best_offset_min", "dev_at_0_pct", "best_dev_pct")}))
     R.add(g, "در دیتاست‌های اردربوک اسپرد فرضی هیچ اثری ندارد",
           _sig(_run(db, replace(base, dataset="hybrid", half_spread_pct=0.5))) == _sig(rhy)
           and _sig(_run(db, replace(base, half_spread_pct=0.5))) == _sig(res), "")

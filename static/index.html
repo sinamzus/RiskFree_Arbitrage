@@ -7000,6 +7000,7 @@ async function discBacktest() {
   const cardsEl = document.getElementById('disc-cards');
   if (cardsEl) cardsEl.insertAdjacentHTML('afterbegin', `<div class="dv-note" style="font-size:11px;color:var(--sub)" title="دادهٔ زیر این بک‌تست">دیتاست: <b>${dsi.name === 'hybrid' ? 'سیگنال از دادهٔ NAV، معامله با اردربوک واقعی TSE در همان لحظه' : dsi.name === 'tse'
     ? `TSE: تیک و اردربوک (شبکهٔ ${discLtr(Math.round((dsi.grid_sec || 0) / 60 * 10) / 10)} دقیقه؛ خرید و فروش با قیمت واقعی صف‌ها)` : 'دادهٔ لحظه‌ای NAV (قیمت آخرین معامله + اسپرد فرضی)'}</b> · ${discLtr(dsi.days || 0)} روز معاملاتی${dsi.first ? ` از ${gregIntToJalaliStr(dsi.first)} تا ${gregIntToJalaliStr(dsi.last)}` : ''}</div>`);
+  if (cardsEl && dsi.clock) cardsEl.insertAdjacentHTML('afterbegin', discClockHtml(dsi.clock));
   discTabSet(tab, `بک‌تست ${dsTxt} · ${sm.portfolio_return_pct != null ? (sm.portfolio_return_pct >= 0 ? '+' : '') + sm.portfolio_return_pct + '%' : ''} · ${sm.trade_count ?? 0} معامله`, false);
   window._discLastRes = res;
 }
@@ -8362,6 +8363,24 @@ async function discPushResults() {
 //  TSE tick + order-book collection for the gold funds
 // ---------------------------------------------------------------------------
 let _tseTimer = null;
+function discClockHtml(c) {
+  // NAV-file clock vs TSE clock: the dump's last price compared with the real tape at the same (and shifted) instants
+  if (c.error) return `<div class="dv-note" style="font-size:11px">بررسی ساعت: خطا — ${c.error}</div>`;
+  if (c.best_offset_min == null) return '';
+  const bad = !c.aligned || (c.trade_legs_outside_pct || 0) > 2;
+  const offs = (c.offsets || []).filter(o => o.median_dev_pct != null)
+    .map(o => `${o.min > 0 ? '+' : ''}${o.min}′: ${o.median_dev_pct}%`).join(' · ');
+  const hm = t => `<bdi dir="ltr">${String(t).padStart(6, '0').replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2')}</bdi>`;
+  const ex = (c.examples || []).map(e => `${e.symbol} ${e.side} ${gregIntToJalaliStr(e.date)} ${hm(e.time)} (بازار ${hm(e.window[0])}–${hm(e.window[1])})`).join('<br>');
+  return `<div class="dv-note" style="font-size:11px;border-right:3px solid ${bad ? 'var(--red,#d33)' : 'var(--green,#2a7)'};padding-right:6px"
+    title="قیمت آخرین معاملهٔ فایل NAV با نوار معاملات واقعی TSE در همان لحظه و در لحظه‌های جابه‌جاشده مقایسه می‌شود. اگر کمترین اختلاف در جابه‌جایی صفر نباشد، ساعت دو منبع یکی نیست. معاملهٔ بیرون از بازهٔ اولین تا آخرین معاملهٔ TSE آن روز با اردربوکی انجام شده که در آن لحظه قابل معامله نبوده.&#10;${offs}">
+    ${bad ? '⚠️' : '✅'} بررسی ساعت NAV↔TSE: اختلاف میانهٔ قیمت در همان لحظه <b>${c.dev_at_0_pct}%</b>،
+    کمترین اختلاف در جابه‌جایی <b>${c.best_offset_min > 0 ? '+' : ''}${c.best_offset_min} دقیقه</b> (${c.best_dev_pct}%)
+    ${c.aligned ? '— ساعت‌ها هم‌خوان‌اند' : '— <b>ساعت دو منبع هم‌خوان نیست</b>'} ·
+    اسنپ‌شات بیرون از ساعت معاملهٔ TSE: ${c.rows_outside_window_pct}% ·
+    معاملهٔ بیرون از ساعت معامله: <b>${c.trade_legs_outside_window}</b> از ${c.trade_legs_checked} (${c.trade_legs_outside_pct}%)
+    ${ex ? `<details><summary>نمونه‌ها</summary>${ex}</details>` : ''}</div>`;
+}
 function discDatasetChanged() {
   const ds = (document.getElementById('disc-dataset') || {}).value || 'dump';
   const g = document.getElementById('disc-gridf');

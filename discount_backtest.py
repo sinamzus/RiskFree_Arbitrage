@@ -869,14 +869,19 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                     diag["crash"] = diag.get("crash", 0) + 1
                 continue                      # the group is falling fast (or just did): no new entry
             ix = idx[i] if idx is not None else None
-            fund_ok = r <= ent_thr
+            if book and rel is None:                   # judged at the price we would pay (best ask)
+                a = _best(book, d, t, 1, 0.0)
+                r_in = r + (a - last) / nav if a > 0 and nav > 0 else r
+            else:
+                r_in = r
+            fund_ok = r_in <= ent_thr
             idx_ok = ix is not None and ix <= ix_entry
             if not ((mode == "fund" and fund_ok) or (mode == "index" and idx_ok)
                     or (mode == "both" and fund_ok and idx_ok)):
                 if diag is not None:
                     diag["no_signal"] = diag.get("no_signal", 0) + 1
                     if mode in ("fund", "both"):          # how far from the threshold are we (median-ish bookkeeping)
-                        diag["gap_sum"] = diag.get("gap_sum", 0.0) + (r - ent_thr)
+                        diag["gap_sum"] = diag.get("gap_sum", 0.0) + (r_in - ent_thr)
                         diag["gap_n"] = diag.get("gap_n", 0) + 1
                 continue
             j = xi(i)                                  # the order fills a little later when a delay is modelled
@@ -911,6 +916,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             e_mr = mr[i] if mr_on else None
         else:
             bid = _best(book, d, t, 0, last * (1 - hs))
+            r_out = r - (last - bid) / nav if book and rel is None and nav > 0 else r   # at the price we can sell at
             reason = None
             if p.max_hold_days > 0 and o - e_ord >= p.max_hold_days:
                 reason = "time"
@@ -921,7 +927,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                         and r <= e_rel - stop_s)):
                 reason = "stop"
             elif ((mode == "index" and idx is not None and idx[i] is not None and idx[i] >= ix_exit)
-                  or (mode != "index" and r >= ex_thr)):
+                  or (mode != "index" and r_out >= ex_thr)):
                 reason = "signal"
             if reason:
                 j = xi(i)
@@ -1284,6 +1290,19 @@ class _Parker:
         self.exit_rel = p.fill_exit_rel_pct / 100.0
         self.big = float(1 << 60)
 
+    def _xadj(self, k: int, i: int, side: int) -> float:
+        """Executable-price correction of the bubble at row ``i`` of fund ``k`` (real book only, else 0): buying
+        pays the best ask, selling gets the best bid, so the bubble that can actually be traded is
+        rel + (ask − last)/fair for a buy and rel − (last − bid)/fair for a sale."""
+        bk = self.book[k]
+        if not bk:
+            return 0.0
+        _o, d, t, fair, last, _f, _n = self.rows[k][i]
+        px = _best(bk, d, t, side, 0.0)
+        if px <= 0 or fair <= 0:
+            return 0.0
+        return (px - last) / fair if side == 1 else (last - px) / fair
+
     # ---- driver interface -------------------------------------------------------
     def peek_ts(self):
         return self.groups[self.gi][0] if self.gi < len(self.groups) else None
@@ -1399,7 +1418,7 @@ class _Parker:
                                  or (p.stop_mode == "nav_level" and r <= -stop_s)
                                  or (p.stop_mode not in ("price", "nav_level") and r <= pos["rel"] - stop_s)):
                 reason = "stop"
-            elif r >= self.exit_rel:
+            elif r - self._xadj(k, i, 0) >= self.exit_rel:      # the bubble at the price we can sell at (bid)
                 reason = "signal"
             if reason:
                 jx = self._xi(k, i)                   # fill row (a later snapshot when a delay is modelled)
@@ -1422,13 +1441,14 @@ class _Parker:
             if p.require_fresh and not self.rows[k][i][5]:
                 continue
             d = self.rows[k][i][1]
-            ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and self.rel[k][i] <= self.max_rel
+            xa = self._xadj(k, i, 1)                  # judged at the price we would pay (best ask)
+            ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and self.rel[k][i] + xa <= self.max_rel
                   and not (mr_on and (self.mr[k] is None or self.mr[k][i] is None or self.mr[k][i] < p.mr_min_score))
                   and not (self.crash is not None and p.crash_drop_pct > 0 and self.crash[k][i] is not None
                            and self.crash[k][i] <= crash_thr))
-            self.cand[k] = (T, self.rank[k][i]) if ok else None
+            self.cand[k] = (T, self.rank[k][i] + xa) if ok else None
         # entries: the lowest bubble first, only if it is also the best among recently seen candidates
-        for k, i in sorted(group, key=lambda g: self.rank[g[0]][g[1]]):
+        for k, i in sorted(group, key=lambda g: (self.cand.get(g[0]) or (0, self.rank[g[0]][g[1]]))[1]):
             c = self.cand.get(k)
             if c is None or c[0] != T or k in self.parked or self.real_open.get(self.labels[k], 0) > 0:
                 continue
@@ -1503,10 +1523,10 @@ class _Parker:
                 continue
             if self.min_hold_s and T - self.parked[j]["ts"] < self.min_hold_s:
                 continue                      # bought too recently to be switched out
-            r = self.rank[j][self.cur_i[j]]
+            r = self.rank[j][self.cur_i[j]] - self._xadj(j, self.cur_i[j], 0)    # at the price we can sell at (bid)
             if w_rel is None or r > w_rel:
                 worst, w_rel = j, r
-        if worst is None or self.rank[k][i] > w_rel - self.switch:
+        if worst is None or self.rank[k][i] + self._xadj(k, i, 1) > w_rel - self.switch:
             return cash, invested
         pw = self.parked[worst]
         if self.p.exec_delay_snaps > 0:
@@ -1921,10 +1941,17 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     from discount_explain import attribute_trades, explain_trades
     loss_causes = explain_trades(trade_dicts, loaded, p)        # adds "why" to every losing trade
     attribution = attribute_trades(trade_dicts, p, p.initial_capital)
+    clock = None
+    if p.dataset in ("tse", "hybrid") and loaded:
+        import tse_dataset as TD
+        try:
+            clock = TD.clock_check(db, [(l["sid"], l["label"]) for l in loaded], start, end, trade_dicts)
+        except Exception as e:                # a diagnostic must never break the backtest
+            clock = {"error": str(e)}
     return {
         "cats": cats or [],
         "dataset": {"name": p.dataset, "grid_sec": p.tse_grid_sec if p.dataset == "tse" else None,
-                    "days": len(dates), "first": d0, "last": d1},
+                    "days": len(dates), "first": d0, "last": d1, "clock": clock},
         "funds_tested": tested, "funds_skipped": skipped_funds,
         "params": asdict(p),
         "period": [d0, d1],

@@ -243,3 +243,87 @@ def fill(levels: list, units: float) -> tuple[float, float, float]:
         left -= q
         worst = p
     return got, (cost / got if got > 0 else 0.0), worst
+
+
+# --------------------------------------------------------------------------- #
+#  Clock check: are the NAV dump's times on the same clock as TSE's?           #
+# --------------------------------------------------------------------------- #
+
+CLOCK_OFFSETS_MIN = list(range(-240, 241, 30))
+
+
+def _tape(db, symbol_id: int, date: int, cache: dict):
+    """[(second, price)] of the day's real trades (ascending) and the window (first, last second); cached."""
+    key = (symbol_id, date)
+    if key not in cache:
+        tr = G.load_day(db, symbol_id, date, "trades")
+        tp = sorted((_sec(r[1]), float(r[2])) for r in (tr or []) if not r[4] and r[2] > 0 and r[3] > 0)
+        cache[key] = (tp, (tp[0][0], tp[-1][0]) if tp else None)
+    return cache[key]
+
+
+def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | None, trades: list[dict],
+                max_days: int = 12) -> dict:
+    """How well the NAV dump's last price matches the TSE tape at the same instant — and at shifted instants, to
+    expose a clock offset — plus how many dump snapshots / backtest trades fall outside the day's TSE trading window
+    (first → last real trade). A trade outside the window was filled against a book that could not trade."""
+    cache: dict = {}
+    devs: dict[int, list[float]] = {o: [] for o in CLOCK_OFFSETS_MIN}
+    rows_in = rows_out = 0
+    for sid, _label in funds:
+        days = tse_days(db, sid, start, end)
+        if not days:
+            continue
+        pick = days if len(days) <= max_days else [days[int(i * len(days) / max_days)] for i in range(max_days)]
+        want = set(pick)
+        for r in db.get_nav_intraday(sid, min(pick), max(pick)):
+            if r[0] not in want or not r[4] or r[4] <= 0:
+                continue
+            tp, win = _tape(db, sid, r[0], cache)
+            if not tp:
+                continue
+            s = _sec(r[1])
+            if win[0] <= s <= win[1]:
+                rows_in += 1
+            else:
+                rows_out += 1
+            secs = [x[0] for x in tp]
+            for o in CLOCK_OFFSETS_MIN:
+                j = bisect.bisect_right(secs, s + o * 60) - 1
+                if j >= 0:
+                    devs[o].append(abs(r[4] / tp[j][1] - 1.0) * 100)
+    sid_of = {lab: sid for sid, lab in funds}
+    t_out, t_n, ex = 0, 0, []
+    for t in trades:
+        sid = sid_of.get(t["symbol"])
+        if sid is None:
+            continue
+        for d, tm, side in ((t["entry_date"], t["entry_time"], "خرید"), (t["exit_date"], t["exit_time"], "فروش")):
+            _tp, win = _tape(db, sid, d, cache)
+            if win is None:
+                continue
+            t_n += 1
+            if not (win[0] <= _sec(tm) <= win[1]):
+                t_out += 1
+                if len(ex) < 8:
+                    ex.append({"symbol": t["symbol"], "side": side, "date": d, "time": tm,
+                               "window": [_hms(win[0]), _hms(win[1])]})
+
+    def _med(v):
+        v = sorted(v)
+        return v[len(v) // 2] if v else None
+    offs = [{"min": o, "median_dev_pct": round(_med(devs[o]), 4) if devs[o] else None, "n": len(devs[o])}
+            for o in CLOCK_OFFSETS_MIN]
+    ok = [x for x in offs if x["median_dev_pct"] is not None]
+    best = min(ok, key=lambda x: x["median_dev_pct"]) if ok else None
+    at0 = next((x for x in offs if x["min"] == 0), None)
+    tot = rows_in + rows_out
+    aligned = bool(best and at0 and at0["median_dev_pct"] is not None
+                   and at0["median_dev_pct"] <= best["median_dev_pct"] * 1.25 + 0.01)
+    return {"offsets": offs, "best_offset_min": best["min"] if best else None,
+            "dev_at_0_pct": at0["median_dev_pct"] if at0 else None,
+            "best_dev_pct": best["median_dev_pct"] if best else None,
+            "aligned": aligned if best else None,
+            "rows_checked": tot, "rows_outside_window_pct": round(rows_out / tot * 100, 1) if tot else None,
+            "trade_legs_checked": t_n, "trade_legs_outside_window": t_out,
+            "trade_legs_outside_pct": round(t_out / t_n * 100, 1) if t_n else None, "examples": ex}
