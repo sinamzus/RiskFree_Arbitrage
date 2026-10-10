@@ -6877,7 +6877,49 @@ function dvHeat(sf) {
   return `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl dv-heat"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
 
+// validation of the "always invested" mode: is choosing funds by their bubble better than choosing at random?
+function renderDiscValidationHold(r) {
+  const v = r.verdict || {findings: []}, s = r.summary || {}, pl = r.placebo || {}, bl = r.blocks || {}, st = r.stress || [];
+  const inf = r.info || {}, mr = inf.mean_reversion, au = r.audit || {};
+  const headCls = v.primary === 'ok' ? 'ok' : (v.primary === 'mixed' ? 'warn' : 'bad');
+  const cards = (v.findings || []).map(f => `<div class="dv-card"><div class="dv-t"><span class="dv-dot ${f.level}"></span>${f.area}) ${f.title}</div><div class="dv-x">${discLtr(f.text)}</div></div>`).join('');
+  // placebo histogram (inline SVG): grey bars = random ranking, blue line = the real result
+  let hist = '';
+  if (pl.n && (pl.null || []).length) {
+    const xs = pl.null, lo0 = Math.min(...xs, pl.real_pct), hi0 = Math.max(...xs, pl.real_pct), pad = (hi0 - lo0) * 0.05 || 1,
+      lo = lo0 - pad, hi = hi0 + pad, nb = 24;
+    const w = (hi - lo) / nb || 1, cnt = Array(nb).fill(0);
+    xs.forEach(x => { cnt[Math.min(nb - 1, Math.floor((x - lo) / w))]++; });
+    const W = 460, H = 120, mx = Math.max(...cnt), bw = W / nb, X = x => (x - lo) / (hi - lo || 1) * W;
+    hist = `<svg width="${W}" height="${H + 18}" style="max-width:100%"><title>توزیع بازدهٔ «رتبه‌بندی تصادفی» (خاکستری) و بازدهٔ واقعی (آبی)</title>
+      ${cnt.map((c, i) => `<rect x="${i * bw + 1}" y="${H - c / mx * H}" width="${bw - 2}" height="${c / mx * H}" fill="var(--muted)" opacity=".55"/>`).join('')}
+      <line x1="${X(pl.real_pct)}" x2="${X(pl.real_pct)}" y1="0" y2="${H}" stroke="#4fa3ff" stroke-width="3"/>
+      <text x="0" y="${H + 14}" font-size="10" fill="var(--sub)">${lo.toFixed(1)}%</text>
+      <text x="${W}" y="${H + 14}" font-size="10" fill="var(--sub)" text-anchor="end">${hi.toFixed(1)}%</text></svg>`;
+  }
+  const blTbl = (bl.blocks || []).length ? `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th>بلوک</th><th>از</th><th>تا</th><th>معامله</th><th>راهبرد</th><th>نگه‌داری ساده (پسیو)</th><th>برتری</th><th>افت حداکثر</th></tr></thead><tbody>
+    ${bl.blocks.map(b => `<tr><td>${b.block}</td><td>${gregIntToJalaliStr(b.from)}</td><td>${gregIntToJalaliStr(b.to)}</td><td>${b.trades}</td>
+      <td class="${dvCls(b.strategy_pct)}">${dvPct(b.strategy_pct)}</td><td class="${dvCls(b.passive_pct)}">${dvPct(b.passive_pct)}</td>
+      <td class="${dvCls(b.excess_pct)}"><b>${dvPct(b.excess_pct)}</b></td><td>${dvPct(b.drawdown_pct)}</td></tr>`).join('')}</tbody></table></div>` : '';
+  const stTbl = st.length ? `<div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">سناریو</th><th>بازده</th><th>سرمایهٔ نهایی (م.ر)</th><th>معامله</th><th>نرخ برد</th><th>افت حداکثر</th></tr></thead><tbody>
+    ${st.map(x => `<tr><td style="text-align:start">${x.name}</td><td class="${dvCls(x.return_pct)}">${dvPct(x.return_pct)}</td><td>${discLtr(discM(x.final_capital))}</td><td>${x.trades}</td><td>${discLtr(x.win_rate + '%')}</td><td>${dvPct(x.drawdown_pct)}</td></tr>`).join('')}</tbody></table></div>` : '';
+  const mrTxt = mr ? `بازگشت حباب به میانگین (همهٔ صندوق‌ها): نیمه‌عمر ≈ <b>${mr.half_life_days == null ? '—' : discLtr(mr.half_life_days + ' روز')}</b>، p-value <b>${discLtr(mr.p_value)}</b>` : '';
+  const auTxt = au.n ? `تفکیک سود هر معامله (میانگین وزن‌دار): رشد NAV ${dvPct(au.nav_drift_pct)} · همگرایی حباب ${dvPct(au.convergence_pct)} · اسپرد ${dvPct('-' + au.spread_cost_pct)} · کارمزد ${dvPct('-' + au.fee_pct)} · خالص ${dvPct(au.net_pct)}` : '';
+  document.getElementById('disc-val').innerHTML = `
+    <div class="dv-head ${headCls}">${v.headline || ''}</div>
+    <div class="dv-note" style="font-size:11px;color:var(--sub)">حالت «همیشه سرمایه‌گذاری»: قاعدهٔ ورود/خروجی برای آزمودن نیست؛ تنها تصمیم این است که <b>کدام صندوق</b> نگه داشته شود. پس این گزارش می‌پرسد: آیا انتخاب با حباب از انتخاب تصادفی و از نگه‌داری ساده بهتر است؟ ${r.funds} صندوق، از ${gregIntToJalaliStr((r.period || [])[0])} تا ${gregIntToJalaliStr((r.period || [])[1])}.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">${cards}</div>
+    <div class="dv-sec"><div class="disc-h" title="همان راهبرد صدها بار اجرا می‌شود ولی هر صندوق با حبابِ یک صندوقِ دیگر (در همان لحظه) رتبه‌بندی می‌شود؛ مجاز بودن خرید و سازوکار جابه‌جایی همان است. اگر بازدهٔ واقعی از تقریباً همهٔ این اجراها بهتر باشد، انتخاب با حباب واقعاً اطلاعات دارد.">۱) انتخاب با حباب در برابر انتخاب تصادفی (علتِ «ج»)</div>
+      ${pl.n ? `<div class="dv-note" style="font-size:11px;color:var(--sub)">بازدهٔ واقعی <b>${dvPct(pl.real_pct)}</b> · میانگین ${discLtr(pl.n)} اجرای تصادفی ${dvPct(pl.null_mean_pct)} (۹۰٪ بین ${dvPct(pl.null_p5_pct)} و ${dvPct(pl.null_p95_pct)}) · برتری ${dvPct(pl.excess_vs_null_pct)} · p-value <b>${discLtr(pl.p_value)}</b> (کوچک‌ترین p ممکن با ${discLtr(pl.n)} اجرا: ${discLtr((1 / (pl.n + 1)).toFixed(4))})</div>${hist}` : '<div class="dv-note">اجرای تصادفی ممکن نشد.</div>'}
+      <div class="dv-note" style="font-size:11px;color:var(--sub)">${mrTxt}</div></div>
+    <div class="dv-sec"><div class="disc-h" title="کل دوره به ۴ بلوک زمانی مساوی تقسیم می‌شود و در هر بلوک راهبرد از صفر با نگه‌داری هم‌وزنِ همین صندوق‌ها (بدون کارمزد) مقایسه می‌شود.">۲) بلوک به بلوک در برابر نگه‌داری ساده (علتِ «الف»)</div>${blTbl}
+      <div class="dv-note">کل دوره: راهبرد ${dvPct(s.portfolio_return_pct)} در برابر پسیو ${dvPct(r.passive_pct)}. برتری فقط در یک بلوک = شانس؛ برتری در بیشتر بلوک‌ها = پایدار.</div></div>
+    <div class="dv-sec"><div class="disc-h" title="همان راهبرد با فرض‌های بدبینانه‌تر اجرا می‌شود.">۳) سخت‌گیری اجرا: اسپرد، کارمزد، سقف حجم، تأخیر (علتِ «ب»)</div>${stTbl}
+      <div class="dv-note" style="font-size:11px;color:var(--sub)">${auTxt}</div></div>`;
+}
+
 function renderDiscValidation(r, p) {
+  if (r.mode === 'hold') return renderDiscValidationHold(r);
   const v = r.verdict || { findings: [] }, s = r.summary || {};
   const au = r.audit || {}, inf = r.info || {}, st = r.stress || [], sf = r.surface || {}, wf = r.walk_forward || {}, sb = r.stability || {};
   const headCls = v.primary === 'ok' ? 'ok' : (v.primary === 'mixed' ? 'warn' : 'bad');

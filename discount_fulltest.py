@@ -923,6 +923,33 @@ def test_hold(R: Results, db):
           all(t["exit_reason"] == "end" for t in huge["trades"]) and huge["trades"], "")
 
 
+def test_validation_hold(R: Results, db):
+    """Validation of the always-invested mode: the placebo (rank by ANOTHER fund's bubble) must be calibrated —
+    rarely 'significant' where bubbles carry no information, always where they mean-revert."""
+    import discount_validation as V
+    g = "اعتبارسنجی حالت «همیشه سرمایه‌گذاری»"
+    p = D.DiscountParams(initial_capital=1e10, position_pct=25, fill_mode="hold", fill_max_rel_pct=2.0, participation_pct=0,
+                         half_spread_pct=0.02, baseline_days=0, mr_center="off", crash_drop_pct=0, max_nav_age_min=30)
+
+    def pv(kind, sd):
+        U = V.universe_from_rows([{"label": f"W{i}", "rows": V._synthetic_rows(kind, seed=100 + sd * 7 + i), "day_vol": {}}
+                                  for i in range(6)])
+        real = V._hold_run(V._hold_ctx(U), p, U["d0"], U["d1"])["portfolio_return_pct"]
+        return V.hold_placebo(U, p, real, n=30, max_seconds=30)["p_value"]
+    noise = [pv("noise", sd) for sd in range(8)]
+    R.add(g, "placebo کالیبره است: در دنیای بدون اطلاعات (حباب = قدم‌زدن تصادفی) به‌ندرت «معنادار» می‌گوید",
+          sum(1 for x in noise if x <= 0.05) <= 2, f"p-valueها: {noise}")
+    rev = [pv("revert", sd) for sd in range(3)]
+    R.add(g, "placebo قدرت دارد: در دنیای با بازگشت حباب همیشه معنادار است", all(x <= 0.05 for x in rev), f"p-valueها: {rev}")
+    res = V.run_validation(db, None, None, None, None, _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=25),
+                           n_perm=30, max_seconds=10)
+    ok = (res.get("mode") == "hold" and res["placebo"].get("n", 0) >= 20 and len(res["blocks"].get("blocks", [])) == 4
+          and len(res["stress"]) >= 6 and len(res["verdict"]["findings"]) == 3
+          and res["stress"][0]["return_pct"] == res["summary"]["portfolio_return_pct"])
+    R.add(g, "اعتبارسنجی در این حالت معامله و گزارش واقعی می‌دهد (نه صفر): placebo، بلوک‌ها، سخت‌گیری، حکم",
+          ok, f"{res.get('summary', {}).get('trade_count')} معامله · placebo {res.get('placebo', {}).get('n')}")
+
+
 def test_realism(R: Results, db):
     """Volume cap basis (so far vs whole day) and execution delay (fill at the N-th next fresh snapshot)."""
     g = "واقع‌بینی اجرا (حجم تا لحظه، تأخیر)"
@@ -1330,6 +1357,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("پر کردن سرمایهٔ بیکار", lambda: test_fill(R, db)),
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
+             ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
              ("ارسال نتایج برای تحلیل", lambda: test_export(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),

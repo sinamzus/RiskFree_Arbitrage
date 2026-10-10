@@ -19,6 +19,8 @@ Order matters — each step only makes sense if the previous ones pass:
   7. walk_forward       fixed parameters per time block + expanding-window re-optimisation
   8. stability          by fund, by month, concentration, leave-top-trades-out
   9. verdict            traffic lights for ب / ج / الف and a one-line diagnosis
+  10. always-invested   (fill_mode "hold": no entry/exit rules) — placebo: each fund ranked by ANOTHER fund's
+                        bubble (same eligibility & switching), blocks vs passive, harsher execution
 
 Nothing here changes the strategy engine; it only re-runs it.
 """
@@ -878,6 +880,252 @@ def verdict(res: dict, p: DiscountParams) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+#  10) "always invested" (fill_mode == "hold") validation                      #
+# --------------------------------------------------------------------------- #
+#  In that mode there are no entry / exit rules to test: the portfolio is always (nearly) fully invested
+#  and the only decision is WHICH funds to hold — ranked by their bubble.  So the questions become:
+#    ج  does ranking by the bubble beat RANDOM ranking?  Placebo: each fund's bubble series is circularly
+#       shifted in time (same distribution and persistence, but no longer tied to its prices) and the very
+#       same strategy is re-run; p = share of placebo runs at least as good as the real one.
+#    الف does it beat simply holding the same funds, block by block (not only over the whole period)?
+#    ب  does it survive harsher execution (spread, fees, volume cap, fill delay)?
+
+def _hold_ctx(U: dict, lo: int | None = None, hi: int | None = None) -> dict:
+    items, crash = [], []
+    for it in U["items"]:
+        a = bisect.bisect_left(it["dates"], lo) if lo is not None else 0
+        b = bisect.bisect_right(it["dates"], hi) if hi is not None else len(it["rows"])
+        if b - a < 2:
+            continue
+        items.append({"label": it["label"], "rows": it["rows"][a:b], "day_vol": it["day_vol"],
+                      "mr": it["mr"][a:b] if it.get("mr") is not None else None})
+        crash.append(it["crash"][a:b] if it.get("crash") is not None else None)
+    crash_ok = crash if crash and all(c is not None for c in crash) else None
+    return {"loaded": items, "crash": crash_ok, "pre": D._Parker.prepare(items) if items else None}
+
+
+def _hold_run(ctx: dict, p: DiscountParams, d0: int, d1: int, rank: list | None = None) -> dict:
+    """``rank`` (placebo): series the candidates are ranked / compared by instead of the real bubble."""
+    if not ctx["loaded"]:
+        return {"portfolio_return_pct": 0.0, "final_capital": p.initial_capital, "trade_count": 0, "win_rate": 0}
+    fill = ctx if rank is None else dict(ctx, pre=dict(ctx["pre"], rank=rank))
+    acc, pf, _curve, _sk = D._replay([], p, d0, d1, False, fill)
+    n = len(acc)
+    pf["trade_count"] = n
+    pf["win_rate"] = round(sum(1 for t in acc if t.net_pnl > 0) / n * 100, 1) if n else 0
+    return pf
+
+
+def _passive_span(U: dict, lo: int | None, hi: int | None) -> float:
+    """Equal-weight buy-and-hold of the same funds over [lo, hi] (last price, no fees), in %."""
+    rs = []
+    for it in U["items"]:
+        a = bisect.bisect_left(it["dates"], lo) if lo is not None else 0
+        b = bisect.bisect_right(it["dates"], hi) if hi is not None else len(it["rows"])
+        if b - a >= 2:
+            rs.append(it["rows"][b - 1][4] / it["rows"][a][4] - 1.0)
+    return round(sum(rs) / len(rs) * 100, 3) if rs else 0.0
+
+
+def _ar1_fit(r: list[float]) -> tuple[float, float, float, float]:
+    """(mean, sd, phi, residual sd) of a bubble series, snapshot to snapshot."""
+    m = len(r)
+    mu = sum(r) / m
+    sd = math.sqrt(sum((x - mu) ** 2 for x in r) / m) if m > 1 else 0.0
+    num = sum((r[i] - mu) * (r[i - 1] - mu) for i in range(1, m))
+    den = sum((r[i - 1] - mu) ** 2 for i in range(1, m))
+    phi = min(0.999, max(0.0, num / den)) if den > 0 else 0.0
+    res = [(r[i] - mu) - phi * (r[i - 1] - mu) for i in range(1, m)]
+    se = math.sqrt(sum(x * x for x in res) / len(res)) if res else sd
+    return mu, sd, phi, se
+
+
+def _surrogate(fit: tuple, m: int, rng: random.Random) -> list[float]:
+    """An independent bubble series with the same level, persistence and noise as the real one — but
+    unrelated to the fund's prices (so ranking on it carries no information)."""
+    mu, sd, phi, se = fit
+    x = mu + rng.gauss(0, sd)
+    out = []
+    for _ in range(m):
+        out.append(x)
+        x = mu + phi * (x - mu) + rng.gauss(0, se)
+    return out
+
+
+def hold_placebo(U: dict, p: DiscountParams, real_pct: float, n: int = 200, max_seconds: float = 120.0,
+                 seed: int = 11, progress: dict | None = None) -> dict:
+    """Null: the same strategy, with the same eligibility (a fund may be bought only while its REAL bubble is
+    ≤ fill_max_rel_pct), but each fund is ranked and compared by ANOTHER fund's real bubble at the same instant
+    (a random derangement per run).  So the null keeps the exposure, the cross-section's dispersion and how often
+    bubbles cross (hence the switching costs) and removes only the link between a fund's bubble and its OWN
+    prices.  (A circular time shift is not used: when the bubble wanders, the shifted series still reveals which
+    fund ends up dear, which made that null unfairly bad.  With a single fund an AR(1) surrogate is used.)"""
+    ctx = _hold_ctx(U)
+    if not ctx["loaded"]:
+        return {"n": 0}
+    rng = random.Random(seed)
+    rel = ctx["pre"]["rel"]
+    rows = ctx["pre"]["rows"]
+    ts = [[r[0] * 86400 + D._sec(r[2]) for r in rr] for rr in rows]
+    nf = len(rel)
+    fits = [_ar1_fit(r) if len(r) > 2 else (0.0, 0.0, 0.0, 0.0) for r in rel]
+
+    def borrowed(perm):
+        """fund k is ranked by fund perm[k]'s REAL bubble at the same instant (latest quote at or before it)."""
+        out = []
+        for k in range(nf):
+            src, sts = rel[perm[k]], ts[perm[k]]
+            out.append([src[max(0, bisect.bisect_right(sts, x) - 1)] for x in ts[k]])
+        return out
+    null, t0 = [], time.time()
+    for k in range(n):
+        if time.time() - t0 > max_seconds and len(null) >= 20:
+            break
+        if nf >= 2:
+            perm = list(range(nf))
+            while any(perm[i] == i for i in range(nf)):          # a derangement: nobody keeps its own bubble
+                rng.shuffle(perm)
+            sur = borrowed(perm)
+        else:
+            sur = [_surrogate(f, len(r), rng) for f, r in zip(fits, rel)]
+        null.append(_hold_run(ctx, p, U["d0"], U["d1"], sur)["portfolio_return_pct"])
+        if progress is not None:
+            progress["done"], progress["total"] = k + 1, n
+    if not null:
+        return {"n": 0}
+    s = sorted(null)
+    mean = sum(s) / len(s)
+    return {"n": len(s), "real_pct": round(real_pct, 3), "null_mean_pct": round(mean, 3),
+            "null_p5_pct": round(_pctile(s, 0.05), 3), "null_p95_pct": round(_pctile(s, 0.95), 3),
+            "null_min_pct": round(s[0], 3), "null_max_pct": round(s[-1], 3),
+            "excess_vs_null_pct": round(real_pct - mean, 3),
+            "p_value": round((1 + sum(1 for x in s if x >= real_pct)) / (len(s) + 1), 4),
+            "null": [round(x, 2) for x in s]}
+
+
+def hold_blocks(U: dict, p: DiscountParams, blocks: int = 4, progress=None) -> dict:
+    dates = U["dates"]
+    if len(dates) < blocks * 5:
+        return {"insufficient": True}
+    edges = [dates[int(len(dates) * k / blocks)] for k in range(blocks)] + [dates[-1]]
+    rows = []
+    for k in range(blocks):
+        lo = edges[k]
+        hi = edges[k + 1] if k == blocks - 1 else dates[bisect.bisect_left(dates, edges[k + 1]) - 1]
+        s = _hold_run(_hold_ctx(U, lo, hi), p, lo, hi)
+        pas = _passive_span(U, lo, hi)
+        rows.append({"block": k + 1, "from": lo, "to": hi, "trades": s["trade_count"],
+                     "strategy_pct": s["portfolio_return_pct"], "passive_pct": pas,
+                     "excess_pct": round(s["portfolio_return_pct"] - pas, 3),
+                     "drawdown_pct": s.get("max_equity_drawdown_pct")})
+        if progress is not None:
+            progress["done"], progress["total"] = k + 1, blocks
+    ex = [r["excess_pct"] for r in rows]
+    return {"blocks": rows, "better_blocks": sum(1 for x in ex if x > 0), "n_blocks": len(rows),
+            "mean_excess_pct": round(sum(ex) / len(ex), 3) if ex else None}
+
+
+def hold_stress(U: dict, p: DiscountParams) -> list[dict]:
+    scen = [
+        ("پایه (فرض‌های فعلی)", p),
+        ("اسپرد ×۲", replace(p, half_spread_pct=p.half_spread_pct * 2)),
+        ("اسپرد ×۳", replace(p, half_spread_pct=p.half_spread_pct * 3)),
+        ("کارمزد +۵۰٪", replace(p, buy_fee=p.buy_fee * 1.5, sell_fee=p.sell_fee * 1.5)),
+        ("سقف حجم نصف" if p.participation_pct > 0 else "سقف حجم ۵٪ تا همان لحظه",
+         replace(p, participation_pct=(p.participation_pct / 2 if p.participation_pct > 0 else 5.0),
+                 participation_basis="sofar")),
+        ("تأخیر اجرا ۱ اسنپ‌شات", replace(p, exec_delay_snaps=max(1, p.exec_delay_snaps + 1))),
+        ("تأخیر اجرا ۲ اسنپ‌شات", replace(p, exec_delay_snaps=max(2, p.exec_delay_snaps + 2))),
+        ("اسپرد ×۲ و کارمزد +۵۰٪ و تأخیر ۱", replace(p, half_spread_pct=p.half_spread_pct * 2, buy_fee=p.buy_fee * 1.5,
+                                                     sell_fee=p.sell_fee * 1.5, exec_delay_snaps=max(1, p.exec_delay_snaps + 1))),
+    ]
+    ctx = _hold_ctx(U)
+    out = []
+    for name, pp in scen:
+        s = _hold_run(ctx, pp, U["d0"], U["d1"])
+        out.append({"name": name, "return_pct": s["portfolio_return_pct"], "final_capital": s["final_capital"],
+                    "trades": s["trade_count"], "win_rate": s["win_rate"],
+                    "drawdown_pct": s.get("max_equity_drawdown_pct")})
+    return out
+
+
+def verdict_hold(res: dict) -> dict:
+    pl, bl, st = res.get("placebo") or {}, res.get("blocks") or {}, res.get("stress") or []
+    pas = res.get("passive_pct")
+    findings = []
+    # ج — does ranking by the bubble add anything over random ranking?
+    if pl.get("n"):
+        pv, ex = pl["p_value"], pl["excess_vs_null_pct"]
+        lv = "ok" if (pv <= 0.05 and ex > 0) else ("warn" if (pv <= 0.15 and ex > 0) else "bad")
+        txt = (f"بازدهٔ واقعی {pl['real_pct']:+.2f}٪ در برابر میانگین {pl['n']} اجرای «رتبه‌بندی تصادفی» {pl['null_mean_pct']:+.2f}٪ "
+               f"(۹۰٪ آن‌ها بین {pl['null_p5_pct']:+.2f}٪ و {pl['null_p95_pct']:+.2f}٪)؛ p = {pv}.")
+        inf = (res.get("info") or {}).get("mean_reversion")
+        if inf:
+            txt += f" بازگشت حباب: نیمه‌عمر ≈ {inf.get('half_life_days')} روز، p = {inf.get('p_value')}."
+    else:
+        lv, txt = "na", "اجرای placebo ممکن نشد."
+    findings.append({"area": "ج", "title": "انتخاب بر اساس حباب در برابر انتخاب تصادفی", "level": lv, "text": txt})
+    # الف — beats simply holding the same funds, block by block?
+    if bl.get("n_blocks"):
+        nb, n, me = bl["better_blocks"], bl["n_blocks"], bl["mean_excess_pct"]
+        lv = "ok" if (nb >= max(3, n - 1) and me > 0) else ("warn" if me > 0 else "bad")
+        txt = (f"در {nb} از {n} بلوک زمانی از نگه‌داری سادهٔ همین صندوق‌ها بهتر بود؛ میانگین برتری هر بلوک {me:+.2f} نقطه"
+               + (f" (کل دوره: راهبرد {res['summary'].get('portfolio_return_pct', 0):+.2f}٪ در برابر پسیو {pas:+.2f}٪)." if pas is not None else "."))
+    else:
+        lv, txt = "na", "بازه برای تقسیم به بلوک کوتاه است."
+    findings.append({"area": "الف", "title": "پایداری در زمان در برابر پسیو", "level": lv, "text": txt})
+    # ب — survives harsher execution?
+    base = st[0]["return_pct"] if st else None
+    worst = min(st, key=lambda x: x["return_pct"]) if st else None
+    if base is not None:
+        lv = "ok" if (worst["return_pct"] > 0 and (pas is None or worst["return_pct"] >= pas)) else \
+             ("warn" if worst["return_pct"] > 0 else "bad")
+        txt = (f"بدترین سناریوی سخت‌گیرانه «{worst['name']}»: {worst['return_pct']:+.2f}٪ (پایه {base:+.2f}٪"
+               + (f"، پسیو {pas:+.2f}٪)." if pas is not None else ")."))
+    else:
+        lv, txt = "na", "—"
+    findings.append({"area": "ب", "title": "اجرا و هزینه", "level": lv, "text": txt})
+    lvl = {f["area"]: f["level"] for f in findings}
+    if lvl["ج"] == "bad":
+        head, prim = ("رتبه‌بندی صندوق‌ها با حباب از رتبه‌بندی تصادفی بهتر نیست: سود عمدتاً از «حضور در بازار» است، "
+                      "نه از انتخاب. تا وقتی این قرمز است، تنظیم پارامترها کمکی نمی‌کند."), "ج"
+    elif lvl["الف"] == "bad":
+        head, prim = ("انتخاب بر اساس حباب اطلاعات دارد ولی در زمان پایدار نیست: در بیشتر دوره‌ها از نگه‌داری ساده بهتر نبوده."), "الف"
+    elif lvl["ب"] == "bad":
+        head, prim = ("مزیت هست ولی با اجرای سخت‌گیرانه (اسپرد/کارمزد/تأخیر) از بین می‌رود."), "ب"
+    elif all(v in ("ok", "na") for v in lvl.values()):
+        head, prim = ("هر سه آزمون قابل‌قبول است: انتخاب با حباب از تصادف بهتر است، در بیشتر دوره‌ها از پسیو جلو است "
+                      "و به اجرای سخت‌گیرانه حساس نیست."), "ok"
+    else:
+        head, prim = ("نتیجه ترکیبی است؛ موارد زردرنگ را جداگانه بررسی کنید.", "mixed")
+    return {"headline": head, "primary": prim, "findings": findings}
+
+
+def run_validation_hold(U: dict, p: DiscountParams, n_perm: int, max_seconds: float, prog: dict, phase) -> dict:
+    phase("بک‌تست پایه (همیشه سرمایه‌گذاری)")
+    ctx = _hold_ctx(U)
+    accepted, summary, _curve = D._portfolio_summary([], p, U["d0"], U["d1"], fill=ctx)
+    trades = [asdict(t) for t in accepted]
+    res = {"mode": "hold", "funds": len(U["items"]), "period": [U["d0"], U["d1"]], "summary": summary,
+           "params": asdict(p), "passive_pct": _passive_span(U, None, None)}
+    phase("حسابرسی هزینه و تفکیک سود")
+    res["audit"] = audit_trades(trades, p)
+    phase("بازگشت حباب (پدیدهٔ پایه)")
+    res["info"] = info_tests(U, p, n_iter=min(n_perm, 300), max_seconds=min(max_seconds, 30), progress=prog)
+    phase("placebo: رتبه‌بندی تصادفی")
+    res["placebo"] = hold_placebo(U, p, summary["portfolio_return_pct"], n=max(30, min(n_perm, 300)),
+                                  max_seconds=max(60.0, max_seconds * 2), progress=prog)
+    phase("بلوک‌های زمانی در برابر پسیو")
+    res["blocks"] = hold_blocks(U, p, 4, prog)
+    phase("سخت‌گیری اجرا")
+    res["stress"] = hold_stress(U, p)
+    res["stability"] = stability(trades)
+    res["verdict"] = verdict_hold(res)
+    phase("پایان")
+    return res
+
+
+# --------------------------------------------------------------------------- #
 #  Orchestrator                                                                #
 # --------------------------------------------------------------------------- #
 
@@ -893,6 +1141,8 @@ def run_validation(db, cats, symbols, start, end, p: DiscountParams, n_perm: int
     U = load_universe(db, cats, symbols, start, end, p)
     if not U["items"]:
         return {"error": "برای صندوق‌های انتخاب‌شده داده‌ای در این بازه نیست."}
+    if p.fill_mode == "hold":                      # no entry/exit rules to test: validate the fund SELECTION instead
+        return run_validation_hold(U, p, n_perm, max_seconds, prog, phase)
     phase("بک‌تست پایه")
     raw = _sim_all(U, p)
     accepted, summary = _portfolio(raw, p, U["d0"], U["d1"])

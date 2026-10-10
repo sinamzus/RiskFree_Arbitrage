@@ -1173,6 +1173,9 @@ class _Parker:
         self.labels = [l["label"] for l in loaded]
         self.k_of = {lab: k for k, lab in enumerate(self.labels)}
         self.rel = pre["rel"]
+        # what candidates are RANKED by (best = lowest; switching compares it too). Normally the bubble itself;
+        # the validation placebo passes independent surrogate series here while eligibility stays on the real bubble.
+        self.rank = pre.get("rank") or self.rel
         self.crash = crash_all
         self.mr = [l.get("mr") for l in loaded]
         self.groups = pre["groups"]
@@ -1327,9 +1330,9 @@ class _Parker:
                   and not (mr_on and (self.mr[k] is None or self.mr[k][i] is None or self.mr[k][i] < p.mr_min_score))
                   and not (self.crash is not None and p.crash_drop_pct > 0 and self.crash[k][i] is not None
                            and self.crash[k][i] <= crash_thr))
-            self.cand[k] = (T, self.rel[k][i]) if ok else None
+            self.cand[k] = (T, self.rank[k][i]) if ok else None
         # entries: the lowest bubble first, only if it is also the best among recently seen candidates
-        for k, i in sorted(group, key=lambda g: self.rel[g[0]][g[1]]):
+        for k, i in sorted(group, key=lambda g: self.rank[g[0]][g[1]]):
             c = self.cand.get(k)
             if c is None or c[0] != T or k in self.parked or self.real_open.get(self.labels[k], 0) > 0:
                 continue
@@ -1392,10 +1395,10 @@ class _Parker:
                 continue
             if self.min_hold_s and T - self.parked[j]["ts"] < self.min_hold_s:
                 continue                      # bought too recently to be switched out
-            r = self.rel[j][self.cur_i[j]]
+            r = self.rank[j][self.cur_i[j]]
             if w_rel is None or r > w_rel:
                 worst, w_rel = j, r
-        if worst is None or self.rel[k][i] > w_rel - self.switch:
+        if worst is None or self.rank[k][i] > w_rel - self.switch:
             return cash, invested
         pw = self.parked[worst]
         if self.p.exec_delay_snaps > 0:
