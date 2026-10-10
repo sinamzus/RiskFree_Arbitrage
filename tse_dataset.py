@@ -169,6 +169,47 @@ def load_raw(db, symbol_id: int, start: int | None, end: int | None, grid_sec: i
     return rows, book
 
 
+def _book_states(book: list[list], secs: list[int]) -> list[tuple[list, list]]:
+    """Top-5 book (bids, asks) as it stood at each instant of ``secs`` (ascending seconds of the day)."""
+    bk = sorted(book, key=lambda r: (r[0], r[2]))
+    levels: dict[int, tuple] = {}
+    out, bi = [], 0
+    for s in secs:
+        while bi < len(bk) and _sec(bk[bi][1]) <= s:
+            r = bk[bi]
+            if 1 <= r[2] <= 5:
+                levels[r[2]] = (r[3], r[4], r[6], r[7])
+            bi += 1
+        bids = sorted(([p, v] for p, v, _a, _b in levels.values() if p > 0 and v > 0), key=lambda x: -x[0])
+        asks = sorted(([a, b] for _p, _v, a, b in levels.values() if a > 0 and b > 0), key=lambda x: x[0])
+        out.append((bids, asks))
+    return out
+
+
+def load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tuple[list[tuple], dict]:
+    """Signal from the NAV dump, execution against the TSE book: the dump's own rows (on the days that have TSE
+    data) and the real book as it stood at each dump snapshot instant. Snapshots with no two-sided book are dropped
+    (nothing could be executed there)."""
+    ensure_schema(db)
+    days = set(tse_days(db, symbol_id, start, end))
+    if not days:
+        return [], {}
+    raw = [r for r in db.get_nav_intraday(symbol_id, start, end) if r[0] in days]
+    by_day: dict[int, list] = {}
+    for r in raw:
+        by_day.setdefault(r[0], []).append(r)
+    rows, book = [], {}
+    for d in sorted(by_day):
+        bk = G.load_day(db, symbol_id, d, "book") or []
+        rr = by_day[d]
+        states = _book_states(bk, [_sec(r[1]) for r in rr])
+        for r, (bids, asks) in zip(rr, states):
+            if bids and asks:
+                rows.append(r)
+                book[(r[0], r[1])] = (bids, asks)
+    return rows, book
+
+
 # --------------------------------------------------------------------------- #
 #  Filling orders against the book                                             #
 # --------------------------------------------------------------------------- #

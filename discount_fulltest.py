@@ -324,7 +324,7 @@ WEB_MAP = {
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "category", "category"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
     "navmin": ("max_nav_age_min", "17", 17), "fillswitch": ("fill_switch_pct", "0.9", 0.9),
-    "ds": ("dataset", "tse", "tse"), "grid": ("tse_grid_sec", "120", 120),
+    "ds": ("dataset", "hybrid", "hybrid"), "grid": ("tse_grid_sec", "120", 120),
     "fillminhold": ("fill_min_hold_min", "150", 150), "fillage": ("fill_quote_age_min", "45", 45),
     "partbasis": ("participation_basis", "day", "day"), "delay": ("exec_delay_snaps", "3", 3),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
@@ -1126,6 +1126,23 @@ def test_tse_dataset(R: Results, db_path: str):
     r_dump = _run(db, replace(base, dataset="dump"))
     R.add(g, "دو دیتاست نتیجهٔ متفاوت می‌دهند و انتخاب دیتاست در نتیجه ثبت می‌شود",
           _sig(r_dump) != _sig(res) and r_dump["dataset"]["name"] == "dump", "")
+    # hybrid: the dump's snapshots decide, the TSE book at that very instant executes
+    rhy = _run(db, replace(base, dataset="hybrid"))
+    dump_keys = {f["symbol"]: {(r[0], r[1]): r for r in db.get_nav_intraday(f["symbol_id"])} for f in funds}
+    bad, n = [], 0
+    for t in rhy["trades"]:
+        r = dump_keys[t["symbol"]].get((t["entry_date"], t["entry_time"]))
+        if r is None:
+            bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: زمان ورود اسنپ‌شات NAV نیست")
+            continue
+        n += 1
+        last = r[4]
+        lo_, hi_ = last * (1 + 0.001), last * (1 + 0.003)              # the fake asks at that snapshot
+        if not (lo_ - 0.02 <= t["entry_price"] <= hi_ + 0.02):
+            bad.append(f"{t['symbol']}: خرید {t['entry_price']} خارج از صف فروش {lo_:.2f}–{hi_:.2f}")
+    R.add(g, "حالت «سیگنال از دادهٔ NAV، معامله با اردربوک»: ورود در زمان اسنپ‌شات NAV و با قیمت صف فروشِ همان لحظه",
+          not bad and n > 0 and rhy["dataset"]["name"] == "hybrid" and _sig(rhy) != _sig(r_dump),
+          "؛ ".join(bad[:3]) or f"{n} معامله")
     st = S.run_study(db, None, None, None, None, base=hp, space={"fill_switch_pct": [0.3, 0.8], "position_pct": [25, 50]},
                      n_samples=8, blocks=4, test_frac=0.3, max_seconds=60, min_trades=1)
     R.add(g, "بهینه‌ساز روی دیتاست TSE اجرا می‌شود", bool(st.get("best")) and st["base_params"]["dataset"] == "tse",

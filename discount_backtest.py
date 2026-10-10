@@ -135,7 +135,8 @@ class DiscountParams:
     participation_pct: float = 10.0     # max share of the volume we can trade; 0 = unlimited
     participation_basis: str = "sofar"  # sofar = volume traded UP TO the snapshot (known then) | day = the whole day's volume (look-ahead)
     dataset: str = "dump"               # dump = the NAV dump's snapshots (price = last, assumed spread) |
-                                        # tse = TSE trades + order book on a time grid (real bid/ask, depth)
+                                        # tse = TSE trades + order book on a time grid (real bid/ask, depth) |
+                                        # hybrid = signal from the dump's snapshots, execution against the TSE book
     tse_grid_sec: int = 300             # tse: sampling step of the book / tape (seconds)
     exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
@@ -250,6 +251,9 @@ def _raw_for(db, sid: int, start: int | None, end: int | None, p: "DiscountParam
     if p.dataset == "tse":
         import tse_dataset as TD
         return TD.load_raw(db, sid, start, end, p.tse_grid_sec)
+    if p.dataset == "hybrid":
+        import tse_dataset as TD
+        return TD.load_hybrid(db, sid, start, end)
     return db.get_nav_intraday(sid, start, end), None
 
 
@@ -292,7 +296,7 @@ def _best(book, d: int, t: int, side: int, default: float) -> float:
 def dataset_dates(db, sids: list[int], start: int | None, end: int | None, p: "DiscountParams") -> list[int]:
     """Trading days of the backtest period: the NAV dump's days, or — for the TSE dataset — the days on which TSE
     data of these funds was collected (so the period, the passive benchmark and the exposure use the same days)."""
-    if p.dataset == "tse":
+    if p.dataset in ("tse", "hybrid"):
         import tse_dataset as TD
         return TD.tse_dates(db, sids, start, end)
     return db.get_nav_intraday_dates(start, end)
