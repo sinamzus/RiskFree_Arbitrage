@@ -224,7 +224,12 @@ def attribute_trades(trades: list[dict], p, initial_capital: float | None = None
         buy, sell = float(t["buy_notional"]), float(t["sell_notional"])
         nav_e, nav_x = float(t.get("nav_entry") or 0), float(t.get("nav_exit") or 0)
         nav_pnl = buy * (nav_x / nav_e - 1.0) if nav_e > 0 and nav_x > 0 else 0.0
-        spread = buy * hs / (1 + hs) + sell * hs / (1 - hs)
+        si, so = t.get("spread_in"), t.get("spread_out")
+        if si is not None and so is not None:
+            # what was paid over / received under the mid at the fill (assumed spread, or the real book + its depth)
+            spread = buy * si + sell * so
+        else:
+            spread = buy * hs / (1 + hs) + sell * hs / (1 - hs)
         fees = float(t["fees"])
         net = float(t["net_pnl"])
         bubble = net - nav_pnl + spread + fees

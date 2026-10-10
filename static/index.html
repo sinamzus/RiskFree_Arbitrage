@@ -2392,6 +2392,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div class="bbt-group">
       <div class="bbt-field" title="اختیاری: فقط همین نمادها (با کاما). نماد بی‌نام را با #شناسه یا خود شناسه بنویسید، مثل 2276. اگر پر باشد، انتخاب دسته و صندوق‌های بالا نادیده گرفته می‌شود."><label>نمادهای مشخص (اختیاری)</label>
         <input id="disc-symbols" type="text" placeholder="مثلاً: کمند, #2276" style="width:200px"></div>
+      <div class="bbt-field" title="بک‌تست روی کدام داده؟ «دادهٔ لحظه‌ای NAV»: اسنپ‌شات‌های فایل NAV؛ قیمت = آخرین معامله و اسپرد فرضی. «TSE: تیک و اردربوک»: معاملات و اردربوک واقعی بورس (از «📥 دادهٔ TSE»)؛ خرید و فروش با قیمت واقعی صف‌ها و محدود به عمق صف؛ NAV همچنان از فایل NAV. فقط روزهایی که دادهٔ TSE جمع شده استفاده می‌شوند."><label>دیتاست بک‌تست</label>
+        <select id="disc-dataset" style="width:190px" onchange="document.getElementById('disc-gridf').style.display = this.value === 'tse' ? '' : 'none'">
+          <option value="dump" selected>دادهٔ لحظه‌ای NAV (فایل)</option>
+          <option value="tse">TSE: تیک و اردربوک</option></select></div>
+      <div class="bbt-field" id="disc-gridf" style="display:none" title="فقط دیتاست TSE: اردربوک و معاملات هر چند ثانیه یک بار نمونه‌برداری شوند. کوچک‌تر = دقیق‌تر ولی کندتر (به‌خصوص برای بهینه‌سازی). بار اول برای هر روز ساخته و ذخیره می‌شود."><label>شبکهٔ زمانی TSE</label>
+        <select id="disc-grid" style="width:110px"><option value="60">۱ دقیقه</option><option value="120">۲ دقیقه</option><option value="300" selected>۵ دقیقه</option><option value="600">۱۰ دقیقه</option><option value="900">۱۵ دقیقه</option></select></div>
       <div class="bbt-field" title="تاریخ شروع (شمسی) — خالی = از اولین داده"><label>از تاریخ</label>
         <input id="disc-start" type="text" readonly placeholder="از ابتدای داده" onclick="jpOpen(this)" style="width:130px;cursor:pointer"></div>
       <div class="bbt-field" title="تاریخ پایان (شمسی، شامل همان روز) — خالی = تا آخرین داده"><label>تا تاریخ</label>
@@ -6705,7 +6711,7 @@ function discParams() {
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'), partbasis: v('disc-partbasis'), delay: v('disc-delay'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
-    navage: v('disc-navage'), navmin: v('disc-navmin'), smode: v('disc-smode'), sstart: v('disc-sstart'), send: v('disc-send'),
+    navage: v('disc-navage'), navmin: v('disc-navmin'), ds: v('disc-dataset'), grid: v('disc-grid'), smode: v('disc-smode'), sstart: v('disc-sstart'), send: v('disc-send'),
     fresh: document.getElementById('disc-fresh').checked ? '1' : '0',
   };
   Object.keys(q).forEach(k => { if (q[k] === '' || q[k] == null) delete q[k]; });
@@ -6988,8 +6994,12 @@ async function discBacktest() {
   if (res.error) { showError('خطا: ' + res.error); return; }
   const tab = discNewTab('backtest', 'بک‌تست');
   renderDiscBacktest(res, p);
-  const sm = res.summary || {};
-  discTabSet(tab, `بک‌تست · ${sm.portfolio_return_pct != null ? (sm.portfolio_return_pct >= 0 ? '+' : '') + sm.portfolio_return_pct + '%' : ''} · ${sm.trade_count ?? 0} معامله`, false);
+  const sm = res.summary || {}, dsi = res.dataset || {};
+  const dsTxt = dsi.name === 'tse' ? 'TSE' : 'NAV';
+  const cardsEl = document.getElementById('disc-cards');
+  if (cardsEl) cardsEl.insertAdjacentHTML('afterbegin', `<div class="dv-note" style="font-size:11px;color:var(--sub)" title="دادهٔ زیر این بک‌تست">دیتاست: <b>${dsi.name === 'tse'
+    ? `TSE: تیک و اردربوک (شبکهٔ ${discLtr(Math.round((dsi.grid_sec || 0) / 60 * 10) / 10)} دقیقه؛ خرید و فروش با قیمت واقعی صف‌ها)` : 'دادهٔ لحظه‌ای NAV (قیمت آخرین معامله + اسپرد فرضی)'}</b> · ${discLtr(dsi.days || 0)} روز معاملاتی${dsi.first ? ` از ${gregIntToJalaliStr(dsi.first)} تا ${gregIntToJalaliStr(dsi.last)}` : ''}</div>`);
+  discTabSet(tab, `بک‌تست ${dsTxt} · ${sm.portfolio_return_pct != null ? (sm.portfolio_return_pct >= 0 ? '+' : '') + sm.portfolio_return_pct + '%' : ''} · ${sm.trade_count ?? 0} معامله`, false);
   window._discLastRes = res;
 }
 
@@ -7343,6 +7353,9 @@ const DISC_TIP_OPTS = [
   [/^قیمت$/, 'حد ضرر کلاسیک: افت درصدی نسبت به قیمت خرید.'],
   [/^(بله|خیر)$/, 'مقدار ثابتِ بله/خیر برای این پارامتر.'],
   [/^بهترین صندوق$/, 'نقدِ بی‌کار در صندوقی با کمترین حباب نسبت به معمولِ خودش پارک می‌شود.'],
+  [/^دادهٔ لحظه‌ای NAV/, 'اسنپ‌شات‌های فایل NAV: قیمت = آخرین معامله، اسپرد فرضی، بدون اردربوک.'],
+  [/^TSE: تیک و اردربوک/, 'دادهٔ واقعی بورس: خرید و فروش با قیمت صف‌ها و محدود به عمق صف؛ NAV از فایل NAV.'],
+  [/^[۰-۹]+ دقیقه$/, 'گام نمونه‌برداری اردربوک و معاملات در دیتاست TSE.'],
   [/^فرم:/, 'مقدار ثابت خالی است: این پارامتر روی مقدار فعلیِ فرم (همین‌جا نشان داده شده) می‌ماند.'],
   [/^همیشه سرمایه‌گذاری/, 'همیشه سرمایه‌گذاری: هیچ سیگنال فروش، زمان یا حد ضرری نیست؛ صندوق فقط وقتی فروخته می‌شود که کاندیدای بهتری پیدا شود (و نقد نباشد).'],
   [/^(هر صندوق|شاخص|هر دو)$/, 'حالت ورود: هر صندوق جداگانه / شاخص حبابِ همهٔ صندوق‌ها / هر دو.'],

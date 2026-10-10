@@ -117,8 +117,8 @@ def load_universe(db, cats, symbols, start, end, p: DiscountParams) -> dict:
             d["label"] = label
             loaded.append(d)
     D._compute_mr(db, loaded, p, start, end)
-    items = [{"label": d["label"], "rows": d["rows"], "day_vol": d["day_vol"], "mr": d.get("mr")}
-             for d in loaded]
+    items = [{"label": d["label"], "rows": d["rows"], "day_vol": d["day_vol"], "mr": d.get("mr"),
+              "book": d.get("book")} for d in loaded]
     if p.crash_drop_pct > 0 and loaded:
         cr = D._crash_series([d["rows"] for d in loaded], D._crash_groups(db, loaded, p), p)
         for it, c in zip(items, cr):
@@ -129,7 +129,7 @@ def load_universe(db, cats, symbols, start, end, p: DiscountParams) -> dict:
             it["idx"] = ix
     for it in items:
         _decorate(it)
-    dates = db.get_nav_intraday_dates(start, end)
+    dates = D.dataset_dates(db, [d["sid"] for d in loaded], start, end, p)
     return {"items": items, "dates": dates,
             "d0": dates[0] if dates else (start or 0),
             "d1": dates[-1] if dates else (end or 0)}
@@ -170,7 +170,7 @@ def _sim_all(U: dict, p: DiscountParams, lo: int | None = None, hi: int | None =
             if idx is not None:
                 o2 = int(n * (0.1 + 0.8 * rng.random()))
                 idx = idx[o2:] + idx[:o2]
-        trades.extend(D._simulate(it["label"], rows, it["day_vol"], p, idx, rel, mr, crash))
+        trades.extend(D._simulate(it["label"], rows, it["day_vol"], p, idx, rel, mr, crash, book=it.get("book")))
     return trades
 
 
@@ -898,7 +898,7 @@ def _hold_ctx(U: dict, lo: int | None = None, hi: int | None = None) -> dict:
         if b - a < 2:
             continue
         items.append({"label": it["label"], "rows": it["rows"][a:b], "day_vol": it["day_vol"],
-                      "mr": it["mr"][a:b] if it.get("mr") is not None else None})
+                      "mr": it["mr"][a:b] if it.get("mr") is not None else None, "book": it.get("book")})
         crash.append(it["crash"][a:b] if it.get("crash") is not None else None)
     crash_ok = crash if crash and all(c is not None for c in crash) else None
     return {"loaded": items, "crash": crash_ok, "pre": D._Parker.prepare(items) if items else None}

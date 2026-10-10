@@ -25,6 +25,7 @@ Run:  python tools/run_tests.py            (add --ui for the browser part)
 """
 from __future__ import annotations
 
+import bisect
 import datetime as dt
 import hashlib
 import json
@@ -323,6 +324,7 @@ WEB_MAP = {
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "category", "category"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
     "navmin": ("max_nav_age_min", "17", 17), "fillswitch": ("fill_switch_pct", "0.9", 0.9),
+    "ds": ("dataset", "tse", "tse"), "grid": ("tse_grid_sec", "120", 120),
     "fillminhold": ("fill_min_hold_min", "150", 150), "fillage": ("fill_quote_age_min", "45", 45),
     "partbasis": ("participation_basis", "day", "day"), "delay": ("exec_delay_snaps", "3", 3),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
@@ -397,7 +399,7 @@ UI_ID = {  # query key -> element id
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
-    "navmin": "disc-navmin", "fillswitch": "disc-fillswitch", "fillminhold": "disc-fillminhold", "fillage": "disc-fillage", "partbasis": "disc-partbasis", "delay": "disc-delay", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
+    "navmin": "disc-navmin", "ds": "disc-dataset", "grid": "disc-grid", "fillswitch": "disc-fillswitch", "fillminhold": "disc-fillminhold", "fillage": "disc-fillage", "partbasis": "disc-partbasis", "delay": "disc-delay", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
 }
 
 
@@ -1016,6 +1018,125 @@ def test_tse_collect(R: Results, db_path: str):
                 pass
 
 
+def _fake_tse_from_dump(db, n_days: int | None = None, half: float = 0.001):
+    """Write synthetic TSE data for the gold funds, consistent with the dump: at every dump snapshot where the
+    volume grew a trade at its price, and a 3-level book around it (bid_k / ask_k = price·(1 ∓ k·half),
+    depth ≈ 1e9 rial per level). Book events are stamped 1 s before the snapshot so they are in place at it."""
+    import tse_gold as G
+    G.ensure_schema(db)
+    out = {}
+    for f in G.gold_funds(db):
+        sid = f["symbol_id"]
+        G.set_ins(db, sid, f["symbol"], "111" + f["symbol"], "fake", "manual")
+        days = G.dump_dates(db, sid)[: n_days or None]
+        raw = db.get_nav_intraday(sid, days[0], days[-1])
+        by_day = {}
+        for r in raw:
+            by_day.setdefault(r[0], []).append(r)
+        for d in days:
+            trades, book, prev, seq, ref = [], [], 0, 0, 0
+            for (_d, t, _nav, _nd, last, vol, _nt) in by_day.get(d, []):
+                vol = vol or 0
+                if not last or last <= 0:
+                    continue
+                s = (t // 10000) * 3600 + (t // 100 % 100) * 60 + t % 100 - 1
+                tb = (s // 3600) * 10000 + (s // 60 % 60) * 100 + s % 60
+                for k in (1, 2, 3):
+                    ref += 1
+                    q = int(1e9 / last) * k
+                    book.append([ref, tb, k, round(last * (1 - k * half), 4), q, 1, round(last * (1 + k * half), 4), q, 1])
+                if vol > prev:
+                    seq += 1
+                    trades.append([seq, t, last, vol - prev, 0])
+                prev = max(prev, vol)
+            G.store_day(db, sid, d, "trades", "111" + f["symbol"], trades)
+            G.store_day(db, sid, d, "book", "111" + f["symbol"], book)
+        out[sid] = days
+    return out
+
+
+def test_tse_dataset(R: Results, db_path: str):
+    """Backtest on the TSE dataset: grid building, NAV join without look-ahead, real-book fills, period = TSE days."""
+    import shutil as _sh
+    import tse_dataset as TD
+    import tse_gold as G
+    g = "بک‌تست روی دادهٔ TSE (تیک و اردربوک)"
+    p2 = db_path + ".tseds.db"
+    _sh.copyfile(db_path, p2)
+    db = _db(p2)
+    days = _fake_tse_from_dump(db, n_days=90)
+    funds = G.gold_funds(db)
+    sid = funds[0]["symbol_id"]
+    raw, book = TD.load_raw(db, sid, None, None, 300)
+    dump = db.get_nav_intraday(sid)
+    dkey = [(r[0], r[1]) for r in dump]
+    bad = []
+    for (d, t, nav, nav_d, mid, cum, nav_t) in raw[::7]:
+        j = bisect.bisect_right(dkey, (d, t)) - 1
+        if j < 0 or dump[j][2] != nav:
+            bad.append(f"NAV {d} {t}")
+        bids, asks = book[(d, t)]
+        if abs(mid - (bids[0][0] + asks[0][0]) / 2) > 1e-6 * mid:
+            bad.append(f"mid {d} {t}")
+        # the book at t = the one built at the dump snapshot at or before t (no look-ahead)
+        k = bisect.bisect_right(dkey, (d, t)) - 1
+        if abs(mid - dump[k][4]) > 1e-6 * mid and dump[k][0] == d:
+            bad.append(f"book≠snapshot {d} {t}")
+    R.add(g, "ساخت شبکه: NAV = آخرین اسنپ‌شاتِ NAV تا همان لحظه، mid = میانهٔ بهترین صف‌ها، بدون نگاه به آینده",
+          not bad and len(raw) > 100, "؛ ".join(bad[:3]) or f"{len(raw)} ردیف")
+    R.add(g, "فقط روزهای دارای دادهٔ TSE استفاده می‌شوند", sorted({r[0] for r in raw}) == days[sid], "")
+    base = _base(entry_discount_pct=0.3, dataset="tse", tse_grid_sec=300, half_spread_pct=0.05)
+    res = _run(db, base)
+    s = res["summary"]
+    lv = {}
+    for f in funds:
+        _r, bk = TD.load_raw(db, f["symbol_id"], None, None, 300)
+        lv[f["symbol"]] = bk
+    bad, n = [], 0
+    for t in res["trades"]:
+        b = lv[t["symbol"]].get((t["entry_date"], t["entry_time"]))
+        x = lv[t["symbol"]].get((t["exit_date"], t["exit_time"]))
+        if not b or not x:
+            continue
+        n += 1
+        if not (b[1][0][0] - 0.01 <= t["entry_price"] <= b[1][-1][0] + 0.01):
+            bad.append(f"خرید {t['symbol']} {t['entry_price']} خارج از صف فروش {b[1][0][0]}–{b[1][-1][0]}")
+        if not (x[0][-1][0] - 0.01 <= t["exit_price"] <= x[0][0][0] + 0.01):
+            bad.append(f"فروش {t['symbol']} {t['exit_price']} خارج از صف خرید")
+        if t["spread_in"] is None or t["spread_in"] < 0.0009:
+            bad.append(f"spread_in {t['spread_in']}")
+    R.add(g, "خرید با قیمت صف فروش و فروش با قیمت صف خرید (نه اسپرد فرضی)؛ هزینهٔ بالای میانه ثبت می‌شود",
+          not bad and n > 0 and res["dataset"]["name"] == "tse", "؛ ".join(bad[:3]) or f"{n} معامله")
+    R.add(g, "دورهٔ بک‌تست = روزهای دادهٔ TSE", res["period"][0] >= min(min(v) for v in days.values())
+          and res["period"][1] <= max(max(v) for v in days.values()) and res["dataset"]["days"] <= 90, str(res["period"]))
+    T = res["attribution"]["totals"]
+    R.add(g, "تفکیک سود با قیمت‌های واقعی هم دقیقاً جمع می‌شود", abs(T["nav"] + T["bubble"] - T["spread"] - T["fees"] - T["net"])
+          <= max(50.0, 2.0 * len(res["trades"])), str(T))
+    hp = _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=25, dataset="tse", tse_grid_sec=300)
+    rh = _run(db, hp)
+    lo, cash_final = _cash_path(rh, hp)
+    bad = []
+    for t in rh["trades"]:
+        b = lv[t["symbol"]].get((t["entry_date"], t["entry_time"]))
+        if b and t["volume"] > sum(v for _p, v in b[1]) + 1:
+            bad.append(f"{t['symbol']}: خرید {t['volume']} > عمق صف {sum(v for _p, v in b[1])}")
+    R.add(g, "حالت «همیشه سرمایه‌گذاری» روی TSE: هیچ خریدی از عمق صف بزرگ‌تر نیست، نقد منفی نمی‌شود",
+          not bad and lo > -1e-6 * hp.initial_capital - 1 and abs(cash_final - rh["summary"]["final_capital"]) < max(50, 1e-6 * hp.initial_capital)
+          and len(rh["trades"]) > 0, "؛ ".join(bad[:3]) or f"{len(rh['trades'])} معامله")
+    r_dump = _run(db, replace(base, dataset="dump"))
+    R.add(g, "دو دیتاست نتیجهٔ متفاوت می‌دهند و انتخاب دیتاست در نتیجه ثبت می‌شود",
+          _sig(r_dump) != _sig(res) and r_dump["dataset"]["name"] == "dump", "")
+    st = S.run_study(db, None, None, None, None, base=hp, space={"fill_switch_pct": [0.3, 0.8], "position_pct": [25, 50]},
+                     n_samples=8, blocks=4, test_frac=0.3, max_seconds=60, min_trades=1)
+    R.add(g, "بهینه‌ساز روی دیتاست TSE اجرا می‌شود", bool(st.get("best")) and st["base_params"]["dataset"] == "tse",
+          str(st.get("error") or st.get("setup", {}).get("n_random")))
+    for ext in ("", "-wal", "-shm"):
+        try:
+            os.remove(p2 + ext)
+        except OSError:
+            pass
+
+
 def test_validation_hold(R: Results, db):
     """Validation of the always-invested mode: the placebo (rank by ANOTHER fund's bubble) must be calibrated —
     rarely 'significant' where bubbles carry no information, always where they mean-revert."""
@@ -1456,6 +1577,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
+             ("بک‌تست روی دادهٔ TSE", lambda: test_tse_dataset(R, path)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
              ("ارسال نتایج برای تحلیل", lambda: test_export(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),

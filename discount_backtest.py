@@ -134,6 +134,9 @@ class DiscountParams:
     half_spread_pct: float = 0.02       # assumed half bid-ask spread (each side)
     participation_pct: float = 10.0     # max share of the volume we can trade; 0 = unlimited
     participation_basis: str = "sofar"  # sofar = volume traded UP TO the snapshot (known then) | day = the whole day's volume (look-ahead)
+    dataset: str = "dump"               # dump = the NAV dump's snapshots (price = last, assumed spread) |
+                                        # tse = TSE trades + order book on a time grid (real bid/ask, depth)
+    tse_grid_sec: int = 300             # tse: sampling step of the book / tape (seconds)
     exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
     max_nav_age_days: int = 3           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
@@ -179,6 +182,8 @@ class Trade:
     idx_entry_pct: float | None = None   # bubble index at entry / exit (None = undefined)
     idx_exit_pct: float | None = None
     origin: str = "signal"               # "signal" = normal entry rule | "fill" = idle-capital parking
+    spread_in: float | None = None       # share of the buy notional paid OVER the mid (half spread + book impact)
+    spread_out: float | None = None      # share of the sell notional received UNDER the mid
 
 
 # --------------------------------------------------------------------------- #
@@ -240,9 +245,62 @@ def _warmup_start(start: int | None, p: DiscountParams) -> int | None:
     return d.year * 10000 + d.month * 100 + d.day
 
 
+def _raw_for(db, sid: int, start: int | None, end: int | None, p: "DiscountParams"):
+    """(raw rows shaped like Database.get_nav_intraday, order book or None) for the chosen dataset."""
+    if p.dataset == "tse":
+        import tse_dataset as TD
+        return TD.load_raw(db, sid, start, end, p.tse_grid_sec)
+    return db.get_nav_intraday(sid, start, end), None
+
+
+def _book_side(book, d: int, t: int, side: int):
+    if not book:
+        return None
+    b = book.get((d, t))
+    return b[side] if b and b[side] else None
+
+
+def _buy_exec(book, d: int, t: int, units: float, last: float, hs: float) -> tuple[float, float]:
+    """(units bought, average price): walks the real asks when an order book is known (never beyond the visible
+    depth), else last·(1+half spread)."""
+    asks = _book_side(book, d, t, 1)
+    if asks is None:
+        return units, last * (1 + hs)
+    import tse_dataset as TD
+    got, avg, _w = TD.fill(asks, units)
+    return got, avg
+
+
+def _sell_exec(book, d: int, t: int, units: float, last: float, hs: float) -> tuple[float, float]:
+    """(units sold, average price): walks the real bids; a position must stay closable, so what exceeds the visible
+    depth is assumed to fill at the worst visible bid. Without a book: last·(1−half spread)."""
+    bids = _book_side(book, d, t, 0)
+    if bids is None:
+        return units, last * (1 - hs)
+    import tse_dataset as TD
+    got, avg, worst = TD.fill(bids, units)
+    if got < units:
+        avg = (avg * got + worst * (units - got)) / units
+    return units, avg
+
+
+def _best(book, d: int, t: int, side: int, default: float) -> float:
+    lv = _book_side(book, d, t, side)
+    return lv[0][0] if lv else default
+
+
+def dataset_dates(db, sids: list[int], start: int | None, end: int | None, p: "DiscountParams") -> list[int]:
+    """Trading days of the backtest period: the NAV dump's days, or — for the TSE dataset — the days on which TSE
+    data of these funds was collected (so the period, the passive benchmark and the exposure use the same days)."""
+    if p.dataset == "tse":
+        import tse_dataset as TD
+        return TD.tse_dates(db, sids, start, end)
+    return db.get_nav_intraday_dates(start, end)
+
+
 def _load_ex(db, sid: int, start: int | None, end: int | None, p: DiscountParams) -> dict:
     """Like _load but also returns the warm-up rows and the offset of the first kept row."""
-    raw_all = db.get_nav_intraday(sid, _warmup_start(start, p), end)
+    raw_all, book = _raw_for(db, sid, _warmup_start(start, p), end, p)
     pstats: dict = {}
     rows_all, day_vol = _prep(raw_all, p, pstats, start or 0)
     if start:
@@ -251,7 +309,7 @@ def _load_ex(db, sid: int, start: int | None, end: int | None, p: DiscountParams
     else:
         off, raw = 0, raw_all
     return {"sid": sid, "raw": raw, "rows": rows_all[off:], "day_vol": day_vol,
-            "rows_all": rows_all, "off": off, "prep_stats": pstats}
+            "rows_all": rows_all, "off": off, "prep_stats": pstats, "book": book}
 
 
 def _load(db, sid: int, start: int | None, end: int | None, p: DiscountParams):
@@ -391,7 +449,7 @@ def _compute_mr(db, loaded: list[dict], p: DiscountParams, start, end) -> None:
         for c in {cats_of.get(l["sid"], "other") for l in loaded}:
             rows_by = []
             for sid, _lab in _universe(db, [c], None):
-                raw_all = db.get_nav_intraday(sid, _warmup_start(start, p), end)
+                raw_all = _raw_for(db, sid, _warmup_start(start, p), end, p)[0]
                 rr, _ = _prep(raw_all, replace(p, baseline_days=0))
                 if rr:
                     rows_by.append(rr)
@@ -677,7 +735,7 @@ def _crash_groups(db, loaded: list[dict], p: DiscountParams) -> list:
 def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
               idx: list | None = None, rel: list | None = None,
               mr: list | None = None, crash: list | None = None,
-              diag: dict | None = None) -> list[Trade]:
+              diag: dict | None = None, book: dict | None = None) -> list[Trade]:
     """``diag`` (optional dict) counts, for every snapshot at which the fund was flat, WHY no position was
     opened (stale price, same-day block, last snapshot, mean-reversion filter, market-fall filter, no signal,
     no liquidity) — used to explain idle capital.
@@ -733,8 +791,10 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                     return j
         return None
 
+    e_mid = 0.0
+
     def _close(units: int, px: float, d: int, t: int, nav: float, fair: float, reason: str,
-               x_idx: float | None = None):
+               x_idx: float | None = None, x_mid: float = 0.0):
         nonlocal pos, cost
         frac = units / pos
         cost_part = cost * frac
@@ -759,7 +819,9 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             buy_notional=round(cost_part, 0), sell_notional=round(sell_notional, 0),
             fees=round(buy_fee + sell_fee, 0), net_pnl=round(net, 0),
             net_pct=round(net / invested * 100, 4) if invested else 0,
-            hold_days=max(0, _ord(d) - e_ord), exit_reason=reason))
+            hold_days=max(0, _ord(d) - e_ord), exit_reason=reason,
+            spread_in=(1 - e_mid * units / cost_part) if e_mid > 0 and cost_part > 0 else None,
+            spread_out=(x_mid / px - 1) if x_mid > 0 and px > 0 else None))
         pos -= units
         cost -= cost_part
 
@@ -811,7 +873,15 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             if j != i:
                 o, d, t, nav, last, _fr, nav_raw = rows[j]
             ask = last * (1 + hs)
-            units = min(int(_SIM_CAPITAL // ask), _cap(d, t))
+            if book:
+                # real order book: buy against the asks; the order is sized as the replay will roughly size it
+                # (position_pct of the initial capital) so the average price reflects the depth actually eaten
+                a1 = _best(book, d, t, 1, ask)
+                want = min(p.position_pct / 100.0 * p.initial_capital / a1, _cap(d, t))
+                got, ask = _buy_exec(book, d, t, want, last, hs)
+                units = int(got)
+            else:
+                units = min(int(_SIM_CAPITAL // ask), _cap(d, t))
             if units <= 0:
                 if diag is not None:
                     diag["liquidity"] = diag.get("liquidity", 0) + 1
@@ -819,13 +889,14 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             if diag is not None:
                 diag["signal"] = diag.get("signal", 0) + 1
             skip_until = j + 1                         # (the fill row itself is not re-evaluated)
+            e_mid = last
             pos, cost = units, units * ask
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
             e_fair, e_rel = nav, r
             e_idx = ix
             e_mr = mr[i] if mr_on else None
         else:
-            bid = last * (1 - hs)
+            bid = _best(book, d, t, 0, last * (1 - hs))
             reason = None
             if p.max_hold_days > 0 and o - e_ord >= p.max_hold_days:
                 reason = "time"
@@ -844,19 +915,19 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                     continue                          # no fill today: still holding, try again on the next snapshot
                 if j != i:
                     o, d, t, nav, last, _fr, nav_raw = rows[j]
-                    bid = last * (1 - hs)
                 units = min(pos, _cap(d, t))
                 if units > 0:
+                    _u, bid = _sell_exec(book, d, t, units, last, hs)
                     _close(units, bid, d, t, nav_raw, nav, reason,
-                           idx[j] if idx is not None else None)
+                           idx[j] if idx is not None else None, last)
                     skip_until = j + 1
                     if pos == 0:
                         blocked_date = d
 
     if pos > 0:                       # data ended while holding
         o, d, t, nav, last, _, nav_raw = rows[-1]
-        _close(pos, last * (1 - hs), d, t, nav_raw, nav, "end",
-               idx[-1] if idx is not None else None)
+        _close(pos, _sell_exec(book, d, t, pos, last, hs)[1], d, t, nav_raw, nav, "end",
+               idx[-1] if idx is not None else None, last)
     return trades
 
 
@@ -1171,6 +1242,7 @@ class _Parker:
         pre = pre or _Parker.prepare(loaded)
         self.rows = pre["rows"]
         self.labels = [l["label"] for l in loaded]
+        self.book = [l.get("book") for l in loaded]         # real order book per fund (TSE dataset) or None
         self.k_of = {lab: k for k, lab in enumerate(self.labels)}
         self.rel = pre["rel"]
         # what candidates are RANKED by (best = lowest; switching compares it too). Normally the bubble itself;
@@ -1236,10 +1308,10 @@ class _Parker:
         hs, bf, sf = p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee
         pos = self.parked[k]
         o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
+        _u, px = _sell_exec(self.book[k], d, t, units, last, hs)      # the quote's own book (before re-dating)
         if at_ts is not None:
             d, t = _ts_to_dt(at_ts)
             o = _ord(d)
-        px = last * (1 - hs)
         frac = units / pos["units"]
         cost_part = pos["cost"] * frac
         sell_n = units * px
@@ -1257,7 +1329,9 @@ class _Parker:
             mr_score=pos["mr"], buy_notional=round(cost_part, 0), sell_notional=round(sell_n, 0),
             fees=round(bfee + sfee, 0), net_pnl=round(net, 0),
             net_pct=round(net / (cost_part + bfee) * 100, 4) if cost_part + bfee else 0,
-            hold_days=max(0, _ord(d) - pos["o"]), exit_reason=reason, origin="fill"))
+            hold_days=max(0, _ord(d) - pos["o"]), exit_reason=reason, origin="fill",
+            spread_in=(1 - pos["mid"] / pos["ask"]) if pos.get("mid") and pos["ask"] > 0 else None,
+            spread_out=(last / px - 1) if last > 0 and px > 0 else None))
         pos["units"] -= units
         pos["cost"] -= cost_part
         if pos["units"] <= 1e-9:
@@ -1353,7 +1427,10 @@ class _Parker:
             if self.hold and slot > 0 and amount < 0.25 * slot:
                 # no cash: sell the least attractive holding, but only if this candidate is clearly better —
                 # and only if the candidate can then actually be bought (volume cap), or we would sell for nothing
-                if self._cap(k, d, t) * last * (1 + hs) * (1 + bf) < 0.25 * slot:
+                cap_pre = self._cap(k, d, t)
+                if self.book[k] is not None:
+                    cap_pre = min(cap_pre, sum(v for _p, v in (_book_side(self.book[k], d, t, 1) or [])))
+                if cap_pre * last * (1 + hs) * (1 + bf) < 0.25 * slot:
                     self.sz["skip_cap"] += 1
                     continue
                 cash, invested = self._switch_out(k, i, T, cash, invested)
@@ -1370,6 +1447,14 @@ class _Parker:
             ask = last * (1 + hs)
             cap_u = self._cap(k, d, t)
             units = min(amount / (ask * (1 + bf)), cap_u)
+            if self.book[k] is not None:
+                # real book: walk the asks (never beyond the visible depth); keep the cost within the cash
+                a1 = _best(self.book[k], d, t, 1, ask)
+                units, ask = _buy_exec(self.book[k], d, t, min(amount / (a1 * (1 + bf)), cap_u), last, hs)
+                if units > 0 and units * ask * (1 + bf) > amount:
+                    units, ask = _buy_exec(self.book[k], d, t, amount / (ask * (1 + bf)), last, hs)
+                asks = _book_side(self.book[k], d, t, 1) or []
+                cap_u = min(cap_u, sum(v for _p, v in asks))             # the visible depth also limits the size
             if units <= 0 or units * ask * (1 + bf) < 0.25 * slot:
                 continue
             ratio = min(1.0, units * ask * (1 + bf) / slot)
@@ -1381,7 +1466,7 @@ class _Parker:
                 self.sz["liq" if cap_u * ask * (1 + bf) < amount * 0.999 else "cash"] += 1
             mr_score = round(self.mr[k][i], 1) if mr_on and self.mr[k] and self.mr[k][i] is not None else None
             self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": t_in,
-                              "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score}
+                              "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score, "mid": last}
             cash -= units * ask * (1 + bf)
             invested += units * ask
         return cash, invested
@@ -1767,14 +1852,14 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         idx, curve_b, share = _bubble_index([l["rows"] for l in loaded], p)
         for fi, (l, ix) in enumerate(zip(loaded, idx)):
             raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, ix, None, l.get("mr"),
-                                        crash_all[fi] if crash_all else None, diags[fi]))
+                                        crash_all[fi] if crash_all else None, diags[fi], l.get("book")))
         bubble = {"curve": curve_b, "share_below_entry_pct": round(share * 100, 1),
                   "entry_pct": p.index_entry_pct, "exit_pct": p.index_exit_pct}
     else:
         for fi, l in enumerate(loaded):
             raw_trades.extend(_simulate(l["label"], l["rows"], l["day_vol"], p, None, None, l.get("mr"),
-                                        crash_all[fi] if crash_all else None, diags[fi]))
-    dates = db.get_nav_intraday_dates(start, end)
+                                        crash_all[fi] if crash_all else None, diags[fi], l.get("book")))
+    dates = dataset_dates(db, [l["sid"] for l in loaded], start, end, p)
     d0 = dates[0] if dates else (start or 0)
     d1 = dates[-1] if dates else (end or 0)
     fill_ctx = {"loaded": loaded, "crash": crash_all} if (fill_on(p) and loaded) else None
@@ -1815,6 +1900,8 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     attribution = attribute_trades(trade_dicts, p, p.initial_capital)
     return {
         "cats": cats or [],
+        "dataset": {"name": p.dataset, "grid_sec": p.tse_grid_sec if p.dataset == "tse" else None,
+                    "days": len(dates), "first": d0, "last": d1},
         "funds_tested": tested, "funds_skipped": skipped_funds,
         "params": asdict(p),
         "period": [d0, d1],
@@ -1859,7 +1946,7 @@ def bubble_series(db, cats: list[str] | None = None, symbols: list[str] | None =
     want = {s.strip() for s in (show or []) if s.strip()}
     rows_by_fund, labels = [], []
     for sid, label in funds:
-        raw = db.get_nav_intraday(sid, start, end)
+        raw = _raw_for(db, sid, start, end, p)[0]
         rows, _vol = _prep(raw, p)
         rows = [r for r in rows if r[5]]
         if rows:
@@ -1903,7 +1990,7 @@ def discount_stats(db, cats: list[str] | None = None, symbols: list[str] | None 
     rows_out = []
     kinds = db.get_nav_symbol_category()
     for sid, label in _universe(db, cats, symbols):
-        raw = db.get_nav_intraday(sid, start, end)
+        raw = _raw_for(db, sid, start, end, p)[0]
         if not raw:
             continue
         rows, _ = _prep(raw, replace(p, max_nav_age_days=-1, max_nav_age_min=0, baseline_days=0))
@@ -1998,7 +2085,7 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
     default_grid = GRID_INDEX if base.entry_mode == "index" else GRID_DEFAULT
     combos = _combos(base, grid or default_grid)
     funds = _universe(db, cats, symbols)
-    dates = db.get_nav_intraday_dates(start, end)
+    dates = dataset_dates(db, [sid for sid, _l in funds], start, end, base)
     if len(dates) < 10 or not funds:
         return {"error": "داده برای بهینه‌سازی کافی نیست"}
     cut = dates[int(len(dates) * (1 - test_frac))] if 0 < test_frac < 1 else dates[-1]
@@ -2008,7 +2095,7 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
         with (progress_lock or threading.Lock()):
             progress.update(done=0, total=len(funds), combos=len(combos), phase="grid")
 
-    def _run_fund(label, rows, day_vol, idx, mr=None):
+    def _run_fund(label, rows, day_vol, idx, mr=None, book=None):
         sel_tr = [i for i, r in enumerate(rows) if r[1] <= cut]
         sel_te = [i for i, r in enumerate(rows) if r[1] > cut]
         pick = lambda lst, sel: ([lst[i] for i in sel] if lst is not None else None)   # noqa: E731
@@ -2016,9 +2103,9 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
         tr_idx, te_idx = pick(idx, sel_tr), pick(idx, sel_te)
         tr_mr, te_mr = pick(mr, sel_tr), pick(mr, sel_te)
         for ci, c in enumerate(combos):
-            train_tr[ci].extend(_simulate(label, tr_rows, day_vol, c, tr_idx, None, tr_mr))
+            train_tr[ci].extend(_simulate(label, tr_rows, day_vol, c, tr_idx, None, tr_mr, book=book))
             if te_rows and test_frac > 0:
-                test_tr[ci].extend(_simulate(label, te_rows, day_vol, c, te_idx, None, te_mr))
+                test_tr[ci].extend(_simulate(label, te_rows, day_vol, c, te_idx, None, te_mr, book=book))
 
     loaded = []
     for k, (sid, label) in enumerate(funds):
@@ -2032,7 +2119,7 @@ def optimize_discount(db, cats: list[str] | None = None, symbols: list[str] | No
     _compute_mr(db, loaded, base, start, end)                         # independent of the grid
     idx_all = _bubble_index([l["rows"] for l in loaded], base)[0] if use_index else [None] * len(loaded)
     for k, (l, ix) in enumerate(zip(loaded, idx_all)):
-        _run_fund(l["label"], l["rows"], l["day_vol"], ix, l.get("mr"))
+        _run_fund(l["label"], l["rows"], l["day_vol"], ix, l.get("mr"), l.get("book"))
         if progress is not None:
             with (progress_lock or threading.Lock()):
                 progress["done"] = len(funds) // 2 + (k + 1) * (len(funds) - len(funds) // 2) // max(len(loaded), 1)

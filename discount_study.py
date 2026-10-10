@@ -410,7 +410,7 @@ class Study:
         funds = D._universe(self.db_raw, self.cats, self.symbols)
         if not funds:
             raise ValueError("صندوقی برای مطالعه انتخاب نشده است.")
-        dates = self.db_raw.get_nav_intraday_dates(self.start, self.end)
+        dates = D.dataset_dates(self.db_raw, [sid for sid, _l in funds], self.start, self.end, self.base)
         if len(dates) < self.blocks_n * 3:
             raise ValueError(f"برای {self.blocks_n} بلوک زمانی دست‌کم {self.blocks_n * 3} روز دادهٔ معاملاتی لازم است (داریم {len(dates)}).")
         self.dates = dates
@@ -427,7 +427,8 @@ class Study:
 
     # ---- universe ---------------------------------------------------------------
     def _ukey(self, p: D.DiscountParams) -> tuple:
-        return (p.baseline_days, p.max_nav_age_days, p.max_nav_age_min, p.entry_mode != "fund", p.mr_center,
+        return (p.dataset, p.tse_grid_sec if p.dataset == "tse" else 0,
+                p.baseline_days, p.max_nav_age_days, p.max_nav_age_min, p.entry_mode != "fund", p.mr_center,
                 p.mr_window_days if p.mr_center != "off" else 0,
                 p.mr_horizon_days if p.mr_center != "off" else 0,
                 p.mr_lag if p.mr_center != "off" else 0,
@@ -463,7 +464,7 @@ class Study:
                 a, b = bisect.bisect_left(it["dates"], lo), bisect.bisect_right(it["dates"], hi)
                 if b - a < 2:
                     continue
-                items.append({"label": it["label"], "rows": it["rows"][a:b], "day_vol": it["day_vol"],
+                items.append({"label": it["label"], "rows": it["rows"][a:b], "day_vol": it["day_vol"], "book": it.get("book"),
                               "mr": it["mr"][a:b] if it.get("mr") is not None else None})
                 crash.append(it["crash"][a:b] if it.get("crash") is not None else None)
             cache[key] = {"loaded": items, "crash": crash if all(c is not None for c in crash) and crash else None,
