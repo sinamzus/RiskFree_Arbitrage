@@ -614,6 +614,12 @@ def test_optimizer(R: Results, db):
     # (e) the sanity of the verdict: the report must contain every section
     need = ["verdict", "best", "importance", "marginals", "walk_forward", "sensitivity", "neighbours", "generalisation"]
     R.add("بهینه‌ساز", "گزارش همهٔ بخش‌ها را دارد", all(k in out for k in need), ", ".join(k for k in need if k not in out))
+    # (f) execution-assumption sensitivity must really change the assumption (it was silently ignored once)
+    sens = {x["name"]: x for x in out.get("sensitivity", [])}
+    b0, b3 = sens.get("فرض‌های فعلی"), sens.get("اسپرد ×۳")
+    R.add("بهینه‌ساز", "حساسیت برنده به اسپرد واقعاً اسپرد را عوض می‌کند (اسپرد ×۳ ≠ پایه)",
+          b0 is not None and b3 is not None and (b0["train"], b0["hold"]) != (b3["train"], b3["hold"]),
+          f"{b0} / {b3}")
 
 
 # --------------------------------------------------------------------------- #

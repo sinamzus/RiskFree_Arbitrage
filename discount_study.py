@@ -892,8 +892,11 @@ class Study:
                          ("اسپرد ×۲", {"half_spread_pct": self.base.half_spread_pct * 2}),
                          ("اسپرد ×۳", {"half_spread_pct": self.base.half_spread_pct * 3}),
                          ("کارمزد +۵۰٪", {"buy_fee": self.base.buy_fee * 1.5, "sell_fee": self.base.sell_fee * 1.5}),
-                         ("سقف حجم نصف", {"participation_pct": (self.base.participation_pct / 2) if self.base.participation_pct > 0 else 2.5})):
-            r = self.evaluate(best["cfg"], "sens", replace(self.base, **kw))
+                         ("سقف حجم نصف", {"participation_pct": (self.base.participation_pct / 2) if self.base.participation_pct > 0 else 2.5}),
+                         ("تأخیر اجرا ۱ اسنپ‌شات", {"exec_delay_snaps": self.base.exec_delay_snaps + 1})):
+            # the winner's cfg carries explicit values for these assumptions too: drop them, or the override is ignored
+            cfg = {k: v for k, v in best["cfg"].items() if k not in kw}
+            r = self.evaluate(cfg, "sens", replace(self.base, **kw))
             if r:
                 sens.append({"name": name, "train": _num(r["train"]["portfolio_return_pct"]),
                              "hold": _num(hold_of(r)), "trades": r["hold"]["trade_count"]})
