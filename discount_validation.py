@@ -687,13 +687,13 @@ def self_test() -> dict:
     # taken from the volume, so pre-open indications and stale post-close quotes are never traded
     raw_s = []
     for day, (a, b) in ((20260301, (110000, 150000)), (20260302, (120000, 180000))):
-        raw_s += [(day, a - 3000, 1000.0, day, 980.0, 0), (day, a - 1000, 1000.0, day, 980.0, 0),
-                  (day, a, 1000.0, day, 995.0, 50), (day, a + 10000, 1000.0, day, 996.0, 90),
-                  (day, b, 1000.0, day, 997.0, 120), (day, b + 500, 1000.0, day, 970.0, 120)]
+        raw_s += [(day, a - 3000, 1000.0, day, 980.0, 0, 0), (day, a - 1000, 1000.0, day, 980.0, 0, 0),
+                  (day, a, 1000.0, day, 995.0, 50, 0), (day, a + 10000, 1000.0, day, 996.0, 90, 0),
+                  (day, b, 1000.0, day, 997.0, 120, 0), (day, b + 500, 1000.0, day, 970.0, 120, 0)]
     win_s = D._day_windows(raw_s)
     rows_s, _ = D._prep(raw_s, D.DiscountParams(baseline_days=0, session_mode="auto"))
     got = sorted({(r[1], r[2]) for r in rows_s})
-    want = sorted({(d, t) for d, t, _n, _nd, _l, v in raw_s if v > 0 and win_s[d][0] <= t <= win_s[d][1]})
+    want = sorted({(d, t) for d, t, _n, _nd, _l, v, _nt in raw_s if v > 0 and win_s[d][0] <= t <= win_s[d][1]})
     add("ساعت جلسه از روی حجم تعیین می‌شود: پیش‌گشایش و قیمتِ کهنهٔ بعد از بسته‌شدن هرگز معامله نمی‌شود",
         win_s == {20260301: (110000, 150000), 20260302: (120000, 180000)} and got == want and len(got) == 6,
         f"بازه‌ها {win_s}، {len(got)} لحظهٔ قابل‌معامله از {len(raw_s)}")
@@ -727,7 +727,7 @@ def self_test() -> dict:
         d = int((dt.date(2025, 1, 1) + dt.timedelta(days=di)).strftime("%Y%m%d"))
         nav *= 1.0003
         for k in range(8):
-            raw.append((d, 91500 + k * 3000, nav, d, nav * (1 + 0.02 + rng.gauss(0, 0.004)), 1000 * (k + 1)))
+            raw.append((d, 91500 + k * 3000, nav, d, nav * (1 + 0.02 + rng.gauss(0, 0.004)), 1000 * (k + 1), 0))
     pb = DiscountParams(baseline_days=15, max_nav_age_days=3)
     rows_full, _ = D._prep(raw, pb)
     cut_day = raw[len(raw) * 6 // 10][0]

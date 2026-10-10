@@ -45,6 +45,7 @@ DIMS: dict[str, dict] = {
     "entry_mode":         {"kind": "slow", "label": "حالت ورود", "choices": ["fund", "index", "both"]},
     "baseline_days":      {"kind": "slow", "label": "تعدیل حباب دائمی (روز)", "choices": [0, 10, 20, 40, 60]},
     "max_nav_age_days":   {"kind": "slow", "label": "حداکثر سن NAV (روز)", "choices": [1, 2, 3, 5]},
+    "max_nav_age_min":    {"kind": "slow", "label": "حداکثر سن NAV (دقیقه؛ ۰ = خاموش)", "choices": [0, 10, 30, 60, 120]},
     "mr_center":          {"kind": "slow", "label": "مرکز بازگشت به میانگین", "choices": ["off", "zero", "category", "self"]},
     "mr_window_days":     {"kind": "slow", "label": "پنجرهٔ امتیاز بازگشت (روز)", "choices": [10, 20, 30, 40]},
     "mr_horizon_days":    {"kind": "slow", "label": "افق بازگشت (روز)", "choices": [3, 5, 10]},
@@ -75,7 +76,7 @@ DIMS: dict[str, dict] = {
     "stop_mode":          {"kind": "fast", "label": "نوع حد ضرر", "choices": ["nav_widen", "nav_level", "price"]},
     "position_pct":       {"kind": "fast", "label": "سهم هر پوزیشن از سرمایه ٪", "choices": [5, 10, 20, 33, 50]},
 }
-SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "session_mode", "session_start", "session_end",
+SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "max_nav_age_min", "session_mode", "session_start", "session_end",
               "index_min_share", "mr_center", "mr_window_days", "mr_horizon_days", "mr_lag",
               "crash_window_min", "crash_cooldown_min", "crash_scope"]
 FAST_ORDER = ["entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct", "max_hold_days",
@@ -159,7 +160,8 @@ def _normalize(c: dict, base: D.DiscountParams) -> dict:
 
 def _to_params(base: D.DiscountParams, c: dict) -> D.DiscountParams:
     kw = {k: v for k, v in c.items() if v is not None}
-    for k in ("max_hold_days", "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end"):
+    for k in ("max_hold_days", "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end",
+              "max_nav_age_min"):
         if k in kw:
             kw[k] = int(kw[k])
     return replace(base, **kw)
@@ -405,7 +407,7 @@ class Study:
 
     # ---- universe ---------------------------------------------------------------
     def _ukey(self, p: D.DiscountParams) -> tuple:
-        return (p.baseline_days, p.max_nav_age_days, p.entry_mode != "fund", p.mr_center,
+        return (p.baseline_days, p.max_nav_age_days, p.max_nav_age_min, p.entry_mode != "fund", p.mr_center,
                 p.mr_window_days if p.mr_center != "off" else 0,
                 p.mr_horizon_days if p.mr_center != "off" else 0,
                 p.mr_lag if p.mr_center != "off" else 0,
@@ -576,7 +578,7 @@ class Study:
                 "index_exit_pct": b.index_exit_pct, "max_hold_days": b.max_hold_days,
                 "stop_loss_pct": b.stop_loss_pct, "stop_mode": b.stop_mode, "position_pct": b.position_pct,
                 "crash_drop_pct": b.crash_drop_pct, "crash_window_min": b.crash_window_min,
-                "crash_cooldown_min": b.crash_cooldown_min, "crash_scope": b.crash_scope,
+                "crash_cooldown_min": b.crash_cooldown_min, "crash_scope": b.crash_scope, "max_nav_age_min": b.max_nav_age_min,
                 "session_mode": b.session_mode, "session_start": b.session_start, "session_end": b.session_end,
                 "index_min_share": b.index_min_share, "mr_lag": b.mr_lag, "require_fresh": b.require_fresh,
                 "participation_pct": b.participation_pct, "half_spread_pct": b.half_spread_pct,
@@ -1019,7 +1021,7 @@ def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.Discoun
     return out
 
 
-_INT_DIMS = ("max_hold_days", "baseline_days", "max_nav_age_days", "mr_window_days", "mr_horizon_days",
+_INT_DIMS = ("max_hold_days", "baseline_days", "max_nav_age_days", "max_nav_age_min", "mr_window_days", "mr_horizon_days",
              "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end")
 _BOOL_DIMS = ("require_fresh",)
 _STR_CHOICES = {"fill_mode": {"off", "best"}, "crash_scope": {"category", "all"}, "session_mode": {"auto", "fixed"}, "entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},

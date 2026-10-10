@@ -1769,6 +1769,7 @@ def create_app(db, scan_callback=None):
             participation_pct=_f("part", d.participation_pct),
             require_fresh=_b("fresh", d.require_fresh),
             max_nav_age_days=int(_f("navage", d.max_nav_age_days)),
+            max_nav_age_min=max(0, int(_f("navmin", d.max_nav_age_min))),
             buy_fee=_f("buyfee", d.buy_fee * 100) / 100.0,
             sell_fee=_f("sellfee", d.sell_fee * 100) / 100.0,
         )

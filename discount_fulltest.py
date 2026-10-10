@@ -96,7 +96,7 @@ def make_world(path: str, days: int = 150, seed: int = 11) -> str:
             else:
                 a, b, pre = 9, 12, []
             for t, f in pre:                               # pre-open: volume 0, indicative price
-                rows.append((sid, di, t, nav, nd, 0, nav * f, nav * f, 0))
+                rows.append((sid, di, t, nav, nd, t, nav * f, nav * f, 0))
             n_snap = int((b - a) * 60 / 15) if sym == "GOLDX" else 14
             vol = 0
             thin = rng.random() < 0.15
@@ -125,14 +125,22 @@ def make_world(path: str, days: int = 150, seed: int = 11) -> str:
                 grew = rng.random() > 0.15                 # 15% of snapshots carry a stale (no-volume) quote
                 if grew:
                     vol += rng.randint(30, 400) if thin else rng.randint(300, 4000)
-                rows.append((sid, di, t, nav_t, nd, 0, last, last, vol))
+                ntime = _tm(t, 50) if (sym == "REVB" and k % 5 == 0 and j < 6) else t   # NAV computed 50 min earlier
+                rows.append((sid, di, t, nav_t, nd, ntime, last, last, vol))
             if sym == "GOLDX":                             # closing indication after the last trade
-                rows.append((sid, di, b * 10000 + 500, nav, nd, 0, nav * 0.97, nav * 0.97, vol))
+                rows.append((sid, di, b * 10000 + 500, nav, nd, b * 10000 + 500, nav * 0.97, nav * 0.97, vol))
     con.executemany("INSERT INTO nav_intraday (symbol_id,date,time,nav,nav_date,nav_time,last,close,vol) "
                     "VALUES (?,?,?,?,?,?,?,?,?)", rows)
     con.commit()
     con.close()
     return path
+
+
+def _tm(t: int, minutes: int) -> int:
+    """HHMMSS minus ``minutes``."""
+    s = (t // 10000) * 3600 + (t // 100 % 100) * 60 + t % 100 - minutes * 60
+    s = max(0, s)
+    return (s // 3600) * 10000 + (s // 60 % 60) * 100 + s % 60
 
 
 def _db(path: str):
@@ -198,7 +206,8 @@ AUDIT = [
     ("پنجرهٔ امتیاز بازگشت", {"mr_center": "zero"}, "mr_window_days", [10, 40], "change"),
     ("افق بازگشت", {"mr_center": "zero"}, "mr_horizon_days", [2, 15], "change"),
     ("حداقل امتیاز بازگشت", {"mr_center": "zero"}, "mr_min_score", [30, 95], "change"),
-    ("حداکثر سن NAV", {}, "max_nav_age_days", [0, 5], "change"),
+    ("حداکثر سن NAV", {"max_nav_age_min": 0}, "max_nav_age_days", [0, 5], "change"),
+    ("حداکثر سن NAV (دقیقه)", {}, "max_nav_age_min", [0, 15], "change"),
     ("نیم‌اسپرد", {}, "half_spread_pct", [0.0, 0.3], "change"),
     ("کارمزد خرید", {}, "buy_fee", [0.0, 0.01], "change"),
     ("کارمزد فروش", {}, "sell_fee", [0.0, 0.01], "change"),
@@ -293,6 +302,7 @@ WEB_MAP = {
     "crashdrop": ("crash_drop_pct", "0.8", 0.8), "crashwin": ("crash_window_min", "45", 45),
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "all", "all"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
+    "navmin": ("max_nav_age_min", "17", 17),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
     "fillexit": ("fill_exit_rel_pct", "0.45", 0.45),
 }
@@ -316,7 +326,7 @@ def test_web_wiring(R: Results, db):
         ok = (abs(g - exp) < 1e-9) if isinstance(exp, float) and isinstance(g, (int, float)) and not isinstance(g, bool) else g == exp
         if not ok:
             bad.append(f"{k}→{field}: ارسال {_v} ← خوانده شد {g!r} (انتظار {exp!r})")
-    R.add("سیم‌کشی وب", f"هر ۳۳ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
+    R.add("سیم‌کشی وب", f"هر ۳۴ پارامترِ فرم به فیلد درست DiscountParams می‌رسد", not bad, "؛ ".join(bad) or "همه درست")
     r0 = c.get("/api/disc/backtest?symbols=REVA")
     d0 = r0.get_json()["params"]
     dflt = asdict(D.DiscountParams())
@@ -365,7 +375,7 @@ UI_ID = {  # query key -> element id
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
-    "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
+    "navmin": "disc-navmin", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
 }
 
 
@@ -599,6 +609,7 @@ def test_invariants(R: Results, db, n: int = 24):
     raw = {sid: db.get_nav_intraday(sid) for sid, _s, _c in FUNDS}
     names = {s: i for i, s, _c in FUNDS}
     wins = {s: D._day_windows(raw[i]) for s, i in names.items()}
+    raw_by_key = {s: {(r[0], r[1]): r for r in raw[i]} for s, i in names.items()}
     by_sym_vol = {}
     for s, i in names.items():
         dv = {}
@@ -667,8 +678,15 @@ def test_invariants(R: Results, db, n: int = 24):
                 lim = -p.entry_discount_pct + p.half_spread_pct * 2 + 0.05     # ask price includes the half spread
                 if t["rel_entry_pct"] > lim:
                     fail("ورود هر صندوق: تخفیف نسبت به معمول زیر آستانه است", f"{tag} {t['symbol']}: {t['rel_entry_pct']} > {lim:.2f}")
-            if p.max_nav_age_days >= 0:
-                pass                                                          # NAV age is checked by the audit above
+            rr = raw_by_key[t["symbol"]].get((t["entry_date"], t["entry_time"]))
+            if rr is not None:
+                _d, _t, _n, nd, _l, _v, nt = rr
+                if p.max_nav_age_days >= 0 and nd and D._ord(t["entry_date"]) - D._ord(nd) > p.max_nav_age_days:
+                    fail("ورود فقط با NAV نه‌چندان کهنه (روز)", f"{tag} {t['symbol']}: NAV از {nd}")
+                if p.max_nav_age_min > 0 and nd and nt:
+                    age = (D._ord(t["entry_date"]) * 86400 + D._sec(t["entry_time"])) - (D._ord(nd) * 86400 + D._sec(nt))
+                    if age > p.max_nav_age_min * 60:
+                        fail("ورود فقط با NAV نه‌چندان کهنه (دقیقه)", f"{tag} {t['symbol']}: سن NAV {age / 60:.0f} دقیقه > {p.max_nav_age_min}")
     for k in ["اجرای بک‌تست بدون کرش", "اتحاد حسابداری (سرمایهٔ نهایی − اولیه = جمع سود معاملات)",
               "سرمایهٔ درگیر بین ۰ و ۱۰۰٪ و میانگین ≤ اوج", "انتگرال سرمایهٔ درگیر = جمع مستقل معاملات",
               "خروج پس از ورود", "مبلغ خرید و فروش مثبت (حجم کسری در معاملهٔ کوچک ممکن است ۰ نمایش داده شود؛ سود خطی است)", "هویت کارمزد: سود = فروش×(۱−کارمزد) − خرید×(۱+کارمزد)",

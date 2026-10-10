@@ -2445,6 +2445,8 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-sellfee" type="number" step="0.005" value="0.12" style="width:70px"></div>
       <div class="bbt-field" title="NAVهای کهنه‌تر از این‌قدر روز نادیده گرفته می‌شود (برای طلا/سهام مهم است)"><label>حداکثر سن NAV (روز)</label>
         <input id="disc-navage" type="number" step="1" value="3" style="width:70px"></div>
+      <div class="bbt-field" title="اگر NAV آخرین بار بیش از این‌قدر دقیقه پیش از لحظهٔ اسنپ‌شات محاسبه شده باشد، آن اسنپ‌شات «NAV کهنه» است و کاملاً حذف می‌شود: صندوق در آن لحظه کاندید ورود، پرکردن سرمایه بیکار یا سیگنال خروج نیست. ۰ = غیرفعال. اگر ساعت NAV در داده نباشد اسنپ‌شات نگه داشته می‌شود."><label>حداکثر سن NAV (دقیقه)</label>
+        <input id="disc-navmin" type="number" step="1" min="0" value="30" style="width:70px"></div>
       <div class="bbt-field" title="«خودکار از حجم»: برای هر صندوق و هر روز، بازهٔ معامله از اولین تا آخرین لحظه‌ای است که حجم تجمعی بالا رفته. قبل از آن پیش‌گشایش است (سفارش اجرا نمی‌شود) و بعد از آن قیمت کهنه. برای صندوق‌هایی که ساعت معاملهٔ هر روزشان فرق می‌کند (مثلاً طلا ۱۱ تا ۱۵ یا ۱۲ تا ۱۸) این حالت درست است. «ساعت ثابت»: فقط بازهٔ ساعتی دستی."><label>ساعت جلسه</label>
         <select id="disc-smode" style="width:190px" onchange="document.getElementById('disc-sfix').style.display = this.value === 'fixed' ? '' : 'none'">
           <option value="auto">خودکار از حجم (هر صندوق، هر روز)</option>
@@ -6569,7 +6571,7 @@ function discParams() {
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
-    navage: v('disc-navage'), smode: v('disc-smode'), sstart: v('disc-sstart'), send: v('disc-send'),
+    navage: v('disc-navage'), navmin: v('disc-navmin'), smode: v('disc-smode'), sstart: v('disc-sstart'), send: v('disc-send'),
     fresh: document.getElementById('disc-fresh').checked ? '1' : '0',
   };
   Object.keys(q).forEach(k => { if (q[k] === '' || q[k] == null) delete q[k]; });
@@ -6903,6 +6905,8 @@ const DISC_TIP_RULES = [
   [/^(↻\s*)?پیش‌فرض/, 'برگرداندن انتخاب به حالت پیش‌فرض: فقط دستهٔ طلا و فقط صندوق‌های عیار، گنج، کهربا و طلا.'],
   [/^همه$/, 'فعال کردن همهٔ صندوق‌هایی که الان در این فهرست دیده می‌شوند (فیلتر جستجو را رعایت می‌کند).'],
   [/^هیچ$/, 'غیرفعال کردن همهٔ صندوق‌هایی که الان در این فهرست دیده می‌شوند.'],
+  [/حداکثر سن NAV \(دقیقه\)|سن NAV \(دقیقه\)/, 'اگر NAV آخرین بار بیش از این‌قدر دقیقه پیش از لحظهٔ اسنپ‌شات محاسبه شده باشد، آن اسنپ‌شات حذف می‌شود (نه ورود، نه پرکردن، نه سیگنال خروج). ۰ = غیرفعال.'],
+  [/NAV کهنه ٪/, 'سهم اسنپ‌شات‌هایی که سن NAV‌شان از «حداکثر سن NAV (دقیقه)» بیشتر است و حذف می‌شوند.'],
   [/اعمال و اجرای بک‌تست/, 'پارامترهای برتر این سطر را در فرم می‌نویسد و بلافاصله بک‌تست را اجرا می‌کند.'],
   [/^(🔄\s*)?بارگذاری$/, 'داده‌های نمودار را برای بازهٔ فرم و صندوق‌های تیک‌خورده از سرور می‌خواند.'],
   [/^خودکار از حجم/, 'بازهٔ معامله هر صندوق در هر روز از روی رشد حجم تعیین می‌شود؛ پیش‌گشایش و بعد از پایان معامله کنار گذاشته می‌شود.'],
@@ -7464,7 +7468,7 @@ async function discBubLoad(ov) {
   if (!p.symbols) { showError('حداقل یک صندوق را فعال کنید.'); return; }
   const pick = [...document.querySelectorAll('.bub-f:checked')].map(x => x.value);
   const q = {cats: p.cats, symbols: p.symbols, show: pick.join(',')};
-  ['smode', 'sstart', 'send', 'navage'].forEach(k => { if (p[k]) q[k] = p[k]; });
+  ['smode', 'sstart', 'send', 'navage', 'navmin'].forEach(k => { if (p[k]) q[k] = p[k]; });
   if (p.start) q.start = p.start;
   if (p.end) q.end = p.end;
   const btn = document.getElementById('bub-go'), msg = document.getElementById('bub-msg');
@@ -7863,12 +7867,12 @@ async function discStats() {
   el.innerHTML = `<div class="disc-h">توزیع تخفیف (قیمت/NAV−۱) — ${discScopeText(p.cats, p.symbols)} · ${fs.length} صندوق · «زمان زیرِ آستانه» = سهم اسنپ‌شات‌هایی که تخفیف ≥ ${j.entry_discount_pct}٪ بوده</div>
     <div class="disc-tblwrap"><table class="disc-tbl"><thead><tr>
       <th>نماد</th><th>دسته</th><th>روز</th><th>میانهٔ تخفیف ٪</th><th>۵٪ پایین</th><th>۹۵٪ بالا</th>
-      <th>زمان زیرِ آستانه ٪</th><th>سن میانهٔ NAV (روز)</th><th>تغییر NAV در روز</th>
+      <th>زمان زیرِ آستانه ٪</th><th>سن میانهٔ NAV (روز)</th><th>تغییر NAV در روز</th><th>سن میانهٔ NAV (دقیقه)</th><th>۹۵٪ سن NAV (دقیقه)</th><th>NAV کهنه ٪</th>
     </tr></thead><tbody>${fs.map(f => `<tr><td>${f.symbol}</td><td>${DISC_CAT_LABEL[f.category] || f.category}</td><td>${f.days}</td>
       <td>${f.median_disc_pct}</td><td>${f.p5_disc_pct}</td><td>${f.p95_disc_pct}</td>
       <td class="${f.share_below_entry_pct > 0 ? 'pos' : ''}">${f.share_below_entry_pct}</td>
-      <td>${f.median_nav_age_days}</td><td>${f.nav_changes_per_day}</td></tr>`).join('')
-      || '<tr><td colspan="9" style="color:var(--muted)">داده‌ای نیست</td></tr>'}</tbody></table></div>`;
+      <td>${f.median_nav_age_days}</td><td>${f.nav_changes_per_day}</td><td>${f.median_nav_age_min ?? '—'}</td><td>${f.p95_nav_age_min ?? '—'}</td><td class="${f.stale_share_pct > 0 ? 'neg' : ''}">${f.stale_share_pct ?? '—'}</td></tr>`).join('')
+      || '<tr><td colspan="12" style="color:var(--muted)">داده‌ای نیست</td></tr>'}</tbody></table></div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -7882,14 +7886,14 @@ const DS_VAL = {
   mr_center: {off: 'خاموش', zero: 'صفر', category: 'دسته', self: 'خود'},
   stop_mode: {nav_widen: 'NAV بازتر', nav_level: 'NAV سطح', price: 'قیمت'},
 };
-const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_age_days: 'سن NAV', mr_center: 'مرکز', mr_window_days: 'پنجره',
+const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_age_days: 'سن NAV', max_nav_age_min: 'سن NAV (دقیقه)', mr_center: 'مرکز', mr_window_days: 'پنجره',
   mr_horizon_days: 'افق', mr_min_score: 'امتیاز≥', entry_discount_pct: 'ورود', exit_discount_pct: 'خروج', index_entry_pct: 'ورود شاخص',
   index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن',
   crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
   session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
   fill_mode: 'پر کردن', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
   require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
-const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', mr_center: 'disc-mrcenter',
+const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', max_nav_age_min: 'disc-navmin', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
   exit_discount_pct: 'disc-exit', index_entry_pct: 'disc-ientry', index_exit_pct: 'disc-iexit', max_hold_days: 'disc-hold',
   stop_loss_pct: 'disc-stop', stop_mode: 'disc-stopmode', position_pct: 'disc-pos',

@@ -709,10 +709,11 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
 
     def get_nav_intraday(self, symbol_id: int, start: Optional[int] = None,
                          end: Optional[int] = None) -> list[tuple]:
-        """Rows (date, time, nav, nav_date, last, vol) in chronological order."""
+        """Rows (date, time, nav, nav_date, last, vol, nav_time) in chronological order.
+        nav_date / nav_time = when the NAV itself was computed (0 = unknown)."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT date, time, nav, nav_date, last, vol FROM nav_intraday "
+                "SELECT date, time, nav, nav_date, last, vol, nav_time FROM nav_intraday "
                 "WHERE symbol_id=? AND date >= ? AND date <= ? ORDER BY date, time",
                 (symbol_id, start or 0, end or 99999999)).fetchall()
         return [tuple(r) for r in rows]

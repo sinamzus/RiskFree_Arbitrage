@@ -130,7 +130,8 @@ class DiscountParams:
     half_spread_pct: float = 0.05       # assumed half bid-ask spread (each side)
     participation_pct: float = 5.0      # max share of the day's volume we can trade; 0 = unlimited
     require_fresh: bool = True          # only trade on snapshots where volume grew
-    max_nav_age_days: int = 3           # ignore snapshots whose NAV is older than this
+    max_nav_age_days: int = 3           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
+    max_nav_age_min: int = 30           # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
     session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
     session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
     session_end: int = 123000
@@ -231,14 +232,15 @@ def _warmup_start(start: int | None, p: DiscountParams) -> int | None:
 def _load_ex(db, sid: int, start: int | None, end: int | None, p: DiscountParams) -> dict:
     """Like _load but also returns the warm-up rows and the offset of the first kept row."""
     raw_all = db.get_nav_intraday(sid, _warmup_start(start, p), end)
-    rows_all, day_vol = _prep(raw_all, p)
+    pstats: dict = {}
+    rows_all, day_vol = _prep(raw_all, p, pstats, start or 0)
     if start:
         off = next((i for i, r in enumerate(rows_all) if r[1] >= start), len(rows_all))
         raw = [r for r in raw_all if r[0] >= start]
     else:
         off, raw = 0, raw_all
     return {"sid": sid, "raw": raw, "rows": rows_all[off:], "day_vol": day_vol,
-            "rows_all": rows_all, "off": off}
+            "rows_all": rows_all, "off": off, "prep_stats": pstats}
 
 
 def _load(db, sid: int, start: int | None, end: int | None, p: DiscountParams):
@@ -444,7 +446,7 @@ def _in_session(p: DiscountParams, win: tuple[int, int] | None, t: int) -> bool:
     return win is not None and win[0] <= t <= win[1]
 
 
-def _prep(raw: list[tuple], p: DiscountParams):
+def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_from: int = 0):
     """Raw DB rows -> (rows, day_vol).
 
     rows: [(ordinal, date, time, fair, last, fresh, nav_raw)] — only in-session
@@ -459,7 +461,8 @@ def _prep(raw: list[tuple], p: DiscountParams):
     prev_vol = 0
     prev_date = 0
     windows = _day_windows(raw) if p.session_mode != "fixed" else {}
-    for d, t, nav, nav_d, last, vol in raw:
+    nav_age_s = p.max_nav_age_min * 60
+    for d, t, nav, nav_d, last, vol, nav_t in raw:
         if d != prev_date:
             prev_date, prev_vol = d, 0
         vol = vol or 0
@@ -472,8 +475,19 @@ def _prep(raw: list[tuple], p: DiscountParams):
         if not last or last <= 0 or not nav or nav <= 0:
             continue
         o = _ord(d)
+        counted = stats is not None and d >= count_from
+        if counted:
+            stats["rows"] = stats.get("rows", 0) + 1
         if nav_d and p.max_nav_age_days >= 0 and o - _ord(nav_d) > p.max_nav_age_days:
-            continue
+            if counted:
+                stats["stale_days"] = stats.get("stale_days", 0) + 1
+            continue                                  # the NAV is from an older DAY: not a candidate
+        if nav_age_s > 0 and nav_d and nav_t:
+            age = (o * 86400 + _sec(t)) - (_ord(nav_d) * 86400 + _sec(nav_t))
+            if age > nav_age_s:
+                if counted:
+                    stats["stale_min"] = stats.get("stale_min", 0) + 1
+                continue                              # the NAV was computed too long ago (minutes): not a candidate
         base_rows.append((o, d, t, nav, last, fresh))
 
     if p.baseline_days <= 0:
@@ -1288,7 +1302,7 @@ def _daily_series(raw: list[tuple], p: DiscountParams) -> tuple[dict, dict]:
     price: dict[int, float] = {}
     nav: dict[int, float] = {}
     windows = _day_windows(raw) if p.session_mode != "fixed" else {}
-    for d, t, n, nav_d, last, vol in raw:             # rows arrive in time order
+    for d, t, n, nav_d, last, vol, _nt in raw:        # rows arrive in time order
         if n and n > 0:
             nav[d] = n
         if last and last > 0 and (vol or 0) > 0 and _in_session(p, windows.get(d), t):
@@ -1491,6 +1505,8 @@ def build_benchmark(price_series: list[dict], nav_series: list[dict],
 
 _IDLE_LABELS = {
     "no_signal": "هیچ سیگنالی نبود (تخفیف به آستانهٔ ورود نرسید)",
+    "nav_days": "NAV کهنه بود (تاریخ NAV قدیمی‌تر از حداکثر سن روزی): صندوق از فهرست کاندیداها حذف شد",
+    "nav_min": "NAV کهنه بود (زمان محاسبهٔ NAV بیش از حداکثر دقیقه قبل): صندوق از فهرست کاندیداها حذف شد",
     "stale": "قیمت تازه نبود (حجم بالا نرفته بود)",
     "mr": "فیلتر بازگشت به میانگین صندوق را حذف کرد",
     "crash": "فیلتر ریزش بازار ورود را بست",
@@ -1510,11 +1526,17 @@ def _idle_info(loaded: list[dict], diags: list[dict], summary: dict, p: Discount
         for k, v in dg.items():
             tot[k] = tot.get(k, 0) + v
     flat = tot.get("flat", 0)
+    ps = {"rows": 0, "stale_days": 0, "stale_min": 0}
+    for l in loaded:
+        for k, v in (l.get("prep_stats") or {}).items():
+            ps[k] = ps.get(k, 0) + v
+    tot["nav_days"], tot["nav_min"] = ps["stale_days"], ps["stale_min"]
+    flat_all = flat + ps["stale_days"] + ps["stale_min"]          # NAV-stale snapshots never reach the simulator
     reasons = []
-    for k in ("no_signal", "stale", "mr", "crash", "same_day", "last_snapshot", "liquidity"):
+    for k in ("no_signal", "nav_days", "nav_min", "stale", "mr", "crash", "same_day", "last_snapshot", "liquidity"):
         v = tot.get(k, 0)
         reasons.append({"code": k, "label": _IDLE_LABELS[k], "count": v,
-                        "pct": round(v / flat * 100, 1) if flat else 0.0})
+                        "pct": round(v / flat_all * 100, 1) if flat_all else 0.0})
     reasons.sort(key=lambda r: -r["count"])
     gap = tot.get("gap_sum", 0.0) / tot["gap_n"] * 100 if tot.get("gap_n") else None
     per = []
@@ -1524,7 +1546,8 @@ def _idle_info(loaded: list[dict], diags: list[dict], summary: dict, p: Discount
                     "no_signal_pct": round(dg.get("no_signal", 0) / f * 100, 1) if f else 0.0,
                     "taken": dg.get("signal", 0)})
     si = summary.get("size_info") or {}
-    return {"flat_snapshots": flat, "signals_taken": tot.get("signal", 0), "reasons": reasons,
+    return {"flat_snapshots": flat_all, "signals_taken": tot.get("signal", 0), "reasons": reasons,
+            "nav_dropped_snapshots": ps["stale_days"] + ps["stale_min"],
             "avg_gap_to_threshold_pct": round(gap, 3) if gap is not None else None,
             "entry_threshold_pct": p.entry_discount_pct, "per_fund": per, "size": si,
             "skipped_positions": summary.get("skipped_positions"), "accepted_positions": summary.get("accepted_positions")}
@@ -1712,17 +1735,19 @@ def discount_stats(db, cats: list[str] | None = None, symbols: list[str] | None 
         raw = db.get_nav_intraday(sid, start, end)
         if not raw:
             continue
-        rows, _ = _prep(raw, replace(p, max_nav_age_days=-1, baseline_days=0))
+        rows, _ = _prep(raw, replace(p, max_nav_age_days=-1, max_nav_age_min=0, baseline_days=0))
         rows = [r for r in rows if r[5]]                      # fresh only
         if len(rows) < 20:
             continue
         disc = sorted((last / nav - 1) * 100 for _, _, _, nav, last, _, _ in rows)
         # NAV freshness: age of the NAV at each raw snapshot, NAV changes per day
-        ages, changes, days = [], 0, set()
+        ages, ages_min, changes, days = [], [], 0, set()
         prev = None
-        for d, t, nav, nav_d, last, vol in raw:
+        for d, t, nav, nav_d, last, vol, nav_t in raw:
             if nav_d:
                 ages.append(_ord(d) - _ord(nav_d))
+                if nav_t:
+                    ages_min.append(max(0.0, ((_ord(d) * 86400 + _sec(t)) - (_ord(nav_d) * 86400 + _sec(nav_t))) / 60.0))
             if prev is not None and nav != prev[0] and d == prev[1]:
                 changes += 1
             prev = (nav, d)
@@ -1736,6 +1761,9 @@ def discount_stats(db, cats: list[str] | None = None, symbols: list[str] | None 
             "p95_disc_pct": round(_pct(disc, .95), 3),
             "share_below_entry_pct": round(sum(1 for x in disc if x <= ent) / len(disc) * 100, 1),
             "median_nav_age_days": statistics.median(ages) if ages else 0,
+            "median_nav_age_min": round(statistics.median(ages_min), 1) if ages_min else None,
+            "p95_nav_age_min": round(_pct(sorted(ages_min), .95), 1) if ages_min else None,
+            "stale_share_pct": round(sum(1 for x in ages_min if p.max_nav_age_min > 0 and x > p.max_nav_age_min) / len(ages_min) * 100, 1) if ages_min else None,
             "nav_changes_per_day": round(changes / max(len(days), 1), 2),
         })
     rows_out.sort(key=lambda r: -r["share_below_entry_pct"])
