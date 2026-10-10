@@ -2421,6 +2421,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <select id="disc-fillmode" style="width:230px"><option value="off">خاموش</option><option value="best">با بهترین صندوق (کمترین حباب نسبی)</option><option value="hold" selected>همیشه سرمایه‌گذاری؛ فقط با کاندیدای بهتر بفروش</option></select></div>
       <div class="bbt-field" title="فقط برای حالت «همیشه سرمایه‌گذاری»: صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که صندوق دیگری حبابش (نسبت به معمولِ خودش) دست‌کم این‌قدر نقطهٔ درصد پایین‌تر باشد و نقد برای خریدش نباشد. در این حالت سیگنال فروش، زمان نگه‌داری و حد ضرر وجود ندارد؛ فقط جابه‌جایی به کاندیدای بهتر یا پایان داده. هزینهٔ رفت‌وبرگشت (کارمزد + اسپرد) حدود ۰٫۳۵٪ است؛ کمتر از آن جابه‌جایی ضرر است."><label>نگه‌داری: حداقل برتری برای جابه‌جایی ٪</label>
         <input id="disc-fillswitch" type="number" step="0.1" min="0" value="0.8" style="width:70px"></div>
+      <div class="bbt-field" title="فقط حالت «همیشه سرمایه‌گذاری»: صندوقِ خریده‌شده تا این‌قدر دقیقه برای جابه‌جایی فروخته نمی‌شود. در بک‌تست اولیه ۱۳ از ۵۵ معامله همان روز خریده و فروخته شدند و ۱۰ تا زیان‌ده بودند؛ مثلاً ۲۴۰ یا ۱۴۴۰ جلوی این جابه‌جایی‌های پشت‌سرهم را می‌گیرد. ۰ = خاموش."><label>نگه‌داری: حداقل زمان پیش از جابه‌جایی (دقیقه)</label>
+        <input id="disc-fillminhold" type="number" step="30" min="0" value="0" style="width:70px"></div>
+      <div class="bbt-field" title="قیمتِ آخرِ هر صندوق تا این‌قدر دقیقه «جاری» حساب می‌شود: برای کاندیدا شدن و برای فروخته شدن در جابه‌جایی (فروش با آخرین قیمتِ شناخته‌شده انجام می‌شود). عدد کوچک‌تر = واقع‌بینانه‌تر ولی جابه‌جایی کمتر."><label>عمر قیمت جاری (دقیقه)</label>
+        <input id="disc-fillage" type="number" step="5" min="1" value="90" style="width:70px"></div>
       <div class="bbt-field" title="فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد؛ ۰ = فقط وقتی در/زیر معمولِ خودش است (صندوقِ گران‌شده خریده نمی‌شود)."><label>پر کردن: حداکثر حباب نسبی ٪</label>
         <input id="disc-fillmax" type="number" step="0.1" value="0.1" style="width:70px"></div>
       <div class="bbt-field" title="پوزیشن پارک‌شده وقتی فروخته می‌شود که حبابش نسبت به معمولِ خودش به این درصد (یا بیشتر) برسد (سودبردن)."><label>پر کردن: فروش وقتی حباب نسبی ≥ ٪</label>
@@ -6597,7 +6601,7 @@ function discParams() {
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
     imin: v('disc-imin'), mrlag: v('disc-mrlag'),
-    fillmode: v('disc-fillmode'), fillswitch: v('disc-fillswitch'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
+    fillmode: v('disc-fillmode'), fillswitch: v('disc-fillswitch'), fillminhold: v('disc-fillminhold'), fillage: v('disc-fillage'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
     crashdrop: v('disc-crashdrop'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
@@ -7122,6 +7126,12 @@ const DISC_TIP_RULES = [
   [/^فاصلهٔ جفت‌های امتیاز/, 'فاصلهٔ اسنپ‌شات‌های جفتِ محاسبهٔ AR(1) امتیاز بازگشت.'],
   [/^پر کردن سرمایهٔ بیکار$/, 'نقدِ بی‌کار را در «بهترین» صندوق می‌گذارد بدون اینکه جلوی ورودهای سیگنال‌دار را بگیرد.'],
   [/^پر کردن: حداکثر حباب نسبی/, 'فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد.'],
+  [/^اثر NAV$/, 'سود/زیانِ حرکت NAV صندوق بین ورود و خروج، روی مبلغ خرید.'],
+  [/^اثر حباب$/, 'سود/زیانِ تغییر نسبت قیمت به NAV (همگرایی یا واگرایی حباب)، پیش از اسپرد و کارمزد.'],
+  [/^اسپرد$/, 'مجموع نیم‌اسپردِ فرضیِ پرداخت‌شده در خرید و فروش.'],
+  [/^خالص$/, 'سود خالص این صندوق = اثر NAV + اثر حباب − اسپرد − کارمزد.'],
+  [/^نگه‌داری: حداقل زمان/, 'یک صندوقِ نگه‌داری‌شده تا این‌قدر دقیقه پس از خرید برای جابه‌جایی فروخته نمی‌شود؛ جلوی جابه‌جایی‌های پشت‌سرهمِ همان روز را می‌گیرد. ۰ = خاموش.'],
+  [/^عمر قیمت/, 'قیمتِ آخرِ هر صندوق تا این‌قدر دقیقه «جاری» حساب می‌شود (برای کاندیدا شدن یا فروخته شدن در جابه‌جایی).'],
   [/^نگه‌داری: (حداقل برتری|برتری)/, 'صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که کاندیدایی دست‌کم این‌قدر نقطهٔ درصد ارزان‌تر (حباب نسبیِ کمتر) پیدا شود و نقد کافی نباشد؛ وگرنه به هر قیمتی نگه داشته می‌شود.'],
   [/^پر کردن: فروش وقتی/, 'پوزیشن پارک‌شده وقتی حبابش به این درصد بالای معمولِ خودش رسید فروخته می‌شود.'],
   [/^چرا سرمایه بی‌کار می‌ماند/, 'شمارش لحظه‌هایی که صندوق پوزیشن نداشت و دلیلِ ورود نکردن.'],
@@ -7426,10 +7436,35 @@ function discCrashHtml(res) {
   return `<div class="dv-note" style="font-size:11px;color:var(--sub);margin-top:6px" title="سهمی از لحظه‌ها که به‌خاطر ریزش گروه، ورودِ جدید ممنوع بود">🛑 فیلتر ریزش بازار: ${discLtr(c.blocked_share_pct + '%')} از لحظه‌ها ورود ممنوع بود (${discLtr(c.blocked_snapshots + ' از ' + c.snapshots)})${top ? ' — بیشتر: ' + top : ''}. اگر عدد خیلی کم است، آستانه را کمتر یا پنجره را کوتاه‌تر کنید؛ اگر خیلی زیاد است، آستانه را بالاتر ببرید.</div>`;
 }
 
+// where did the profit come from: NAV moves vs price/NAV convergence, minus spread and fees
+function discAttrHtml(res) {
+  const a = res.attribution, s = res.summary || {};
+  if (!a || !a.totals) return '';
+  const init = s.initial_capital || 1;
+  const T = a.totals, P = a.pct_of_capital || {}, S = a.share_of_net_pct || {};
+  const card = (l, v, sub, tip) => `<div class="opt-mc" title="${tip}"><div class="omk">${l}</div><div class="omv ${discCls(v)}">${discLtr(discM(v) + ' م.ر')}</div><div class="omk" style="font-size:10px">${sub}</div></div>`;
+  const sh = k => S[k] == null ? '' : `${discLtr((S[k]) + '%')} از سود خالص`;
+  const rows = (a.per_symbol || []).map(r => `<tr><td>${r.symbol}</td><td>${r.trades}</td><td class="${discCls(r.nav)}">${discM(r.nav)}</td>
+    <td class="${discCls(r.bubble)}">${discM(r.bubble)}</td><td>${discM(-r.spread)}</td><td>${discM(-r.fees)}</td><td class="${discCls(r.net)}"><b>${discM(r.net)}</b></td></tr>`).join('');
+  const sd = a.same_day || {}, lg = a.longer || {};
+  const sdNote = sd.trades ? `${discLtr(sd.trades)} معامله همان روز خریده و فروخته شد (${discLtr(sd.wins)} برد) با سود خالص ${discLtr(discM(sd.net))} م.ر؛ ` : '';
+  return `<div class="disc-h" style="margin-top:8px" title="هر معامله به اثر حرکت NAV، اثر همگرایی حباب، اسپرد و کارمزد تقسیم شده؛ جمعشان دقیقاً سود خالص است. اگر اثر NAV بزرگ‌ترین بخش باشد، سود عمدتاً از جهت‌گیری روی خودِ دارایی است.">تفکیک سود: NAV در برابر حباب — سود از رشد قیمت NAV بوده یا از همگرایی حباب؟</div>
+    <div class="opt-metric-row">
+      ${card('اثر حرکت NAV', T.nav, discLtr((P.nav ?? '—') + '% سرمایه') + ' · ' + sh('nav'), 'سودِ رشد یا افتِ NAV صندوق بین ورود و خروج، روی مبلغ خرید؛ یعنی اگر نسبت قیمت/NAV تغییر نمی‌کرد')}
+      ${card('اثر همگرایی حباب', T.bubble, discLtr((P.bubble ?? '—') + '% سرمایه') + ' · ' + sh('bubble'), 'باقی‌ماندهٔ سود ناخالص: تغییر نسبت قیمت به NAV بین ورود و خروج (پیش از اسپرد و کارمزد)')}
+      ${card('اسپرد پرداخت‌شده', -T.spread, sh('spread'), 'نیم‌اسپردِ فرضی هر دو طرف؛ داخل قیمت‌ها حساب شده')}
+      ${card('کارمزد', -T.fees, sh('fees'), 'کارمزد کارگزار و بورس')}
+      ${card('سود خالص', T.net, discLtr((P.net ?? '—') + '% سرمایه'), 'جمع چهار ردیف بالا؛ دقیقاً برابر سود خالص گزارش‌شده')}
+    </div>
+    <div class="dv-note" style="font-size:11px;color:var(--sub)">میانگین حرکت NAV ${discLtr((a.nav_move_pct_of_cost ?? '—') + '%')} و همگرایی حباب ${discLtr((a.bubble_capture_pct_of_cost ?? '—') + '%')} به‌ازای هر ریال معامله‌شده (جمع روی همهٔ معامله‌ها). ${sdNote}اگر «اثر حرکت NAV» بخش بزرگی از سود است، نتیجه عمدتاً جهت‌گیری روی خودِ دارایی است نه مزیت راهبرد؛ با «برتری نسبت به پسیو» در بخش مقایسه بسنجید.</div>
+    <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th>نماد</th><th>معامله</th><th>اثر NAV</th><th>اثر حباب</th><th>اسپرد</th><th>کارمزد</th><th>خالص</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 function discIdleHtml(res) {
   const ii = res.idle_info, fi = res.fill_info;
-  if (!ii && !fi) return '';
-  let h = '';
+  const attr = discAttrHtml(res);
+  if (!ii && !fi) return attr;
+  let h = attr;
   if (ii && ii.flat_snapshots) {
     const sz = ii.size || {};
     const rows = ii.reasons.filter(r => r.count > 0).map(r => `<tr><td style="text-align:start">${r.label}</td><td>${discLtr(r.pct + '%')}</td><td>${r.count.toLocaleString('en-US')}</td></tr>`).join('');
@@ -7437,7 +7472,8 @@ function discIdleHtml(res) {
       <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">دلیلِ ورود نکردن</th><th>سهم</th><th>تعداد</th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="dv-note" style="font-size:11px;color:var(--sub)">${ii.avg_gap_to_threshold_pct != null ? `در لحظه‌هایی که سیگنال نبود، تخفیف به‌طور میانگین ${discLtr(ii.avg_gap_to_threshold_pct + '%')} بالاتر از آستانهٔ ورود (${discLtr('−' + ii.entry_threshold_pct + '%')}) بود. ` : ''}
         پوزیشن‌های اجراشده به‌طور میانگین ${discLtr((sz.avg_size_ratio_pct == null ? '—' : sz.avg_size_ratio_pct + '%'))} اندازهٔ هدف بودند (${discLtr((sz.small_positions_pct == null ? '—' : sz.small_positions_pct + '%'))} از آن‌ها کمتر از نصف هدف)؛
-        اندازهٔ کمتر از هدف: ${discLtr(sz.limited_by_volume || 0)} بار به‌خاطر سقف حجم روز و ${discLtr(sz.limited_by_cash || 0)} بار به‌خاطر کمبود نقد؛ ${discLtr(sz.skipped_no_cash || 0)} سیگنال به‌خاطر نبودن نقد کافی ردّ شد.</div>`;
+        اندازهٔ کمتر از هدف: ${discLtr(sz.limited_by_volume || 0)} بار به‌خاطر سقف حجم روز و ${discLtr(sz.limited_by_cash || 0)} بار به‌خاطر کمبود نقد؛ ${discLtr(sz.skipped_no_cash || 0)} سیگنال به‌خاطر نبودن نقد کافی ردّ شد.${sz.switch_sales != null ? `
+        <br>جابه‌جایی‌ها: ${discLtr(sz.switch_sales)} فروش برای جابه‌جایی؛ در ${discLtr(sz.switch_sales_over_cap)} مورد حجم فروش از سقف «سهم از حجم روز» بیشتر بود (${discLtr(sz.switch_sale_value_over_cap_pct + '%')} از ارزش فروش‌ها بیش از سقف؛ در بک‌تست کامل فروخته می‌شود ولی در عمل ممکن است چند جلسه طول بکشد)، و ${discLtr(sz.switch_blocked_by_volume)} جابه‌جایی به‌خاطر ناکافی بودن سقف حجم برای خریدِ کاندیدا انجام نشد.` : ''}</div>`;
   }
   if (fi && res.params && res.params.fill_mode === 'hold') {
     h += `<div class="disc-h" style="margin-top:8px">حالت «همیشه سرمایه‌گذاری» — فروش فقط با کاندیدای بهتر</div>
@@ -7944,7 +7980,7 @@ const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_a
   index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن',
   crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
   session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
-  fill_mode: 'پر کردن', fill_switch_pct: 'نگه‌داری: برتری≥', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
+  fill_mode: 'پر کردن', fill_switch_pct: 'نگه‌داری: برتری≥', fill_min_hold_min: 'نگه‌داری: حداقل زمان', fill_quote_age_min: 'عمر قیمت', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
   require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
 // study dimension -> key of discParams() (the query the backtest/optimizer endpoints read)
 const DS_QKEY = {entry_mode: 'entrymode', baseline_days: 'base', max_nav_age_days: 'navage', max_nav_age_min: 'navmin', mr_center: 'mrcenter',
@@ -7953,7 +7989,7 @@ const DS_QKEY = {entry_mode: 'entrymode', baseline_days: 'base', max_nav_age_day
   crash_drop_pct: 'crashdrop', crash_window_min: 'crashwin', crash_cooldown_min: 'crashcool', crash_scope: 'crashscope',
   session_mode: 'smode', session_start: 'sstart', session_end: 'send', index_min_share: 'imin', mr_lag: 'mrlag', require_fresh: 'fresh',
   participation_pct: 'part', half_spread_pct: 'spread', buy_fee: 'buyfee', sell_fee: 'sellfee', fill_mode: 'fillmode',
-  fill_switch_pct: 'fillswitch', fill_max_rel_pct: 'fillmax', fill_exit_rel_pct: 'fillexit'};
+  fill_switch_pct: 'fillswitch', fill_min_hold_min: 'fillminhold', fill_quote_age_min: 'fillage', fill_max_rel_pct: 'fillmax', fill_exit_rel_pct: 'fillexit'};
 const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', max_nav_age_min: 'disc-navmin', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
   exit_discount_pct: 'disc-exit', index_entry_pct: 'disc-ientry', index_exit_pct: 'disc-iexit', max_hold_days: 'disc-hold',
@@ -7962,7 +7998,7 @@ const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_n
   crash_scope: 'disc-crashscope', session_mode: 'disc-smode', session_start: 'disc-sstart', session_end: 'disc-send',
   index_min_share: 'disc-imin', mr_lag: 'disc-mrlag', require_fresh: 'disc-fresh', participation_pct: 'disc-part',
   half_spread_pct: 'disc-spread', buy_fee: 'disc-buyfee', sell_fee: 'disc-sellfee',
-  fill_mode: 'disc-fillmode', fill_switch_pct: 'disc-fillswitch', fill_max_rel_pct: 'disc-fillmax', fill_exit_rel_pct: 'disc-fillexit'};
+  fill_mode: 'disc-fillmode', fill_switch_pct: 'disc-fillswitch', fill_min_hold_min: 'disc-fillminhold', fill_quote_age_min: 'disc-fillage', fill_max_rel_pct: 'disc-fillmax', fill_exit_rel_pct: 'disc-fillexit'};
 const dsHM = v => { const x = String(Math.round(+v)).padStart(6, '0'); return x.slice(0, 2) + ':' + x.slice(2, 4); };
 const dsVal = (d, v) => v == null ? '—'
   : (d === 'session_start' || d === 'session_end') ? dsHM(v)
@@ -8081,7 +8117,7 @@ function discStudyPresetDims(k, sp) {
   // always-invested mode has no entry/exit/hold/stop rules: the short presets search its own parameters instead
   if ((k === 'quick' || k === 'medium') && document.getElementById('disc-fillmode').value === 'hold') {
     const extra = k === 'medium' ? (sp.presets.medium || []).filter(d => !['entry_discount_pct', 'exit_discount_pct', 'max_hold_days', 'stop_loss_pct', 'stop_mode'].includes(d)) : [];
-    return ['fill_max_rel_pct', 'fill_switch_pct'].concat(extra);
+    return ['fill_max_rel_pct', 'fill_switch_pct', 'fill_min_hold_min'].concat(extra);
   }
   const mode = document.getElementById('disc-entrymode').value;
   const strip = ['entry_discount_pct', 'exit_discount_pct', 'index_entry_pct', 'index_exit_pct'];

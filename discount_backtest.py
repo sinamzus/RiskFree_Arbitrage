@@ -120,6 +120,8 @@ class DiscountParams:
     fill_mode: str = "hold"             # off | best (park idle cash in the best-ranked fund) | hold (always invested: the
                                         #   parker IS the strategy; a position is sold ONLY to switch into a better candidate)
     fill_switch_pct: float = 0.8        # hold: switch only if the candidate's bubble is this many % points below the held fund's
+    fill_min_hold_min: int = 0          # hold: a holding cannot be switched out before it was held this many minutes (0 = off)
+    fill_quote_age_min: int = 90        # a fund's latest quote counts as "current" (candidate / sellable) for this many minutes
     fill_max_rel_pct: float = 0.1       # park only into a fund trading at or below its own norm + this %
     fill_exit_rel_pct: float = 0.3      # sell a parked position once it trades this % above its norm
     crash_drop_pct: float = 1.5         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
@@ -1015,6 +1017,8 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
         cash, invested = parker.flush(cash, invested)             # still parked when the data ends
         mark_parked(n0)
         accepted.extend(parker.out)
+        for key in ("n", "ratio_sum", "small", "liq", "cash"):      # the parker's positions count in the sizing stats too
+            sz[key] += parker.sz[key]
     final = cash + invested
     if end_ts > last_ts:                                          # tail up to the end of the last day
         advance(end_ts)
@@ -1041,7 +1045,11 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
                       "avg_size_ratio_pct": round(sz["ratio_sum"] / sz["n"] * 100, 1) if sz["n"] else None,
                       "small_positions_pct": round(sz["small"] / sz["n"] * 100, 1) if sz["n"] else None,
                       "limited_by_volume": sz["liq"], "limited_by_cash": sz["cash"],
-                      "skipped_no_cash": sz["skip_cash"], "skipped_tiny": sz["skip_tiny"]},
+                      "skipped_no_cash": sz["skip_cash"], "skipped_tiny": sz["skip_tiny"],
+                      **({"switch_blocked_by_volume": parker.sz["skip_cap"],
+                          "switch_sales": parker.sz["sales"], "switch_sales_over_cap": parker.sz["sales_over_cap"],
+                          "switch_sale_value_over_cap_pct": round(parker.sz["sale_value_over_cap"] / parker.sz["sale_value"] * 100, 1)
+                          if parker.sz["sale_value"] > 0 else 0.0} if parker is not None else {})},
         "accepted_positions": len(factor),
         "period_days": span_days,
     }
@@ -1119,6 +1127,11 @@ class _Parker:
         self.cur_ts = [0] * self.n                    # instant of the latest snapshot of each fund
         self.hold = p.fill_mode == "hold"
         self.switch = p.fill_switch_pct / 100.0
+        self.min_hold_s = max(0, int(p.fill_min_hold_min)) * 60
+        self.max_age_s = max(1, int(p.fill_quote_age_min)) * 60
+        # sizing / liquidity diagnostics of the parker's own trades (merged into the replay's size_info)
+        self.sz = {"n": 0, "ratio_sum": 0.0, "small": 0, "liq": 0, "cash": 0, "skip_cap": 0,
+                   "sales": 0, "sales_over_cap": 0, "sale_value": 0.0, "sale_value_over_cap": 0.0}
         self.real_open: dict[str, int] = {}           # set by _replay: fund label -> open chunks of a NORMAL trade
         self.max_rel = p.fill_max_rel_pct / 100.0
         self.exit_rel = p.fill_exit_rel_pct / 100.0
@@ -1243,7 +1256,7 @@ class _Parker:
                 continue
             better = False
             for k2, c2 in self.cand.items():
-                if k2 == k or c2 is None or T - c2[0] > 5400 or k2 in self.parked \
+                if k2 == k or c2 is None or T - c2[0] > self.max_age_s or k2 in self.parked \
                         or self.real_open.get(self.labels[k2], 0) > 0:
                     continue
                 if c2[1] < c[1] - 1e-12:
@@ -1258,6 +1271,7 @@ class _Parker:
                 # no cash: sell the least attractive holding, but only if this candidate is clearly better —
                 # and only if the candidate can then actually be bought (volume cap), or we would sell for nothing
                 if self._cap(k, d) * last * (1 + hs) * (1 + bf) < 0.25 * slot:
+                    self.sz["skip_cap"] += 1
                     continue
                 cash, invested = self._switch_out(k, i, T, cash, invested)
                 slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
@@ -1265,11 +1279,19 @@ class _Parker:
             if slot <= 0 or amount < 0.25 * slot:
                 continue
             ask = last * (1 + hs)
-            units = min(amount / (ask * (1 + bf)), self._cap(k, d))
+            cap_u = self._cap(k, d)
+            units = min(amount / (ask * (1 + bf)), cap_u)
             if units <= 0 or units * ask * (1 + bf) < 0.25 * slot:
                 continue
+            ratio = min(1.0, units * ask * (1 + bf) / slot)
+            self.sz["n"] += 1
+            self.sz["ratio_sum"] += ratio
+            if ratio < 0.5:
+                self.sz["small"] += 1
+            if ratio < 0.999:                 # what limited the size: the volume cap or the cash at hand?
+                self.sz["liq" if cap_u * ask * (1 + bf) < amount * 0.999 else "cash"] += 1
             mr_score = round(self.mr[k][i], 1) if mr_on and self.mr[k] and self.mr[k][i] is not None else None
-            self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t,
+            self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": T,
                               "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score}
             cash -= units * ask * (1 + bf)
             invested += units * ask
@@ -1280,14 +1302,24 @@ class _Parker:
         ``fill_switch_pct`` points below it (and the held fund's latest quote is recent enough to be sold at)."""
         worst, w_rel = None, None
         for j in self.parked:
-            if j == k or self.cur_i[j] < 0 or T - self.cur_ts[j] > 5400:
+            if j == k or self.cur_i[j] < 0 or T - self.cur_ts[j] > self.max_age_s:
                 continue
+            if self.min_hold_s and T - self.parked[j]["ts"] < self.min_hold_s:
+                continue                      # bought too recently to be switched out
             r = self.rel[j][self.cur_i[j]]
             if w_rel is None or r > w_rel:
                 worst, w_rel = j, r
         if worst is None or self.rel[k][i] > w_rel - self.switch:
             return cash, invested
-        dc, di = self._close(worst, self.parked[worst]["units"], self.cur_i[worst], "rotate", T)
+        pw = self.parked[worst]
+        cap_u = self._cap(worst, self.rows[worst][self.cur_i[worst]][1])
+        val = pw["units"] * self.rows[worst][self.cur_i[worst]][4]
+        self.sz["sales"] += 1
+        self.sz["sale_value"] += val
+        if pw["units"] > cap_u:               # more than the volume cap would let us sell at once (still sold in full)
+            self.sz["sales_over_cap"] += 1
+            self.sz["sale_value_over_cap"] += val * (1 - cap_u / pw["units"])
+        dc, di = self._close(worst, pw["units"], self.cur_i[worst], "rotate", T)
         return cash + dc, invested + di
 
     def flush(self, cash: float, invested: float) -> tuple[float, float]:
@@ -1675,8 +1707,9 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
     idle_info = _idle_info(loaded, diags, summary, p)
     trade_dicts = [asdict(t) for t in accepted]
-    from discount_explain import explain_trades
+    from discount_explain import attribute_trades, explain_trades
     loss_causes = explain_trades(trade_dicts, loaded, p)        # adds "why" to every losing trade
+    attribution = attribute_trades(trade_dicts, p, p.initial_capital)
     return {
         "cats": cats or [],
         "funds_tested": tested, "funds_skipped": skipped_funds,
@@ -1685,6 +1718,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "signals": len({(t.symbol, t.entry_date, t.entry_time) for t in raw_trades}),
         "trades": trade_dicts,
         "loss_causes": loss_causes,
+        "attribution": attribution,
         "exposure": exposure,
         "crash_info": crash_info,
         "idle_info": idle_info,

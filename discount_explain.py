@@ -205,6 +205,63 @@ def explain_trades(trades: list[dict], loaded: list[dict], p) -> dict:
             "causes": causes, "tags": tags, "tag_labels": TAG_LABELS}
 
 
+def attribute_trades(trades: list[dict], p, initial_capital: float | None = None) -> dict:
+    """Where did the profit come from?  Every trade's net P&L is split into
+
+      * ``nav_pnl``    — the fund's NAV moving between entry and exit, applied to the cost basis
+                         (what holding the fund would have earned if its price/NAV ratio had not changed);
+      * ``bubble_pnl`` — the rest of the gross move: the price/NAV ratio converging (or diverging);
+      * ``spread``     — the assumed half-spreads paid on both sides (already inside the prices);
+      * ``fees``       — broker / exchange fees,
+
+    so that  nav_pnl + bubble_pnl − spread − fees = net  exactly (bubble_pnl is the residual, spread-free).
+    Returns totals, per-symbol rows and a same-day vs longer split."""
+    hs = p.half_spread_pct / 100.0
+    tot = {"nav": 0.0, "bubble": 0.0, "spread": 0.0, "fees": 0.0, "net": 0.0, "cost": 0.0}
+    by_sym: dict[str, dict] = {}
+    by_len = {"same_day": {"n": 0, "net": 0.0, "wins": 0}, "longer": {"n": 0, "net": 0.0, "wins": 0}}
+    for t in trades:
+        buy, sell = float(t["buy_notional"]), float(t["sell_notional"])
+        nav_e, nav_x = float(t.get("nav_entry") or 0), float(t.get("nav_exit") or 0)
+        nav_pnl = buy * (nav_x / nav_e - 1.0) if nav_e > 0 and nav_x > 0 else 0.0
+        spread = buy * hs / (1 + hs) + sell * hs / (1 - hs)
+        fees = float(t["fees"])
+        net = float(t["net_pnl"])
+        bubble = net - nav_pnl + spread + fees
+        for d_ in (tot, by_sym.setdefault(t["symbol"], {"nav": 0.0, "bubble": 0.0, "spread": 0.0, "fees": 0.0, "net": 0.0,
+                                                         "cost": 0.0, "n": 0})):
+            d_["nav"] += nav_pnl
+            d_["bubble"] += bubble
+            d_["spread"] += spread
+            d_["fees"] += fees
+            d_["net"] += net
+            d_["cost"] += buy
+        by_sym[t["symbol"]]["n"] += 1
+        g = by_len["same_day" if t.get("hold_days", 1) == 0 else "longer"]
+        g["n"] += 1
+        g["net"] += net
+        g["wins"] += 1 if net > 0 else 0
+    cap = float(initial_capital or p.initial_capital or 0)
+    net_t = tot["net"]
+
+    def pct(x, base):
+        return round(x / base * 100, 2) if base else None
+    out = {
+        "totals": {k: round(v, 0) for k, v in tot.items()},
+        "pct_of_capital": {k: pct(tot[k], cap) for k in ("nav", "bubble", "spread", "fees", "net")},
+        "share_of_net_pct": {k: pct(tot[k], net_t) for k in ("nav", "bubble", "spread", "fees")},
+        "bubble_capture_pct_of_cost": pct(tot["bubble"], tot["cost"]),     # average gross convergence per rial invested
+        "nav_move_pct_of_cost": pct(tot["nav"], tot["cost"]),
+        "per_symbol": sorted(({"symbol": s, "trades": d_["n"], **{k: round(d_[k], 0) for k in ("nav", "bubble", "spread", "fees", "net")}}
+                              for s, d_ in by_sym.items()), key=lambda r: -r["net"]),
+        "same_day": {"trades": by_len["same_day"]["n"], "net": round(by_len["same_day"]["net"], 0),
+                     "wins": by_len["same_day"]["wins"]},
+        "longer": {"trades": by_len["longer"]["n"], "net": round(by_len["longer"]["net"], 0),
+                   "wins": by_len["longer"]["wins"]},
+    }
+    return out
+
+
 TAG_LABELS = {
     "stop": "خروج با حد ضرر", "time": "پایان سقف نگه‌داری", "end": "پایان داده با پوزیشن باز",
     "intraday": "بستن در همان روز", "weak_edge": "لبهٔ ورود کمتر از هزینه",

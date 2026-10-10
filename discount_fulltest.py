@@ -247,6 +247,10 @@ AUDIT = [
     ("فاصلهٔ جفت‌ها وقتی فیلتر بازگشت خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_lag", [1, 8], "same"),
     ("حداکثر حباب نسبی وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_max_rel_pct", [-0.1, 0.5], "same"),
     ("آستانهٔ فروش پارک وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_exit_rel_pct", [0.1, 1.5], "same"),
+    ("نگه‌داری: حداقل زمان پیش از جابه‌جایی", {"fill_mode": "hold", "fill_max_rel_pct": 1.0, "position_pct": 25}, "fill_min_hold_min", [0, 100000], "change"),
+    ("عمر قیمت جاری", {"fill_mode": "hold", "fill_max_rel_pct": 1.0, "position_pct": 25}, "fill_quote_age_min", [1, 600], "change"),
+    ("حداقل زمان نگه‌داری وقتی «نگه‌داری» نیست بی‌اثر است", {"fill_mode": "best"}, "fill_min_hold_min", [0, 100000], "same"),
+    ("عمر قیمت وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_quote_age_min", [1, 600], "same"),
     ("برتری جابه‌جایی وقتی «نگه‌داری» نیست بی‌اثر است", {"fill_mode": "best"}, "fill_switch_pct", [0.2, 3.0], "same"),
     ("آستانهٔ فروش پارک در «نگه‌داری» بی‌اثر است", {"fill_mode": "hold", "fill_max_rel_pct": 1.0}, "fill_exit_rel_pct", [0.1, 1.5], "same"),
     ("آستانهٔ ورود در «نگه‌داری» بی‌اثر است", {"fill_mode": "hold", "fill_max_rel_pct": 1.0}, "entry_discount_pct", [0.2, 1.5], "same"),
@@ -316,6 +320,7 @@ WEB_MAP = {
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "category", "category"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
     "navmin": ("max_nav_age_min", "17", 17), "fillswitch": ("fill_switch_pct", "0.9", 0.9),
+    "fillminhold": ("fill_min_hold_min", "150", 150), "fillage": ("fill_quote_age_min", "45", 45),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
     "fillexit": ("fill_exit_rel_pct", "0.45", 0.45),
 }
@@ -388,7 +393,7 @@ UI_ID = {  # query key -> element id
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
-    "navmin": "disc-navmin", "fillswitch": "disc-fillswitch", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
+    "navmin": "disc-navmin", "fillswitch": "disc-fillswitch", "fillminhold": "disc-fillminhold", "fillage": "disc-fillage", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
 }
 
 
@@ -884,9 +889,59 @@ def test_hold(R: Results, db):
     r0 = _run(db, replace(base, fill_mode="off"))
     R.add(g, "سرمایهٔ درگیر در «نگه‌داری» از حالت عادی بیشتر است", rest["summary"]["avg_exposure_pct"] > r0["summary"]["avg_exposure_pct"],
           f"{r0['summary']['avg_exposure_pct']}→{rest['summary']['avg_exposure_pct']}٪")
+    # minimum holding time: no switch-out earlier than N minutes after the purchase
+    mh = 600
+    res_mh = _run(db, replace(base, fill_mode="hold", fill_max_rel_pct=2.0, fill_switch_pct=0.3, fill_min_hold_min=mh))
+    short = []
+    for t in res_mh["trades"]:
+        if t["exit_reason"] != "rotate":
+            continue
+        a = D._ord(t["entry_date"]) * 86400 + D._sec(t["entry_time"])
+        b = D._ord(t["exit_date"]) * 86400 + D._sec(t["exit_time"])
+        if b - a < mh * 60:
+            short.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}→{t['exit_time']}")
+    base_rot = sum(1 for t in _run(db, replace(base, fill_mode="hold", fill_max_rel_pct=2.0, fill_switch_pct=0.3))["trades"]
+                   if t["exit_reason"] == "rotate")
+    n_rot_mh = sum(1 for t in res_mh["trades"] if t["exit_reason"] == "rotate")
+    R.add(g, "با «حداقل زمان نگه‌داری» هیچ جابه‌جایی زودتر از آن انجام نمی‌شود و تعداد جابه‌جایی‌ها کمتر می‌شود",
+          not short and n_rot_mh < base_rot, "؛ ".join(short[:3]) or f"جابه‌جایی {base_rot}→{n_rot_mh}")
+    # sizing / liquidity diagnostics now exist for the parker's positions
+    si = rest["summary"].get("size_info", {})
+    R.add(g, "آمار اندازهٔ پوزیشن و سقف حجم برای حالت «نگه‌داری» گزارش می‌شود",
+          si.get("positions", 0) > 0 and "switch_sales" in si and si.get("avg_size_ratio_pct") is not None, str(si)[:160])
+    tight = _run(db, replace(base, fill_mode="hold", fill_max_rel_pct=2.0, participation_pct=0.5))["summary"]["size_info"]
+    R.add(g, "با سقف حجم تنگ، سهم «محدود به حجم» و فروش‌های بیش از سقف دیده می‌شود",
+          tight["limited_by_volume"] > 0 or tight["switch_sales_over_cap"] > 0 or tight["switch_blocked_by_volume"] > 0, str(tight)[:160])
     huge = _run(db, replace(base, fill_mode="hold", fill_max_rel_pct=2.0, fill_switch_pct=1000.0))
     R.add(g, "با برتریِ خیلی بزرگ هرگز جابه‌جایی نمی‌شود (فقط «پایان داده»)",
           all(t["exit_reason"] == "end" for t in huge["trades"]) and huge["trades"], "")
+
+
+def test_attribution(R: Results, db):
+    """Profit attribution (NAV move vs bubble convergence vs spread vs fees) must reconcile exactly."""
+    g = "تفکیک سود NAV / حباب"
+    for lab, p in (("قواعد عادی", _base(entry_discount_pct=0.3, position_pct=25)),
+                   ("نگه‌داری", _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=25))):
+        res = _run(db, p)
+        a = res["attribution"]
+        T = a["totals"]
+        net_report = res["summary"]["final_capital"] - res["summary"]["initial_capital"]
+        tol = max(50.0, 2.0 * len(res["trades"]))               # per-trade rounding of rials
+        R.add(g, f"{lab}: NAV + حباب − اسپرد − کارمزد = سود خالص",
+              abs(T["nav"] + T["bubble"] - T["spread"] - T["fees"] - T["net"]) <= tol, f"{T}")
+        R.add(g, f"{lab}: جمع خالصِ تفکیک = سود خالص گزارش‌شدهٔ پرتفوی", abs(T["net"] - net_report) <= tol,
+              f"{T['net']:,.0f} ≠ {net_report:,.0f}")
+        hs = p.half_spread_pct / 100.0
+        nav_ind = sum(t["buy_notional"] * (t["nav_exit"] / t["nav_entry"] - 1) for t in res["trades"] if t["nav_entry"] > 0)
+        sp_ind = sum(t["buy_notional"] * hs / (1 + hs) + t["sell_notional"] * hs / (1 - hs) for t in res["trades"])
+        R.add(g, f"{lab}: اثر NAV و اسپرد با محاسبهٔ مستقل از روی معامله‌ها یکی است",
+              abs(T["nav"] - nav_ind) <= tol and abs(T["spread"] - sp_ind) <= tol, f"{T['nav']:,.0f} / {nav_ind:,.0f}")
+        R.add(g, f"{lab}: جمع سود هر نماد = جمع کل", abs(sum(r["net"] for r in a["per_symbol"]) - T["net"]) <= tol, "")
+    # a world where price == NAV·const has no bubble PnL beyond spread/fees: with spread = fees = 0, bubble == net − nav
+    res0 = _run(db, _base(entry_discount_pct=0.3, half_spread_pct=0.0, buy_fee=0.0, sell_fee=0.0))
+    T0 = res0["attribution"]["totals"]
+    R.add(g, "بدون اسپرد و کارمزد: اسپرد و کارمزد صفر و NAV + حباب = خالص", T0["spread"] == 0 and T0["fees"] == 0
+          and abs(T0["nav"] + T0["bubble"] - T0["net"]) <= max(50.0, 2.0 * len(res0["trades"])), str(T0))
 
 
 def test_export(R: Results, db):
@@ -1055,7 +1110,7 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             pg.click("text=⚡ سریع"); pg.wait_for_timeout(300)
             on = pg.evaluate("[...document.querySelectorAll('#ds-dims [data-dim]')].filter(c=>c.checked).map(c=>c.dataset.dim)")
             R.add("مرورگر", "در حالت «همیشه سرمایه‌گذاری» پیش‌تنظیم سریع پارامترهای همان حالت را تیک می‌زند",
-                  set(on) == {"fill_max_rel_pct", "fill_switch_pct"}, str(on))
+                  set(on) == {"fill_max_rel_pct", "fill_switch_pct", "fill_min_hold_min"}, str(on))
             pg.click("#ds-cancel"); pg.select_option("#disc-fillmode", "off")
             pg.click("#disc-opt-btn"); pg.wait_for_selector("#disc-study-cfg.visible #ds-dims tbody tr")
             R.add("مرورگر", "دکمهٔ بهینه‌سازی یک پنجرهٔ انتخاب پارامتر باز می‌کند و هنوز چیزی اجرا نشده",
@@ -1190,6 +1245,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
              ("پر کردن سرمایهٔ بیکار", lambda: test_fill(R, db)),
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
+             ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
              ("ارسال نتایج برای تحلیل", lambda: test_export(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),
              ("جهش (آزمونِ آزمون‌ها)", lambda: test_mutations(R, db))]
