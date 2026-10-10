@@ -220,7 +220,8 @@ AUDIT = [
     ("فیلتر ریزش: گروه", {"crash_drop_pct": 0.3}, "crash_scope", ["category", "all"], "change"),
     ("حداقل سهم صندوق‌ها برای شاخص (حالت شاخص)", {"entry_mode": "index"}, "index_min_share", [0.3, 1.0], "change"),
     ("فاصلهٔ جفت‌های امتیاز بازگشت", {"mr_center": "zero"}, "mr_lag", [1, 8], "change"),
-    ("پر کردن سرمایهٔ بیکار: روشن/خاموش", {}, "fill_mode", ["off", "best"], "change"),
+    ("پر کردن سرمایهٔ بیکار: روشن/خاموش", {}, "fill_mode", ["off", "best", "hold"], "change"),
+    ("نگه‌داری: حداقل برتری برای جابه‌جایی", {"fill_mode": "hold", "fill_max_rel_pct": 1.0, "position_pct": 25}, "fill_switch_pct", [0.2, 3.0], "change"),
     ("پر کردن: حداکثر حباب نسبی", {"fill_mode": "best"}, "fill_max_rel_pct", [-0.1, 0.5], "change"),
     ("پر کردن: آستانهٔ فروش", {"fill_mode": "best"}, "fill_exit_rel_pct", [0.1, 1.5], "change"),
     ("حالت ساعت جلسه", {"session_start": 90000, "session_end": 123000}, "session_mode", ["auto", "fixed"], "change"),
@@ -240,6 +241,12 @@ AUDIT = [
     ("فاصلهٔ جفت‌ها وقتی فیلتر بازگشت خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_lag", [1, 8], "same"),
     ("حداکثر حباب نسبی وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_max_rel_pct", [-0.1, 0.5], "same"),
     ("آستانهٔ فروش پارک وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_exit_rel_pct", [0.1, 1.5], "same"),
+    ("برتری جابه‌جایی وقتی «نگه‌داری» نیست بی‌اثر است", {"fill_mode": "best"}, "fill_switch_pct", [0.2, 3.0], "same"),
+    ("آستانهٔ فروش پارک در «نگه‌داری» بی‌اثر است", {"fill_mode": "hold", "fill_max_rel_pct": 1.0}, "fill_exit_rel_pct", [0.1, 1.5], "same"),
+    ("آستانهٔ ورود در «نگه‌داری» بی‌اثر است", {"fill_mode": "hold", "fill_max_rel_pct": 1.0}, "entry_discount_pct", [0.2, 1.5], "same"),
+    ("آستانهٔ خروج در «نگه‌داری» بی‌اثر است", {"fill_mode": "hold", "fill_max_rel_pct": 1.0}, "exit_discount_pct", [0.0, -0.5], "same"),
+    ("حداکثر روز نگه‌داری در «نگه‌داری» بی‌اثر است", {"fill_mode": "hold", "fill_max_rel_pct": 1.0}, "max_hold_days", [2, 30], "same"),
+    ("حد ضرر در «نگه‌داری» بی‌اثر است", {"fill_mode": "hold", "fill_max_rel_pct": 1.0}, "stop_loss_pct", [0.0, 1.0], "same"),
     ("ساعت ثابت وقتی حالت خودکار است بی‌اثر است", {"session_mode": "auto"}, "session_end", [100000, 123000], "same"),
     # ---- invariance ----
     ("بازده٪ به سرمایهٔ اولیه وابسته نیست", {}, "initial_capital", [1e9, 9e10], "invariant_ret"),
@@ -302,7 +309,7 @@ WEB_MAP = {
     "crashdrop": ("crash_drop_pct", "0.8", 0.8), "crashwin": ("crash_window_min", "45", 45),
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "all", "all"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
-    "navmin": ("max_nav_age_min", "17", 17),
+    "navmin": ("max_nav_age_min", "17", 17), "fillswitch": ("fill_switch_pct", "0.9", 0.9),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
     "fillexit": ("fill_exit_rel_pct", "0.45", 0.45),
 }
@@ -375,7 +382,7 @@ UI_ID = {  # query key -> element id
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
-    "navmin": "disc-navmin", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
+    "navmin": "disc-navmin", "fillswitch": "disc-fillswitch", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
 }
 
 
@@ -560,7 +567,7 @@ def test_optimizer(R: Results, db):
         U = st._universe(p)
         import discount_validation as V
         tr = V._sim_all(U, p)
-        fill = st._fill_ctx(U, d0, d1) if p.fill_mode == "best" else None
+        fill = st._fill_ctx(U, d0, d1) if D.fill_on(p) else None
         _a, s, _c = D._portfolio_summary(tr, p, d0, d1, fill=fill)
         if abs(s["final_capital"] - full) > 1:
             bad.append(f"{rec['cfg']}: {s['final_capital']:,.0f} ≠ {full:,.0f}")
@@ -819,6 +826,57 @@ def _cash_path(res: dict, p: D.DiscountParams):
     return lo, cash
 
 
+def test_hold(R: Results, db):
+    """fill_mode == "hold": always invested; a position is sold ONLY to switch into a clearly better candidate."""
+    g = "نگه‌داری تا کاندیدای بهتر"
+    rng = random.Random(21)
+    bad_cash, bad_reason, bad_switch, bad_exp, n_tr, n_rot, n_run = [], [], [], [], 0, 0, 8
+    for it in range(n_run):
+        p = _random_params(rng)
+        p = replace(p, fill_mode="hold", fill_max_rel_pct=rng.choice([0.0, 0.5, 2.0]),
+                    fill_switch_pct=rng.choice([0.2, 0.5, 1.5]), participation_pct=rng.choice([0.0, 5.0]),
+                    position_pct=rng.choice([10, 25, 50]))
+        res = _run(db, p)
+        lo, cash_final = _cash_path(res, p)
+        if lo < -1e-6 * p.initial_capital - 1:
+            bad_cash.append(f"#{it}: {lo / p.initial_capital * 100:.3f}٪")
+        if abs(cash_final - res["summary"]["final_capital"]) > max(50, 1e-6 * p.initial_capital):
+            bad_cash.append(f"#{it}: مسیر نقد ≠ گزارش")
+        hs2 = p.half_spread_pct * 2
+        entries = {}
+        for t in res["trades"]:
+            entries.setdefault((D._ord(t["entry_date"]) * 86400 + D._sec(t["entry_time"])), []).append(t)
+        for t in res["trades"]:
+            n_tr += 1
+            if t["exit_reason"] not in ("rotate", "end"):
+                bad_reason.append(f"#{it} {t['symbol']}: {t['exit_reason']}")
+                continue
+            if t["exit_reason"] != "rotate":
+                continue
+            n_rot += 1
+            ts = D._ord(t["exit_date"]) * 86400 + D._sec(t["exit_time"])
+            # a switch is only legal if some other fund was bought at that very instant, clearly cheaper
+            cands = [e for e in entries.get(ts, []) if e["symbol"] != t["symbol"]]
+            if not cands or not any(e["rel_entry_pct"] <= t["rel_exit_pct"] + hs2 - p.fill_switch_pct + 0.02 for e in cands):
+                bad_switch.append(f"#{it} {t['symbol']} @{t['exit_date']} {t['exit_time']}")
+        e = res["exposure"]
+        if not (0 <= e["avg_pct"] <= 100.0001):
+            bad_exp.append(f"#{it}: {e['avg_pct']}")
+    R.add(g, "نقد هرگز منفی نمی‌شود و سرمایهٔ نهایی = مسیر نقدِ مستقل", not bad_cash, "؛ ".join(bad_cash[:3]) or f"{n_run} تنظیم تصادفی")
+    R.add(g, "تنها علت‌های خروج «جابه‌جایی» و «پایان داده» است (نه زمان، نه حد ضرر، نه سیگنال فروش)",
+          not bad_reason and n_tr > 0, "؛ ".join(bad_reason[:3]) or f"{n_tr} معامله")
+    R.add(g, "هر جابه‌جایی همان لحظه به صندوقی با حبابِ دست‌کم «برتری» کمتر رفته است",
+          not bad_switch and n_rot > 0, "؛ ".join(bad_switch[:3]) or f"{n_rot} جابه‌جایی")
+    base = _base(position_pct=25)
+    rest = _run(db, replace(base, fill_mode="hold", fill_max_rel_pct=2.0, fill_switch_pct=0.5))
+    r0 = _run(db, replace(base, fill_mode="off"))
+    R.add(g, "سرمایهٔ درگیر در «نگه‌داری» از حالت عادی بیشتر است", rest["summary"]["avg_exposure_pct"] > r0["summary"]["avg_exposure_pct"],
+          f"{r0['summary']['avg_exposure_pct']}→{rest['summary']['avg_exposure_pct']}٪")
+    huge = _run(db, replace(base, fill_mode="hold", fill_max_rel_pct=2.0, fill_switch_pct=1000.0))
+    R.add(g, "با برتریِ خیلی بزرگ هرگز جابه‌جایی نمی‌شود (فقط «پایان داده»)",
+          all(t["exit_reason"] == "end" for t in huge["trades"]) and huge["trades"], "")
+
+
 def test_fill(R: Results, db):
     g = "پر کردن سرمایهٔ بیکار"
     rng = random.Random(8)
@@ -1071,6 +1129,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("ناوردایی‌ها", lambda: test_invariants(R, db)),
              ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
              ("پر کردن سرمایهٔ بیکار", lambda: test_fill(R, db)),
+             ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),
              ("جهش (آزمونِ آزمون‌ها)", lambda: test_mutations(R, db))]
     if ui:

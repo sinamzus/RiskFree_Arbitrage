@@ -2402,7 +2402,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="مقدار حد ضرر (٪ یا واحد درصد، طبق نوع انتخابی)؛ ۰ = خاموش"><label>حد ضرر</label>
         <input id="disc-stop" type="number" step="0.5" value="0" style="width:70px"></div>
       <div class="bbt-field" title="پر کردن سرمایهٔ بیکار: وقتی نقد بی‌کار مانده، آن را در «بهترین» صندوق (کمترین حباب نسبت به معمولِ خودش) می‌گذارد، بدون اینکه جلوی معاملهٔ سیگنال‌دار را بگیرد: هر وقت ورودِ عادی نقد لازم داشت، پارک‌شده‌ها فروخته می‌شوند. همان قواعد زمان/حد ضرر/فیلترها اعمال می‌شود. «خاموش» = رفتار قبلی."><label>پر کردن سرمایهٔ بیکار</label>
-        <select id="disc-fillmode" style="width:230px"><option value="off">خاموش</option><option value="best">با بهترین صندوق (کمترین حباب نسبی)</option></select></div>
+        <select id="disc-fillmode" style="width:230px"><option value="off">خاموش</option><option value="best">با بهترین صندوق (کمترین حباب نسبی)</option><option value="hold">همیشه سرمایه‌گذاری؛ فقط با کاندیدای بهتر بفروش</option></select></div>
+      <div class="bbt-field" title="فقط برای حالت «همیشه سرمایه‌گذاری»: صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که صندوق دیگری حبابش (نسبت به معمولِ خودش) دست‌کم این‌قدر نقطهٔ درصد پایین‌تر باشد و نقد برای خریدش نباشد. در این حالت سیگنال فروش، زمان نگه‌داری و حد ضرر وجود ندارد؛ فقط جابه‌جایی به کاندیدای بهتر یا پایان داده. هزینهٔ رفت‌وبرگشت (کارمزد + اسپرد) حدود ۰٫۳۵٪ است؛ کمتر از آن جابه‌جایی ضرر است."><label>نگه‌داری: حداقل برتری برای جابه‌جایی ٪</label>
+        <input id="disc-fillswitch" type="number" step="0.1" min="0" value="0.5" style="width:70px"></div>
       <div class="bbt-field" title="فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد؛ ۰ = فقط وقتی در/زیر معمولِ خودش است (صندوقِ گران‌شده خریده نمی‌شود)."><label>پر کردن: حداکثر حباب نسبی ٪</label>
         <input id="disc-fillmax" type="number" step="0.1" value="0" style="width:70px"></div>
       <div class="bbt-field" title="پوزیشن پارک‌شده وقتی فروخته می‌شود که حبابش نسبت به معمولِ خودش به این درصد (یا بیشتر) برسد (سودبردن)."><label>پر کردن: فروش وقتی حباب نسبی ≥ ٪</label>
@@ -6566,7 +6568,7 @@ function discParams() {
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
     imin: v('disc-imin'), mrlag: v('disc-mrlag'),
-    fillmode: v('disc-fillmode'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
+    fillmode: v('disc-fillmode'), fillswitch: v('disc-fillswitch'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
     crashdrop: v('disc-crashdrop'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'),
@@ -7091,6 +7093,7 @@ const DISC_TIP_RULES = [
   [/^فاصلهٔ جفت‌های امتیاز/, 'فاصلهٔ اسنپ‌شات‌های جفتِ محاسبهٔ AR(1) امتیاز بازگشت.'],
   [/^پر کردن سرمایهٔ بیکار$/, 'نقدِ بی‌کار را در «بهترین» صندوق می‌گذارد بدون اینکه جلوی ورودهای سیگنال‌دار را بگیرد.'],
   [/^پر کردن: حداکثر حباب نسبی/, 'فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد.'],
+  [/^نگه‌داری: (حداقل برتری|برتری)/, 'صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که کاندیدایی دست‌کم این‌قدر نقطهٔ درصد ارزان‌تر (حباب نسبیِ کمتر) پیدا شود و نقد کافی نباشد؛ وگرنه به هر قیمتی نگه داشته می‌شود.'],
   [/^پر کردن: فروش وقتی/, 'پوزیشن پارک‌شده وقتی حبابش به این درصد بالای معمولِ خودش رسید فروخته می‌شود.'],
   [/^چرا سرمایه بی‌کار می‌ماند/, 'شمارش لحظه‌هایی که صندوق پوزیشن نداشت و دلیلِ ورود نکردن.'],
   [/^سهم$/, 'سهم از لحظه‌هایی که صندوق پوزیشن نداشت و به این دلیل ورود نشد.'],
@@ -7396,7 +7399,17 @@ function discIdleHtml(res) {
         پوزیشن‌های اجراشده به‌طور میانگین ${discLtr((sz.avg_size_ratio_pct == null ? '—' : sz.avg_size_ratio_pct + '%'))} اندازهٔ هدف بودند (${discLtr((sz.small_positions_pct == null ? '—' : sz.small_positions_pct + '%'))} از آن‌ها کمتر از نصف هدف)؛
         اندازهٔ کمتر از هدف: ${discLtr(sz.limited_by_volume || 0)} بار به‌خاطر سقف حجم روز و ${discLtr(sz.limited_by_cash || 0)} بار به‌خاطر کمبود نقد؛ ${discLtr(sz.skipped_no_cash || 0)} سیگنال به‌خاطر نبودن نقد کافی ردّ شد.</div>`;
   }
-  if (fi) {
+  if (fi && res.params && res.params.fill_mode === 'hold') {
+    h += `<div class="disc-h" style="margin-top:8px">حالت «همیشه سرمایه‌گذاری» — فروش فقط با کاندیدای بهتر</div>
+      <div class="opt-metric-row">
+      ${discCard('سرمایهٔ درگیر (میانگین)', fi.avg_exposure_pct + '%')}
+      ${discCard('تعداد پوزیشن (برد)', fi.trades + ' (' + fi.wins + ')')}
+      ${discCard('جابه‌جایی به کاندیدای بهتر', fi.rotations + ' بار')}
+      ${discCard('میانگین نگه‌داری', fi.avg_hold_days + ' روز')}
+      ${discCard('کارمزد', discFmt(fi.fees) + ' ﷼')}
+      ${discCard('افت حداکثر', fi.drawdown_pct + '%')}
+    </div><div class="dv-note" style="font-size:11px;color:var(--sub)">در این حالت هیچ سیگنال فروش، حد زمان یا حد ضرری اعمال نمی‌شود؛ پوزیشن فقط با جابه‌جایی به کاندیدای بهتر (یا پایان داده) بسته می‌شود. ممکن است یک صندوق مدت‌ها زیر آب بماند؛ سرمایه به‌جای بیکار ماندن همیشه در بهترین‌ها است.</div>`;
+  } else if (fi) {
     h += `<div class="disc-h" style="margin-top:8px">پر کردن سرمایهٔ بیکار با بهترین صندوق — اثر روی نتیجه (استخر سرمایهٔ یکسان)</div>
       <div class="opt-metric-row">
       ${discCard('سرمایهٔ نهایی بدون پر کردن', discM(fi.base_final_capital) + ' م.ر')}
@@ -7881,7 +7894,7 @@ async function discStats() {
 let _discSpace = null, _discStudy = null;
 const DISC_STUDY_KEY = 'discStudyCfg_v1';
 const DS_VAL = {
-  fill_mode: {off: 'خاموش', best: 'بهترین صندوق'}, crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
+  fill_mode: {off: 'خاموش', best: 'بهترین صندوق', hold: 'همیشه سرمایه‌گذاری'}, crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
   entry_mode: {fund: 'هر صندوق', index: 'شاخص', both: 'هر دو'},
   mr_center: {off: 'خاموش', zero: 'صفر', category: 'دسته', self: 'خود'},
   stop_mode: {nav_widen: 'NAV بازتر', nav_level: 'NAV سطح', price: 'قیمت'},
@@ -7891,7 +7904,7 @@ const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_a
   index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن',
   crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
   session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
-  fill_mode: 'پر کردن', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
+  fill_mode: 'پر کردن', fill_switch_pct: 'نگه‌داری: برتری≥', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
   require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
 const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', max_nav_age_min: 'disc-navmin', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
@@ -7901,7 +7914,7 @@ const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_n
   crash_scope: 'disc-crashscope', session_mode: 'disc-smode', session_start: 'disc-sstart', session_end: 'disc-send',
   index_min_share: 'disc-imin', mr_lag: 'disc-mrlag', require_fresh: 'disc-fresh', participation_pct: 'disc-part',
   half_spread_pct: 'disc-spread', buy_fee: 'disc-buyfee', sell_fee: 'disc-sellfee',
-  fill_mode: 'disc-fillmode', fill_max_rel_pct: 'disc-fillmax', fill_exit_rel_pct: 'disc-fillexit'};
+  fill_mode: 'disc-fillmode', fill_switch_pct: 'disc-fillswitch', fill_max_rel_pct: 'disc-fillmax', fill_exit_rel_pct: 'disc-fillexit'};
 const dsHM = v => { const x = String(Math.round(+v)).padStart(6, '0'); return x.slice(0, 2) + ':' + x.slice(2, 4); };
 const dsVal = (d, v) => v == null ? '—'
   : (d === 'session_start' || d === 'session_end') ? dsHM(v)

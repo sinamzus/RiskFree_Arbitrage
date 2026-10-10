@@ -117,7 +117,9 @@ class DiscountParams:
     mr_min_score: float = 70.0          # 0-100; below this the fund is not tradable that day
     mr_horizon_days: int = 5            # score = share of the gap expected to close within this
     mr_lag: int = 4                     # snapshots between the AR(1) pairs (≈ 1 hour)
-    fill_mode: str = "off"              # off | best — park idle cash in the best-ranked fund (see _park_overlay)
+    fill_mode: str = "off"              # off | best (park idle cash in the best-ranked fund) | hold (always invested: the
+                                        #   parker IS the strategy; a position is sold ONLY to switch into a better candidate)
+    fill_switch_pct: float = 0.5        # hold: switch only if the candidate's bubble is this many % points below the held fund's
     fill_max_rel_pct: float = 0.0       # park only into a fund trading at or below its own norm + this %
     fill_exit_rel_pct: float = 0.3      # sell a parked position once it trades this % above its norm
     crash_drop_pct: float = 0.0         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
@@ -137,6 +139,11 @@ class DiscountParams:
     session_end: int = 123000
     buy_fee: float = 0.0012             # 0.12% each side (all-in broker + exchange fee for these ETFs)
     sell_fee: float = 0.0012
+
+
+def fill_on(p: "DiscountParams") -> bool:
+    """Does the portfolio parker run (idle-capital parking, or the always-invested "hold" strategy)?"""
+    return p.fill_mode in ("best", "hold")
 
 
 @dataclass
@@ -650,7 +657,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     ``rel`` (optional) replaces last/fair − 1 as the fund-level signal — used by the
     validation placebo test to feed the same rules a signal that is unrelated to prices."""
     trades: list[Trade] = []
-    if not rows:
+    if not rows or p.fill_mode == "hold":      # "hold": the portfolio parker runs the whole strategy (see _Parker)
         return trades
     hs = p.half_spread_pct / 100.0
     ent_thr = -p.entry_discount_pct / 100.0
@@ -1109,6 +1116,9 @@ class _Parker:
         self.blocked_day: dict[int, int] = {}
         self.cand: dict[int, tuple | None] = {}
         self.cur_i = [-1] * self.n
+        self.cur_ts = [0] * self.n                    # instant of the latest snapshot of each fund
+        self.hold = p.fill_mode == "hold"
+        self.switch = p.fill_switch_pct / 100.0
         self.real_open: dict[str, int] = {}           # set by _replay: fund label -> open chunks of a NORMAL trade
         self.max_rel = p.fill_max_rel_pct / 100.0
         self.exit_rel = p.fill_exit_rel_pct / 100.0
@@ -1186,9 +1196,10 @@ class _Parker:
         crash_thr = -p.crash_drop_pct / 100.0
         for k, i in group:
             self.cur_i[k] = i
-        # exits of parked positions
+            self.cur_ts[k] = T
+        # exits of parked positions ("hold" has none: it sells only to switch, see below)
         for k, i in group:
-            if k not in self.parked or (p.require_fresh and not self.rows[k][i][5]):
+            if self.hold or k not in self.parked or (p.require_fresh and not self.rows[k][i][5]):
                 continue
             o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
             pos = self.parked[k]
@@ -1243,6 +1254,14 @@ class _Parker:
             o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
             slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
             amount = min(slot, cash)
+            if self.hold and slot > 0 and amount < 0.25 * slot:
+                # no cash: sell the least attractive holding, but only if this candidate is clearly better —
+                # and only if the candidate can then actually be bought (volume cap), or we would sell for nothing
+                if self._cap(k, d) * last * (1 + hs) * (1 + bf) < 0.25 * slot:
+                    continue
+                cash, invested = self._switch_out(k, i, T, cash, invested)
+                slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
+                amount = min(slot, cash)
             if slot <= 0 or amount < 0.25 * slot:
                 continue
             ask = last * (1 + hs)
@@ -1255,6 +1274,21 @@ class _Parker:
             cash -= units * ask * (1 + bf)
             invested += units * ask
         return cash, invested
+
+    def _switch_out(self, k: int, i: int, T: int, cash: float, invested: float) -> tuple[float, float]:
+        """"hold": sell the held fund with the HIGHEST current bubble — provided candidate ``k`` is at least
+        ``fill_switch_pct`` points below it (and the held fund's latest quote is recent enough to be sold at)."""
+        worst, w_rel = None, None
+        for j in self.parked:
+            if j == k or self.cur_i[j] < 0 or T - self.cur_ts[j] > 5400:
+                continue
+            r = self.rel[j][self.cur_i[j]]
+            if w_rel is None or r > w_rel:
+                worst, w_rel = j, r
+        if worst is None or self.rel[k][i] > w_rel - self.switch:
+            return cash, invested
+        dc, di = self._close(worst, self.parked[worst]["units"], self.cur_i[worst], "rotate", T)
+        return cash + dc, invested + di
 
     def flush(self, cash: float, invested: float) -> tuple[float, float]:
         """Safety net: anything still parked after the last snapshot (e.g. a partial exit left over)."""
@@ -1608,7 +1642,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     dates = db.get_nav_intraday_dates(start, end)
     d0 = dates[0] if dates else (start or 0)
     d1 = dates[-1] if dates else (end or 0)
-    fill_ctx = {"loaded": loaded, "crash": crash_all} if (p.fill_mode == "best" and loaded) else None
+    fill_ctx = {"loaded": loaded, "crash": crash_all} if (fill_on(p) and loaded) else None
     accepted, summary, curve = _portfolio_summary(raw_trades, p, d0, d1, want_exposure=True, fill=fill_ctx)
     exposure = summary.pop("exposure", None)
     fill_info = None
