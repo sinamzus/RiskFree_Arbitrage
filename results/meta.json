@@ -1,11 +1,13 @@
 {
- "exported_at": "2026-10-10 09:11:01",
+ "exported_at": "2026-10-10 09:49:48",
  "code": {
-  "commit": "7ade5d7acbbabd6683bf539c4e1d7d5d07baf1ae",
+  "commit": "444c61c627ec50f5ace4fd2b74f71347cf9e8863",
   "branch": "claude/zen-keller-4iqcqz",
   "uncommitted_changes": false
  },
  "contents": [
-  "backtest"
+  "backtest",
+  "optimizer",
+  "validation"
  ]
 }
