@@ -1980,6 +1980,97 @@ def create_app(db, scan_callback=None):
         return jsonify({"running": _disc_test_state["running"], "progress": _disc_test_state["progress"],
                         "result": _disc_test_state["result"]})
 
+    # ── TSE tick + order-book collection for the gold funds (see tse_gold.py) ─────────────────────
+    _tse_state = {"running": False, "progress": {}, "stop": None, "last": None}
+    _tse_lock = threading.Lock()
+
+    def _tse_range(get):
+        def _i(name):
+            v = get(name)
+            try:
+                return int(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+        return _i("start"), _i("end")
+
+    @app.route("/api/tse/coverage")
+    def api_tse_coverage():
+        import tse_gold as G
+        start, end = _tse_range(request.args.get)
+        try:
+            rows = G.coverage(db, start, end)
+        except Exception as e:
+            logger.exception("tse coverage failed")
+            return jsonify({"error": str(e)}), 500
+        todo = sum(max(0, r["dump_days"] - r["trades_days"]) + max(0, r["dump_days"] - r["book_days"])
+                   for r in rows if r["ins_code"])
+        return jsonify({"funds": rows, "todo": todo, "running": _tse_state["running"],
+                        "progress": _tse_state["progress"], "last": _tse_state["last"]})
+
+    @app.route("/api/tse/ins", methods=["POST"])
+    def api_tse_ins():
+        """Set (manual) or re-discover (auto) the TSE instrument code of one gold fund."""
+        import tse_gold as G
+        body = request.get_json(silent=True) or {}
+        try:
+            sid = int(body.get("symbol_id"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "symbol_id"}), 400
+        fund = next((f for f in G.gold_funds(db) if f["symbol_id"] == sid), None)
+        if fund is None:
+            return jsonify({"error": "این صندوق در فهرست صندوق‌های طلا نیست"}), 404
+        code = str(body.get("ins_code") or "").strip()
+        if code:
+            G.set_ins(db, sid, fund["symbol"], code, str(body.get("tse_name") or ""), "manual")
+            return jsonify({"ok": True, "ins_code": code, "source": "manual"})
+        from data_fetcher import TSETMCFetcher
+        code, name = G.find_ins_code(TSETMCFetcher(), fund["symbol"])
+        G.set_ins(db, sid, fund["symbol"], code, name, "auto" if code else "notfound")
+        return jsonify({"ok": bool(code), "ins_code": code, "tse_name": name})
+
+    @app.route("/api/tse/collect", methods=["POST"])
+    def api_tse_collect():
+        import tse_gold as G
+        from data_fetcher import TSETMCFetcher
+        body = request.get_json(silent=True) or {}
+        start, end = _tse_range(body.get)
+        ids = [int(x) for x in (body.get("symbol_ids") or []) if str(x).strip().lstrip("-").isdigit()] or None
+        kinds = tuple(k for k in (body.get("kinds") or G.KINDS) if k in G.KINDS) or G.KINDS
+        try:
+            workers = max(1, min(8, int(body.get("workers") or 3)))
+        except (TypeError, ValueError):
+            workers = 3
+        with _tse_lock:
+            if _tse_state["running"]:
+                return jsonify({"status": "already running", "progress": _tse_state["progress"]}), 409
+            _tse_state["running"] = True
+            _tse_state["stop"] = threading.Event()
+            _tse_state["progress"] = {"done": 0, "total": 0, "current": "شروع ..."}
+
+        def _run():
+            try:
+                _tse_state["last"] = G.collect(db, TSETMCFetcher(), ids, start, end, kinds, workers,
+                                               _tse_state["progress"], _tse_state["stop"], _tse_lock)
+            except Exception as e:
+                logger.exception("tse collection failed")
+                _tse_state["last"] = {"error": f"{type(e).__name__}: {e}"}
+            finally:
+                _tse_state["running"] = False
+        threading.Thread(target=_run, daemon=True, name="tse-collect").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/tse/collect/stop", methods=["POST"])
+    def api_tse_collect_stop():
+        ev = _tse_state.get("stop")
+        if ev is not None:
+            ev.set()
+        return jsonify({"ok": True})
+
+    @app.route("/api/tse/collect/status")
+    def api_tse_collect_status():
+        return jsonify({"running": _tse_state["running"], "progress": _tse_state["progress"],
+                        "last": _tse_state["last"]})
+
     @app.route("/api/disc/push_results", methods=["POST"])
     def api_disc_push_results():
         """Save the latest backtest / optimizer / validation / stats results next to the app and push them to the

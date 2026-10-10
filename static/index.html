@@ -2523,6 +2523,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-mintrades" type="number" step="5" value="30" style="width:64px"></div>
       <div class="bbt-field" title="این کسر از آخرِ تاریخ‌ها فقط برای آزمون خارج از نمونه کنار گذاشته می‌شود"><label>آزمون خارج از نمونه</label>
         <input id="disc-testfrac" type="number" step="0.05" value="0.3" style="width:64px"></div>
+      <button class="scan-btn" id="disc-tse-btn" onclick="discTseOpen()" title="جمع‌آوری دادهٔ واقعی بورس (TSETMC) برای صندوق‌های طلا: همهٔ معاملات (تیک) و جریان کامل تغییرات اردربوک، برای همان روزهایی که دادهٔ NAV دارید. ادامه‌پذیر است: هر روزی که گرفته شده دوباره گرفته نمی‌شود.">📥 دادهٔ TSE (تیک و اردربوک)</button>
       <button class="scan-btn" id="disc-funds-btn" onclick="discToggleFunds()" title="فهرست همهٔ صندوق‌ها، نمادِ مچ‌شده و دسته‌شان — قابل‌ویرایش">📋 فهرست صندوق‌ها</button>
       <button class="scan-btn" id="disc-bub-btn" onclick="discBubToggle()" title="نمودار حباب هر صندوق و شاخص میانگین ساده بر حسب تاریخ و ساعت">📈 نمودار حباب</button>
       <button class="scan-btn" id="disc-stats-btn" onclick="discStats()" title="توزیع تخفیف و تازگی NAV هر صندوق — برای انتخاب آستانه‌ها">📊 آمار تخفیف</button>
@@ -6604,7 +6605,7 @@ async function discLoadCats(force) {
 //  so element ids stay unique. A long-running job keeps writing into ITS tab's (detached) panels and
 //  activates that tab when it finishes.
 // ---------------------------------------------------------------------------
-const DISC_RES_PANELS = [['disc-stats', 1], ['disc-opt', 1], ['disc-ft', 1], ['disc-val', 1], ['disc-bub', 1],
+const DISC_RES_PANELS = [['disc-tse', 1], ['disc-stats', 1], ['disc-opt', 1], ['disc-ft', 1], ['disc-val', 1], ['disc-bub', 1],
   ['disc-cards', 0], ['disc-persym', 1], ['disc-trades', 0]];
 let _discTabs = [], _discTabActive = null, _discTabSeq = 0;
 
@@ -8340,6 +8341,85 @@ async function discPushResults() {
     panel.innerHTML = `<div class="dv-head bad">❌ ارسال ناموفق: ${e.message}</div>`;
   }
   btn.disabled = false; btn.textContent = old;
+}
+
+// ---------------------------------------------------------------------------
+//  TSE tick + order-book collection for the gold funds
+// ---------------------------------------------------------------------------
+let _tseTimer = null;
+async function discTseOpen() {
+  discNewTab('tse', 'دادهٔ TSE', {reuse: true});
+  const el = document.getElementById('disc-tse');
+  el.style.display = 'block';
+  await discTseRefresh(el);
+}
+function discTseRange() {
+  const s = document.getElementById('disc-start').dataset.greg || '', e = document.getElementById('disc-end').dataset.greg || '';
+  return {start: s, end: e};
+}
+async function discTseRefresh(el) {
+  el = el || document.getElementById('disc-tse');
+  if (!el) return;
+  const r = await fetch('/api/tse/coverage?' + new URLSearchParams(discTseRange())).catch(() => null);
+  const j = r?.ok ? await r.json() : {error: 'سرور در دسترس نیست'};
+  if (j.error) { el.innerHTML = `<div class="dv-head bad">خطا: ${j.error}</div>`; return; }
+  const fs = j.funds || [], rg = discTseRange();
+  const tot = k => fs.reduce((a, f) => a + (f[k] || 0), 0);
+  const pr = j.progress || {};
+  const pct = pr.total ? Math.round(100 * (pr.done || 0) / pr.total) : 0;
+  const el0 = pr.started ? (Date.now() / 1000 - pr.started) : 0;
+  const eta = pr.done && pr.total ? (pr.total - pr.done) * el0 / pr.done / 60 : null;
+  const cell = (n, of) => `<td class="${of && n >= of ? 'pos' : (n ? '' : 'neg')}">${discLtr(n)}${of ? ' / ' + discLtr(of) : ''}</td>`;
+  el.innerHTML = `<div class="disc-h" title="برای بک‌تست روی دادهٔ واقعی بورس: همهٔ معاملات (تیک) و جریان کامل تغییرات اردربوک (۵ سطح خرید و فروش) هر صندوق طلا، فقط برای روزهایی که در دادهٔ NAV هست.">📥 دادهٔ TSE صندوق‌های طلا — تیک و اردربوک ${rg.start ? `· بازه ${gregIntToJalaliStr(+rg.start)} تا ${gregIntToJalaliStr(+(rg.end || 0)) || 'آخر'}` : '· کل بازهٔ دادهٔ NAV'}</div>
+    <div class="dv-note" style="font-size:11px;color:var(--sub)">برای هر صندوق و هر روزِ دادهٔ NAV، دو درخواست به TSETMC زده می‌شود (معاملات و اردربوک). جمع‌آوری ادامه‌پذیر است: می‌توانید هر وقت متوقف کنید و بعداً ادامه دهید؛ روزی که گرفته شده دوباره گرفته نمی‌شود. اول جدیدترین روزها گرفته می‌شوند. سرعت با محدودیت درخواست (حدود ۵ درخواست در ثانیه) کنترل می‌شود تا IP مسدود نشود.</div>
+    <div class="bbt-group" style="align-items:flex-end;margin-top:6px">
+      <div class="bbt-field" title="تعداد درخواست هم‌زمان؛ سرعت کل را محدودکنندهٔ سراسری کنترل می‌کند، پس عدد بزرگ‌تر فقط تأخیر شبکه را می‌پوشاند."><label>هم‌زمانی</label>
+        <input id="tse-workers" type="number" min="1" max="8" value="3" style="width:60px"></div>
+      <button class="scan-btn" id="tse-go" onclick="discTseStart()" ${j.running ? 'disabled' : ''} title="شروع یا ادامهٔ جمع‌آوری همهٔ روزهای باقی‌مانده">▶ ${tot('trades_days') + tot('book_days') ? 'ادامهٔ' : 'شروع'} جمع‌آوری (${discLtr(j.todo)} درخواست باقی‌مانده)</button>
+      <button class="scan-btn" onclick="discTseStop()" ${j.running ? '' : 'disabled'} title="توقف پس از درخواست‌های در جریان؛ بعداً از همان‌جا ادامه می‌دهد">■ توقف</button>
+      <button class="scan-btn" onclick="discTseRefresh()" title="بازخوانی جدول">↻ بازخوانی</button>
+    </div>
+    ${j.running || pr.total ? `<div class="ob-p" style="margin-top:6px">${j.running ? '⏳ در حال جمع‌آوری' : (pr.stopped ? '■ متوقف شد' : '✓ پایان')} — ${discLtr(pr.done || 0)} از ${discLtr(pr.total || 0)} · ${discLtr((pr.rows || 0).toLocaleString('en-US'))} ردیف · ${discLtr(pr.empty || 0)} روزِ خالی · ${discLtr(pr.failed || 0)} ناموفق (دفعهٔ بعد دوباره امتحان می‌شود)${eta != null && j.running ? ` · زمان باقی‌مانده ≈ ${discLtr(eta.toFixed(0))} دقیقه` : ''} <span style="color:var(--muted)">${pr.current || ''}</span>
+      <div style="height:6px;background:var(--brd);border-radius:3px;margin-top:6px"><div style="height:6px;width:${pct}%;background:var(--green);border-radius:3px"></div></div>
+      ${(pr.missing_ins_code || []).length ? `<div class="dv-note">کد TSE پیدا نشد برای: ${pr.missing_ins_code.join('، ')} — در جدول دستی وارد کنید.</div>` : ''}</div>` : ''}
+    <div class="disc-tblwrap" style="max-height:none;margin-top:6px"><table class="disc-tbl"><thead><tr>
+      <th title="نماد صندوق در دادهٔ NAV">نماد</th><th title="کد نماد در TSETMC (insCode). خودکار پیدا می‌شود؛ اگر اشتباه است، درست را وارد و ذخیره کنید.">کد TSE</th><th title="نام کامل نماد در TSETMC؛ برای اطمینان از درست بودن کد">نام در TSE</th>
+      <th title="روزهایی که برای این صندوق دادهٔ NAV دارید (روزهایی که باید گرفته شوند)">روزهای NAV</th><th title="روزهای گرفته‌شده از معاملات (تیک) / کل روزها">تیک</th><th title="روزهای گرفته‌شده از اردربوک / کل روزها">اردربوک</th><th title="تعداد کل ردیف‌های تیک و رویدادهای اردربوک">ردیف‌ها</th><th title="حجم ذخیره‌شده (فشرده)">MB</th></tr></thead><tbody>
+    ${fs.map(f => `<tr><td>${f.symbol}</td>
+      <td><input id="tse-ins-${f.symbol_id}" value="${f.ins_code || ''}" placeholder="—" style="width:150px;direction:ltr" title="کد TSE">
+        <button class="pill" onclick="discTseSaveIns(${f.symbol_id})" title="ذخیرهٔ کد دستی">💾</button><button class="pill" onclick="discTseFindIns(${f.symbol_id})" title="جستجوی دوبارهٔ کد در TSETMC">🔎</button></td>
+      <td style="font-size:10px;color:${f.ins_source === 'notfound' ? 'var(--red)' : 'var(--sub)'}">${f.tse_name || (f.ins_source === 'notfound' ? 'پیدا نشد' : '')}</td>
+      <td>${discLtr(f.dump_days)}</td>${cell(f.trades_days, f.dump_days)}${cell(f.book_days, f.dump_days)}
+      <td>${discLtr(((f.trades_rows || 0) + (f.book_rows || 0)).toLocaleString('en-US'))}</td><td>${discLtr((f.bytes / 1e6).toFixed(1))}</td></tr>`).join('')
+      || '<tr><td colspan="8" style="color:var(--muted)">صندوق طلای نام‌داری در دادهٔ NAV نیست (فهرست صندوق‌ها را ببینید).</td></tr>'}
+    <tr style="font-weight:700"><td>جمع</td><td></td><td></td><td>${discLtr(tot('dump_days'))}</td><td>${discLtr(tot('trades_days'))}</td><td>${discLtr(tot('book_days'))}</td><td></td><td>${discLtr((tot('bytes') / 1e6).toFixed(1))}</td></tr>
+    </tbody></table></div>
+    <div class="dv-note" style="font-size:11px;color:var(--sub)">از خط فرمان هم می‌شود (برای اجرای طولانی): <span style="direction:ltr;unicode-bidi:embed">python tools\collect_tse_gold.py</span></div>`;
+  if (j.running && !_tseTimer) _tseTimer = setInterval(() => discTseRefresh(el), 3000);
+  if (!j.running && _tseTimer) { clearInterval(_tseTimer); _tseTimer = null; }
+}
+async function discTseStart() {
+  const w = +(document.getElementById('tse-workers') || {}).value || 3;
+  const r = await fetch('/api/tse/collect', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(Object.assign({workers: w}, discTseRange()))}).catch(() => null);
+  if (!r?.ok && r?.status !== 409) { showError('جمع‌آوری شروع نشد.'); return; }
+  setTimeout(() => discTseRefresh(), 800);
+}
+async function discTseStop() {
+  await fetch('/api/tse/collect/stop', {method: 'POST'}).catch(() => null);
+  setTimeout(() => discTseRefresh(), 800);
+}
+async function discTseSaveIns(sid) {
+  const v = (document.getElementById('tse-ins-' + sid) || {}).value || '';
+  if (!v.trim()) { showError('کد را وارد کنید (یا 🔎 برای جستجو).'); return; }
+  await fetch('/api/tse/ins', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol_id: sid, ins_code: v.trim()})});
+  discTseRefresh();
+}
+async function discTseFindIns(sid) {
+  const r = await fetch('/api/tse/ins', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol_id: sid})}).catch(() => null);
+  const j = r ? await r.json().catch(() => ({})) : {};
+  if (!j.ok) showError('کد در TSETMC پیدا نشد (اینترنت یا نام نماد را بررسی کنید).');
+  discTseRefresh();
 }
 
 async function discFullTest() {

@@ -929,6 +929,93 @@ def test_hold(R: Results, db):
           all(t["exit_reason"] == "end" for t in huge["trades"]) and huge["trades"], "")
 
 
+class FakeTSE:
+    """Stands in for TSETMCFetcher: answers the search / trade-history / best-limits URLs with synthetic JSON.
+    ``fail`` = set of (ins_code, date, kind) that answer None (a failed request)."""
+
+    def __init__(self, fail=None):
+        self.fail = set(fail or [])
+        self.calls = 0
+
+    def _get(self, url, silent=False, html=False, retries=3):
+        self.calls += 1
+        parts = url.split("/")
+        if "GetInstrumentSearch" in url:
+            from urllib.parse import unquote
+            sym = unquote(parts[-1])
+            return {"instrumentSearch": [
+                {"insCode": "999" + sym, "lVal18AFC": sym + "x", "lVal30": "something else"},
+                {"insCode": "111" + sym, "lVal18AFC": sym, "lVal30": "صندوق طلای " + sym}]}
+        if "GetTradeHistory" in url:
+            ins, d = parts[-3], int(parts[-2])
+            if (ins, d, "trades") in self.fail:
+                return None
+            return {"tradeHistory": [{"nTran": k + 1, "hEven": 120000 + k * 100, "pTran": 1000 + k, "qTitTran": 10 * (k + 1),
+                                      "canceled": 0} for k in range(5)]}
+        if "/BestLimits/" in url:
+            ins, d = parts[-2], int(parts[-1])
+            if (ins, d, "book") in self.fail:
+                return None
+            return {"bestLimitsHistory": [{"refID": 100 + k, "hEven": 115900 + k * 10, "number": 1 + k % 5,
+                                           "pMeDem": 990, "qTitMeDem": 5, "zOrdMeDem": 1, "pMeOf": 1010,
+                                           "qTitMeOf": 7, "zOrdMeOf": 2} for k in range(10)]}
+        return None
+
+
+def test_tse_collect(R: Results, db_path: str):
+    """TSE tick / order-book collection: codes, storage, resumability, failures, stop."""
+    import shutil as _sh
+    import threading as _th
+    import tse_gold as G
+    g = "جمع‌آوری دادهٔ TSE (طلا)"
+    p2 = db_path + ".tse.db"
+    _sh.copyfile(db_path, p2)
+    db = _db(p2)
+    funds = G.gold_funds(db)
+    R.add(g, "صندوق‌های طلا از دادهٔ NAV شناخته می‌شوند", sorted(f["symbol"] for f in funds) == ["GOLDX", "GOLDY", "GOLDZ"],
+          str([f["symbol"] for f in funds]))
+    days = {f["symbol_id"]: G.dump_dates(db, f["symbol_id"]) for f in funds}
+    d_fail = days[funds[0]["symbol_id"]][3]
+    fake = FakeTSE(fail={("111GOLDX", d_fail, "trades")})
+    res = G.collect(db, fake, workers=2)
+    ins = G.get_ins_map(db)
+    R.add(g, "کد TSE: نماد دقیق + «صندوق» در نام انتخاب می‌شود (نه نماد مشابه)",
+          all(ins[f["symbol_id"]]["ins_code"] == "111" + f["symbol"] for f in funds), str({k: v["ins_code"] for k, v in ins.items()}))
+    want = sum(len(v) for v in days.values()) * 2
+    R.add(g, "برای هر روزِ دادهٔ NAV، معاملات و اردربوک گرفته و ذخیره می‌شود؛ درخواست ناموفق ذخیره نمی‌شود",
+          res["total"] == want and res["failed"] == 1 and res["done"] == want, str({k: res[k] for k in ("total", "done", "failed")}))
+    rows = G.load_day(db, funds[0]["symbol_id"], days[funds[0]["symbol_id"]][0], "book")
+    R.add(g, "داده بدون اتلاف ذخیره و بازخوانی می‌شود (فیلدهای اردربوک و ترتیب refID)",
+          rows is not None and len(rows) == 10 and rows[0][:3] == [100, 115900, 1] and rows[0][3:] == [990, 5, 1, 1010, 7, 2], str((rows or [])[:1]))
+    todo = G.plan(db)
+    R.add(g, "ادامه‌پذیر: در اجرای دوم فقط همان روزِ ناموفق باقی است", todo == [(funds[0]["symbol_id"], "GOLDX", d_fail, "trades")], str(todo[:3]))
+    calls0 = fake.calls
+    fake.fail.clear()
+    res2 = G.collect(db, fake, workers=2)
+    R.add(g, "اجرای دوم فقط درخواستِ باقی‌مانده را می‌زند", res2["total"] == 1 and res2["failed"] == 0 and fake.calls - calls0 <= 2,
+          f"{res2['total']} کار · {fake.calls - calls0} درخواست")
+    cov = {r["symbol"]: r for r in G.coverage(db)}
+    R.add(g, "جدول پوشش: روزهای NAV = روزهای تیک = روزهای اردربوک", all(
+        r["dump_days"] == r["trades_days"] == r["book_days"] > 0 for r in cov.values()), str({k: (v["dump_days"], v["trades_days"], v["book_days"]) for k, v in cov.items()}))
+    # stop: a fresh DB copy, stop immediately → nothing (or almost nothing) fetched, and resumable afterwards
+    p3 = db_path + ".tse2.db"
+    _sh.copyfile(db_path, p3)
+    db3 = _db(p3)
+    ev = _th.Event()
+    ev.set()
+    r3 = G.collect(db3, FakeTSE(), stop=ev)
+    R.add(g, "توقف: کاری انجام نمی‌شود و بعداً همه باقی است", r3["stopped"] and len(G.plan(db3)) == want, f"{len(G.plan(db3))}/{want}")
+    G.set_ins(db3, funds[0]["symbol_id"], "GOLDX", "MANUAL1", "", "manual")
+    G.resolve_ins_codes(db3, FakeTSE(), funds, refresh=True)
+    R.add(g, "کد دستی با جستجوی دوباره پاک نمی‌شود", G.get_ins_map(db3)[funds[0]["symbol_id"]]["ins_code"] == "MANUAL1", "")
+    for pth in (p2, p3):
+        for ext in ("", "-wal", "-shm"):
+            try:
+                os.remove(pth + ext)
+            except OSError:
+                pass
+
+
 def test_validation_hold(R: Results, db):
     """Validation of the always-invested mode: the placebo (rank by ANOTHER fund's bubble) must be calibrated —
     rarely 'significant' where bubbles carry no information, always where they mean-revert."""
@@ -1221,6 +1308,10 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
             R.add("مرورگر", "بستن یک تب فقط همان را حذف می‌کند", pg.locator("#disc-res-bar .dres-tab").count() == 1
                   and pg.locator("#disc-cards .opt-mc").count() > 0, "")
+            pg.click("#disc-tse-btn"); pg.wait_for_selector("#disc-tse .disc-tbl tbody tr")
+            R.add("مرورگر", "پنل دادهٔ TSE باز می‌شود و صندوق‌های طلا را با روزهای NAV نشان می‌دهد",
+                  pg.locator("#disc-tse .disc-tbl tbody tr").count() == 4, pg.locator("#disc-tse").inner_text()[:120])
+            pg.locator("#disc-res-bar .dres-tab").first.click(); pg.wait_for_selector("#disc-cards .opt-mc")
             # optimizer: apply result must fill EVERY searched field in the form
             pg.select_option("#disc-fillmode", "hold")
             pg.click("#disc-opt-btn"); pg.wait_for_selector("#disc-study-cfg.visible #ds-dims tbody tr")
@@ -1364,6 +1455,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
+             ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
              ("ارسال نتایج برای تحلیل", lambda: test_export(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),
