@@ -57,12 +57,14 @@ def explain_trade(t: dict, fund: _Fund | None, peers: list[_Fund], p) -> dict | 
     if t["net_pnl"] > 0 or w <= 0 or t["entry_price"] <= 0 or t["nav_entry"] <= 0:
         return None
     hs = p.half_spread_pct / 100.0
-    entry_mid = t["entry_price"] / (1.0 + hs)
-    exit_mid = t["exit_price"] / (1.0 - hs)
+    si, so = t.get("spread_in"), t.get("spread_out")
+    entry_mid = t["entry_price"] * (1.0 - si) if si is not None else t["entry_price"] / (1.0 + hs)
+    exit_mid = t["exit_price"] * (1.0 + so) if so is not None else t["exit_price"] / (1.0 - hs)
     gm = exit_mid / entry_mid - 1.0                                  # mid-to-mid price move
     nav_c = t["nav_exit"] / t["nav_entry"] - 1.0                      # NAV drift while held
     conv = (1.0 + gm) / (1.0 + nav_c) - 1.0                           # change of price/NAV
-    sp = 1.0 - (1.0 - hs) / (1.0 + hs)
+    sp = 1.0 - (1.0 - hs) / (1.0 + hs) if si is None or so is None else \
+        1.0 - (t["exit_price"] / exit_mid) / (t["entry_price"] / entry_mid)
     fee = t["fees"] / w
     net = t["net_pct"] / 100.0
     comp = {"gross_pct": gm * 100, "nav_pct": nav_c * 100, "convergence_pct": conv * 100,

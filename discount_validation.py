@@ -188,28 +188,32 @@ def audit_trades(trades: list[dict], p: DiscountParams) -> dict:
     if not trades:
         return {"n": 0}
     hs = p.half_spread_pct / 100.0
-    spread_cost = 1.0 - (1.0 - hs) / (1.0 + hs)
-    w_tot = gm_s = nav_s = conv_s = fee_s = net_s = 0.0
+    sc0 = 1.0 - (1.0 - hs) / (1.0 + hs)
+    w_tot = gm_s = nav_s = conv_s = fee_s = net_s = sc_s = 0.0
     beat = wins_gross = 0
     holds = []
     for t in trades:
         w = t["buy_notional"]
         if w <= 0 or t["entry_price"] <= 0 or t["nav_entry"] <= 0:
             continue
-        entry_mid = t["entry_price"] / (1.0 + hs)
-        exit_mid = t["exit_price"] / (1.0 - hs)
+        si, so = t.get("spread_in"), t.get("spread_out")
+        entry_mid = t["entry_price"] * (1.0 - si) if si is not None else t["entry_price"] / (1.0 + hs)
+        exit_mid = t["exit_price"] * (1.0 + so) if so is not None else t["exit_price"] / (1.0 - hs)
         gm = exit_mid / entry_mid - 1.0
         nav_chg = t["nav_exit"] / t["nav_entry"] - 1.0
         conv = (1.0 + gm) / (1.0 + nav_chg) - 1.0
         fee = t["fees"] / w
         net = t["net_pnl"] / w
+        # spread paid on this trade: the assumed one, or the real book's (mid vs fill, both sides)
+        sc = sc0 if si is None or so is None else 1.0 - (t["exit_price"] / exit_mid) / (t["entry_price"] / entry_mid)
+        sc_s += w * sc
         w_tot += w
         gm_s += w * gm
         nav_s += w * nav_chg
         conv_s += w * conv
         fee_s += w * fee
         net_s += w * net
-        beat += 1 if gm > spread_cost + fee else 0
+        beat += 1 if gm > sc + fee else 0
         wins_gross += 1 if gm > 0 else 0
         holds.append(t["hold_days"])
     n = len(holds)
@@ -217,6 +221,7 @@ def audit_trades(trades: list[dict], p: DiscountParams) -> dict:
         return {"n": 0}
     gm, nav_c, conv = gm_s / w_tot, nav_s / w_tot, conv_s / w_tot
     fee, net = fee_s / w_tot, net_s / w_tot
+    spread_cost = sc_s / w_tot
     return {
         "n": n,
         "gross_mid_pct": round(gm * 100, 4),           # mid-to-mid price move of the average trade
@@ -422,6 +427,9 @@ def stress(U: dict, p: DiscountParams) -> list[dict]:
         ("اسپرد ×۲ و کارمزد +۵۰٪", replace(p, half_spread_pct=p.half_spread_pct * 2,
                                            buy_fee=p.buy_fee * 1.5, sell_fee=p.sell_fee * 1.5)),
     ]
+    if p.dataset != "dump":                # real order book: no assumed spread to stress
+        scen = [(n.replace("اسپرد ×۲ و ", ""), q) for n, q in scen if not n.startswith("اسپرد ×")
+                or " و " in n]
     out = []
     for name, pp in scen:
         _a, s = _portfolio(_sim_all(U, pp), pp, U["d0"], U["d1"])
@@ -1039,6 +1047,9 @@ def hold_stress(U: dict, p: DiscountParams) -> list[dict]:
         ("اسپرد ×۲ و کارمزد +۵۰٪ و تأخیر ۱", replace(p, half_spread_pct=p.half_spread_pct * 2, buy_fee=p.buy_fee * 1.5,
                                                      sell_fee=p.sell_fee * 1.5, exec_delay_snaps=max(1, p.exec_delay_snaps + 1))),
     ]
+    if p.dataset != "dump":                # real order book: no assumed spread to stress
+        scen = [(n.replace("اسپرد ×۲ و ", ""), q) for n, q in scen if not n.startswith("اسپرد ×")
+                or " و " in n]
     ctx = _hold_ctx(U)
     out = []
     for name, pp in scen:

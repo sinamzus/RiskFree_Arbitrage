@@ -315,6 +315,8 @@ class Study:
         self.cats, self.symbols, self.start, self.end = cats, symbols, start, end
         self.base = base
         self.space = {k: [v for v in vs] for k, vs in space.items() if k in DIMS and vs}
+        if self.base.dataset != "dump":
+            self.space.pop("half_spread_pct", None)     # fills walk the real order book: no assumed spread to search
         self.n_samples = max(20, int(n_samples))
         self.blocks_n = max(4, min(12, int(blocks)))
         self.holdout_frac = holdout_frac
@@ -896,6 +898,8 @@ class Study:
                          ("سقف حجم نصف", {"participation_pct": (self.base.participation_pct / 2) if self.base.participation_pct > 0 else 2.5}),
                          ("تأخیر اجرا ۱ اسنپ‌شات", {"exec_delay_snaps": self.base.exec_delay_snaps + 1})):
             # the winner's cfg carries explicit values for these assumptions too: drop them, or the override is ignored
+            if "half_spread_pct" in kw and self.base.dataset != "dump":
+                continue                      # real order book: there is no assumed spread to stress
             cfg = {k: v for k, v in best["cfg"].items() if k not in kw}
             r = self.evaluate(cfg, "sens", replace(self.base, **kw))
             if r:

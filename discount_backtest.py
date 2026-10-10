@@ -148,6 +148,10 @@ class DiscountParams:
     buy_fee: float = 0.00125            # 0.125% each side (all-in broker + exchange fee for these ETFs)
     sell_fee: float = 0.00125
 
+    def __post_init__(self):
+        if self.dataset in ("tse", "hybrid"):
+            self.half_spread_pct = 0.0      # every fill walks the real order book: no assumed spread anywhere
+
 
 def fill_on(p: "DiscountParams") -> bool:
     """Does the portfolio parker run (idle-capital parking, or the always-invested "hold" strategy)?"""
@@ -291,6 +295,12 @@ def _sell_exec(book, d: int, t: int, units: float, last: float, hs: float) -> tu
 def _best(book, d: int, t: int, side: int, default: float) -> float:
     lv = _book_side(book, d, t, side)
     return lv[0][0] if lv else default
+
+
+def _book_mid(book, d: int, t: int, default: float) -> float:
+    """Mid of the real book at (d, t) — the reference the paid spread is measured against; ``default`` without one."""
+    b, a = _best(book, d, t, 0, 0.0), _best(book, d, t, 1, 0.0)
+    return (b + a) / 2.0 if b > 0 and a > b else default
 
 
 def dataset_dates(db, sids: list[int], start: int | None, end: int | None, p: "DiscountParams") -> list[int]:
@@ -893,7 +903,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             if diag is not None:
                 diag["signal"] = diag.get("signal", 0) + 1
             skip_until = j + 1                         # (the fill row itself is not re-evaluated)
-            e_mid = last
+            e_mid = _book_mid(book, d, t, last)
             pos, cost = units, units * ask
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
             e_fair, e_rel = nav, r
@@ -923,7 +933,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 if units > 0:
                     _u, bid = _sell_exec(book, d, t, units, last, hs)
                     _close(units, bid, d, t, nav_raw, nav, reason,
-                           idx[j] if idx is not None else None, last)
+                           idx[j] if idx is not None else None, _book_mid(book, d, t, last))
                     skip_until = j + 1
                     if pos == 0:
                         blocked_date = d
@@ -931,7 +941,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     if pos > 0:                       # data ended while holding
         o, d, t, nav, last, _, nav_raw = rows[-1]
         _close(pos, _sell_exec(book, d, t, pos, last, hs)[1], d, t, nav_raw, nav, "end",
-               idx[-1] if idx is not None else None, last)
+               idx[-1] if idx is not None else None, _book_mid(book, d, t, last))
     return trades
 
 
@@ -1312,7 +1322,15 @@ class _Parker:
         hs, bf, sf = p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee
         pos = self.parked[k]
         o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
-        _u, px = _sell_exec(self.book[k], d, t, units, last, hs)      # the quote's own book (before re-dating)
+        bk = self.book[k]
+        if at_ts is not None and bk is not None and hasattr(bk, "at"):
+            # the real book of the held fund at the very instant of the sale (not at its last snapshot)
+            d2, t2 = _ts_to_dt(at_ts)
+            st = bk.at(d2, t2)
+            if st[0] and st[1]:
+                bk = {(d, t): st}
+        _u, px = _sell_exec(bk, d, t, units, last, hs)      # the quote's own book (before re-dating)
+        mid = _book_mid(bk, d, t, last)
         if at_ts is not None:
             d, t = _ts_to_dt(at_ts)
             o = _ord(d)
@@ -1335,7 +1353,7 @@ class _Parker:
             net_pct=round(net / (cost_part + bfee) * 100, 4) if cost_part + bfee else 0,
             hold_days=max(0, _ord(d) - pos["o"]), exit_reason=reason, origin="fill",
             spread_in=(1 - pos["mid"] / pos["ask"]) if pos.get("mid") and pos["ask"] > 0 else None,
-            spread_out=(last / px - 1) if last > 0 and px > 0 else None))
+            spread_out=(mid / px - 1) if mid > 0 and px > 0 else None))
         pos["units"] -= units
         pos["cost"] -= cost_part
         if pos["units"] <= 1e-9:
@@ -1373,7 +1391,7 @@ class _Parker:
             o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
             pos = self.parked[k]
             r = self.rel[k][i]
-            bid = last * (1 - hs)
+            bid = _best(self.book[k], d, t, 0, last * (1 - hs))
             reason = None
             if p.max_hold_days > 0 and o - pos["o"] >= p.max_hold_days:
                 reason = "time"
@@ -1434,7 +1452,7 @@ class _Parker:
                 cap_pre = self._cap(k, d, t)
                 if self.book[k] is not None:
                     cap_pre = min(cap_pre, sum(v for _p, v in (_book_side(self.book[k], d, t, 1) or [])))
-                if cap_pre * last * (1 + hs) * (1 + bf) < 0.25 * slot:
+                if cap_pre * _best(self.book[k], d, t, 1, last * (1 + hs)) * (1 + bf) < 0.25 * slot:
                     self.sz["skip_cap"] += 1
                     continue
                 cash, invested = self._switch_out(k, i, T, cash, invested)
@@ -1470,7 +1488,8 @@ class _Parker:
                 self.sz["liq" if cap_u * ask * (1 + bf) < amount * 0.999 else "cash"] += 1
             mr_score = round(self.mr[k][i], 1) if mr_on and self.mr[k] and self.mr[k][i] is not None else None
             self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": t_in,
-                              "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score, "mid": last}
+                              "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score,
+                              "mid": _book_mid(self.book[k], d, t, last)}
             cash -= units * ask * (1 + bf)
             invested += units * ask
         return cash, invested

@@ -2393,7 +2393,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="اختیاری: فقط همین نمادها (با کاما). نماد بی‌نام را با #شناسه یا خود شناسه بنویسید، مثل 2276. اگر پر باشد، انتخاب دسته و صندوق‌های بالا نادیده گرفته می‌شود."><label>نمادهای مشخص (اختیاری)</label>
         <input id="disc-symbols" type="text" placeholder="مثلاً: کمند, #2276" style="width:200px"></div>
       <div class="bbt-field" title="بک‌تست روی کدام داده؟ «دادهٔ لحظه‌ای NAV»: اسنپ‌شات‌های فایل NAV؛ قیمت = آخرین معامله و اسپرد فرضی. «سیگنال از دادهٔ NAV، معامله با اردربوک»: همان اسنپ‌شات‌های فایل NAV برای تصمیم، ولی خرید و فروش با قیمت و عمق واقعی صف‌ها در همان لحظه (اردربوک TSE). «TSE: تیک و اردربوک»: معاملات و اردربوک واقعی بورس (از «📥 دادهٔ TSE»)؛ خرید و فروش با قیمت واقعی صف‌ها و محدود به عمق صف؛ NAV همچنان از فایل NAV. فقط روزهایی که دادهٔ TSE جمع شده استفاده می‌شوند."><label>دیتاست بک‌تست</label>
-        <select id="disc-dataset" style="width:190px" onchange="document.getElementById('disc-gridf').style.display = this.value === 'tse' ? '' : 'none'">
+        <select id="disc-dataset" style="width:190px" onchange="discDatasetChanged()">
           <option value="dump" selected>دادهٔ لحظه‌ای NAV (فایل)</option>
           <option value="hybrid">سیگنال از دادهٔ NAV، معامله با اردربوک TSE</option>
           <option value="tse">TSE: تیک و اردربوک</option></select></div>
@@ -2475,7 +2475,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
 
     <div class="bbt-group-h">۳) اجرا، کارمزد و فیلتر NAV</div>
     <div class="bbt-group">
-      <div class="bbt-field" title="نیم‌اسپردِ فرضی هر طرف (دادهٔ اردربوک نداریم). خرید = قیمت×(1+این)، فروش = قیمت×(1−این)"><label>نیم‌اسپرد فرضی ٪</label>
+      <div class="bbt-field" id="disc-spreadf" title="نیم‌اسپردِ فرضی هر طرف، فقط برای «دادهٔ لحظه‌ای NAV» که اردربوک ندارد. خرید = قیمت×(1+این)، فروش = قیمت×(1−این). در دیتاست‌های اردربوک غیرفعال است: خرید از صف فروش و فروش به صف خرید واقعی انجام می‌شود."><label>نیم‌اسپرد فرضی ٪</label>
         <input id="disc-spread" type="number" step="0.01" value="0.02" style="width:70px"></div>
       <div class="bbt-field" title="سقف حجم معامله به‌صورت درصدی از حجم کل همان روز؛ ۰ = نامحدود"><label>سهم از حجم روز ٪</label>
         <input id="disc-part" type="number" step="0.5" value="10" style="width:70px"></div>
@@ -8362,7 +8362,15 @@ async function discPushResults() {
 //  TSE tick + order-book collection for the gold funds
 // ---------------------------------------------------------------------------
 let _tseTimer = null;
-async function discTseOpen() {
+async function discDatasetChanged() {
+  const ds = (document.getElementById('disc-dataset') || {}).value || 'dump';
+  const g = document.getElementById('disc-gridf');
+  if (g) g.style.display = ds === 'tse' ? '' : 'none';
+  const sp = document.getElementById('disc-spread'), sf = document.getElementById('disc-spreadf');
+  if (sp) sp.disabled = ds !== 'dump';                  // order-book datasets: real asks / bids, no assumed spread
+  if (sf) sf.style.opacity = ds !== 'dump' ? '0.45' : '';
+}
+function discTseOpen() {
   discNewTab('tse', 'دادهٔ TSE', {reuse: true});
   const el = document.getElementById('disc-tse');
   el.style.display = 'block';

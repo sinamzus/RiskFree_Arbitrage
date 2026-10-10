@@ -152,7 +152,7 @@ def load_raw(db, symbol_id: int, start: int | None, end: int | None, grid_sec: i
         return [], {}
     navs = db.get_nav_intraday(symbol_id, None, end)        # earlier days too: the NAV known at the open
     nkey = [(r[0], r[1]) for r in navs]
-    rows, book = [], {}
+    rows, book = [], Book(db, symbol_id)
     for d in days:
         g = grid_day(db, symbol_id, d, grid_sec)
         if not g:
@@ -162,11 +162,27 @@ def load_raw(db, symbol_id: int, start: int | None, end: int | None, grid_sec: i
             if j < 0:
                 continue
             _dd, _tt, nav, nav_d, _px, _v, nav_t = navs[j]
-            if not nav or nav <= 0 or mid <= 0:
-                continue
+            if not nav or nav <= 0 or mid <= 0 or not bids or not asks:
+                continue                        # one-sided book: nothing could be bought AND sold here
             rows.append((d, t, nav, nav_d or 0, mid, cum, nav_t or 0))
             book[(d, t)] = (bids, asks)
     return rows, book
+
+
+class Book(dict):
+    """{(date, time): (bids, asks)} at the dataset's own instants, plus ``at(date, time)``: the real book at ANY
+    instant (replayed from the collected event stream) — e.g. the instant a held fund is sold to fund a switch."""
+
+    def __init__(self, db, symbol_id: int):
+        super().__init__()
+        self.db, self.sid = db, symbol_id
+        self._day, self._ev = None, []
+
+    def at(self, date: int, time: int) -> tuple[list, list]:
+        if self._day != date:
+            self._day = date
+            self._ev = sorted(G.load_day(self.db, self.sid, date, "book") or [], key=lambda r: (r[0], r[2]))
+        return _book_states(self._ev, [_sec(time)])[0]
 
 
 def _book_states(book: list[list], secs: list[int]) -> list[tuple[list, list]]:
@@ -198,7 +214,7 @@ def load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tuple
     by_day: dict[int, list] = {}
     for r in raw:
         by_day.setdefault(r[0], []).append(r)
-    rows, book = [], {}
+    rows, book = [], Book(db, symbol_id)
     for d in sorted(by_day):
         bk = G.load_day(db, symbol_id, d, "book") or []
         rr = by_day[d]

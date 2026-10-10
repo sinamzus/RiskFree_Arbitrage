@@ -1143,6 +1143,29 @@ def test_tse_dataset(R: Results, db_path: str):
     R.add(g, "حالت «سیگنال از دادهٔ NAV، معامله با اردربوک»: ورود در زمان اسنپ‌شات NAV و با قیمت صف فروشِ همان لحظه",
           not bad and n > 0 and rhy["dataset"]["name"] == "hybrid" and _sig(rhy) != _sig(r_dump),
           "؛ ".join(bad[:3]) or f"{n} معامله")
+    # order-book datasets: the assumed spread plays no part; every buy is inside the asks and every sale inside the
+    # bids of the book at that very instant (also a switch sale, whose instant is the candidate's snapshot)
+    R.add(g, "در دیتاست‌های اردربوک اسپرد فرضی هیچ اثری ندارد",
+          _sig(_run(db, replace(base, dataset="hybrid", half_spread_pct=0.5))) == _sig(rhy)
+          and _sig(_run(db, replace(base, half_spread_pct=0.5))) == _sig(res), "")
+    for ds in ("hybrid", "tse"):
+        rr = _run(db, replace(hp, dataset=ds))
+        books = {f["symbol"]: (TD.load_hybrid(db, f["symbol_id"], None, None)[1] if ds == "hybrid"
+                               else TD.load_raw(db, f["symbol_id"], None, None, 300)[1]) for f in funds}
+        bad, n = [], 0
+        for t in rr["trades"]:
+            bk = books[t["symbol"]]
+            bi, ai = bk.at(t["entry_date"], t["entry_time"])
+            bx, _ax = bk.at(t["exit_date"], t["exit_time"])
+            n += 1
+            if not ai or not (ai[0][0] - 0.01 <= t["entry_price"] <= ai[-1][0] + 0.01):
+                bad.append(f"{t['symbol']} خرید {t['entry_price']} خارج از صف فروش")
+            if not bx or not (bx[-1][0] - 0.01 <= t["exit_price"] <= bx[0][0] + 0.01):
+                bad.append(f"{t['symbol']} فروش {t['exit_price']} ({t['exit_reason']} {t['exit_time']}) خارج از صف خرید")
+            if t["spread_in"] is None or t["spread_in"] <= 0 or t["spread_out"] is None or t["spread_out"] <= 0:
+                bad.append(f"اسپرد واقعی {t['spread_in']} / {t['spread_out']}")
+        R.add(g, f"«همیشه سرمایه‌گذاری» ({ds}): خرید از صف فروش و فروش (حتی فروش برای جابه‌جایی) به صف خرید همان لحظه",
+              not bad and n > 0, "؛ ".join(bad[:3]) or f"{n} معامله")
     st = S.run_study(db, None, None, None, None, base=hp, space={"fill_switch_pct": [0.3, 0.8], "position_pct": [25, 50]},
                      n_samples=8, blocks=4, test_frac=0.3, max_seconds=60, min_trades=1)
     R.add(g, "بهینه‌ساز روی دیتاست TSE اجرا می‌شود", bool(st.get("best")) and st["base_params"]["dataset"] == "tse",
