@@ -970,6 +970,17 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   align-items: center; justify-content: center; padding: 20px;
 }
 #dm-overlay.visible { display: flex; }
+/* ─── Result tabs ────────────────────────────────────────────── */
+.dres-tabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: flex-end; margin: 12px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--brd); }
+.dres-tab { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--brd); border-radius: 8px 8px 0 0;
+  background: var(--surf2); color: var(--sub); font-size: var(--fs-xs); cursor: pointer; max-width: 260px; }
+.dres-tab:hover { color: var(--txt); }
+.dres-tab.active { background: var(--surf); color: var(--txt); border-color: var(--brd2); border-bottom-color: var(--surf); font-weight: 700; }
+.dres-tab .dres-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dres-tab .dres-x { color: var(--muted); font-weight: 400; padding: 0 2px; }
+.dres-tab .dres-x:hover { color: var(--red); }
+.dres-all { margin-inline-start: auto; background: none; border: none; color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.dres-all:hover { color: var(--red); }
 /* ─── Optimizer parameter-selection dialog ───────────────────── */
 #disc-study-cfg {
   display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100001;
@@ -2461,6 +2472,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-spread" type="number" step="0.01" value="0.02" style="width:70px"></div>
       <div class="bbt-field" title="سقف حجم معامله به‌صورت درصدی از حجم کل همان روز؛ ۰ = نامحدود"><label>سهم از حجم روز ٪</label>
         <input id="disc-part" type="number" step="0.5" value="10" style="width:70px"></div>
+      <div class="bbt-field" title="«حجم تا همان لحظه»: سقف سهم از حجمِ واقعاً معامله‌شده تا لحظهٔ سیگنال (در همان لحظه معلوم است، واقع‌بینانه). «کل حجم روز»: از حجم کل آن روز (که هنوز معلوم نیست؛ خوش‌بینانه). فقط وقتی «سهم از حجم روز» صفر نیست اثر دارد."><label>مبنای سقف حجم</label>
+        <select id="disc-partbasis" style="width:170px"><option value="sofar" selected>حجم تا همان لحظه</option><option value="day">کل حجم روز (خوش‌بینانه)</option></select></div>
+      <div class="bbt-field" title="تأخیر اجرا: سفارش در N‌امین اسنپ‌شات تازهٔ بعدیِ همان صندوق (همان روز) پر می‌شود، نه در لحظهٔ سیگنال. ۰ = بی‌درنگ (خوش‌بینانه). اگر به قیمت بعدی نرسد (آخر روز)، ورود/خروج انجام نمی‌شود."><label>تأخیر اجرا (اسنپ‌شات)</label>
+        <input id="disc-delay" type="number" step="1" min="0" max="20" value="0" style="width:70px"></div>
       <div class="bbt-field"><label>کارمزد خرید ٪</label>
         <input id="disc-buyfee" type="number" step="0.005" value="0.1" style="width:70px"></div>
       <div class="bbt-field"><label>کارمزد فروش ٪</label>
@@ -2524,15 +2539,10 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   </div>
 
   <div id="disc-funds" style="display:none"></div>
-  <div id="disc-stats" style="display:none"></div>
-  <div id="disc-opt" style="display:none"></div>
-  <div id="disc-ft" style="display:none"></div>
   <div id="disc-push" style="display:none"></div>
-  <div id="disc-val" style="display:none"></div>
-  <div id="disc-bub" style="display:none"></div>
-  <div id="disc-cards"></div>
-  <div id="disc-persym" style="display:none"></div>
-  <div id="disc-trades"></div>
+  <!-- every result (backtest, stats, optimizer, validation, ...) gets its own tab; the panels below are created per tab -->
+  <div id="disc-res-bar" class="dres-tabs" style="display:none"></div>
+  <div id="disc-res-host"></div>
 </div><!-- /#disc-app -->
 
 <!-- ═══════════════════════════════════════ Options Arbitrage App ═════ -->
@@ -6589,6 +6599,94 @@ async function discLoadCats(force) {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  Result tabs: every result gets its own set of panels; only the active tab's panels are in the document,
+//  so element ids stay unique. A long-running job keeps writing into ITS tab's (detached) panels and
+//  activates that tab when it finishes.
+// ---------------------------------------------------------------------------
+const DISC_RES_PANELS = [['disc-stats', 1], ['disc-opt', 1], ['disc-ft', 1], ['disc-val', 1], ['disc-bub', 1],
+  ['disc-cards', 0], ['disc-persym', 1], ['disc-trades', 0]];
+let _discTabs = [], _discTabActive = null, _discTabSeq = 0;
+
+function discTabMake() {
+  const panels = {};
+  DISC_RES_PANELS.forEach(([id, hid]) => {
+    const d = document.createElement('div'); d.id = id;
+    if (hid) d.style.display = 'none';
+    panels[id] = d;
+  });
+  return {id: 't' + (++_discTabSeq), kind: null, title: '', running: false, panels, g: {}, at: new Date()};
+}
+const discTabCur = () => _discTabs.find(t => t.id === _discTabActive);
+const discTabExists = id => _discTabs.some(t => t.id === id);
+
+function discTabShow(t) {
+  const host = document.getElementById('disc-res-host');
+  if (!host) return;
+  const cur = discTabCur();
+  if (cur) cur.g = {res: window._discLastRes, study: _discStudy};      // globals that belong to the tab being left
+  host.replaceChildren(...DISC_RES_PANELS.map(([id]) => t.panels[id]));
+  _discTabActive = t.id;
+  window._discLastRes = t.g.res;
+  _discStudy = t.g.study || null;
+  discTabsRender();
+}
+
+// kind: 'backtest' | 'stats' | 'optimize' | 'validation' | 'selftest' | 'fulltest' | 'bubble'; opts.reuse: one tab per kind
+function discNewTab(kind, title, opts) {
+  opts = opts || {};
+  if (opts.reuse) {
+    const ex = _discTabs.find(t => t.kind === kind);
+    if (ex) { if (ex.id !== _discTabActive) discTabShow(ex); return ex; }
+  }
+  const cur = discTabCur();
+  if (cur && !cur.kind) { cur.kind = kind; cur.title = title; cur.at = new Date(); discTabsRender(); return cur; }   // the blank first tab
+  const t = discTabMake();
+  t.kind = kind; t.title = title;
+  _discTabs.push(t);
+  while (_discTabs.length > 15) {                                  // keep memory bounded: drop the oldest idle tab
+    const old = _discTabs.find(x => x.id !== t.id && !x.running);
+    if (!old) break;
+    _discTabs.splice(_discTabs.indexOf(old), 1);
+  }
+  discTabShow(t);
+  return t;
+}
+
+function discTabSet(t, title, running) {
+  if (!t) return;
+  if (title != null) t.title = title;
+  t.running = !!running;
+  discTabsRender();
+}
+function discTabActivate(id) {
+  const t = _discTabs.find(x => x.id === id);
+  if (t && t.id !== _discTabActive) discTabShow(t);
+}
+function discTabClose(id) {
+  const i = _discTabs.findIndex(t => t.id === id);
+  if (i < 0) return;
+  const wasActive = id === _discTabActive;
+  _discTabs.splice(i, 1);
+  if (!_discTabs.length) { const b = discTabMake(); _discTabs.push(b); _discTabActive = null; discTabShow(b); return; }
+  if (wasActive) { _discTabActive = null; discTabShow(_discTabs[Math.min(i, _discTabs.length - 1)]); }
+  else discTabsRender();
+}
+function discTabCloseAll() {
+  _discTabs = []; _discTabActive = null;
+  const b = discTabMake(); _discTabs.push(b); discTabShow(b);
+}
+function discTabsRender() {
+  const bar = document.getElementById('disc-res-bar');
+  if (!bar) return;
+  const real = _discTabs.filter(t => t.kind);
+  bar.style.display = real.length ? '' : 'none';
+  const hm = d => d.toLocaleTimeString('fa-IR', {hour: '2-digit', minute: '2-digit'});
+  bar.innerHTML = real.map(t => `<span class="dres-tab ${t.id === _discTabActive ? 'active' : ''}" onclick="discTabActivate('${t.id}')"
+      title="${t.running ? 'در حال اجرا ...' : 'نمایش این نتیجه'} — ${hm(t.at)}"><span class="dres-t">${t.running ? '⏳ ' : ''}${t.title}</span>
+      <b class="dres-x" onclick="event.stopPropagation();discTabClose('${t.id}')" title="بستن این تب">×</b></span>`).join('')
+    + (real.length > 1 ? '<button type="button" class="dres-all" onclick="discTabCloseAll()" title="همهٔ تب‌های نتیجه بسته می‌شود">✕ بستن همه</button>' : '');
+}
 function discParams() {
   const v = id => document.getElementById(id).value;
   const ids = discSelectedIds();
@@ -6604,7 +6702,7 @@ function discParams() {
     fillmode: v('disc-fillmode'), fillswitch: v('disc-fillswitch'), fillminhold: v('disc-fillminhold'), fillage: v('disc-fillage'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
     crashdrop: v('disc-crashdrop'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
-    spread: v('disc-spread'), part: v('disc-part'),
+    spread: v('disc-spread'), part: v('disc-part'), partbasis: v('disc-partbasis'), delay: v('disc-delay'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
     navage: v('disc-navage'), navmin: v('disc-navmin'), smode: v('disc-smode'), sstart: v('disc-sstart'), send: v('disc-send'),
     fresh: document.getElementById('disc-fresh').checked ? '1' : '0',
@@ -6710,6 +6808,7 @@ const dvCls = v => v == null ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
 
 async function discSelfTest() {
   const btn = document.getElementById('disc-self-btn');
+  const tab = discNewTab('selftest', 'آزمون سلامت');
   const panel = document.getElementById('disc-val');
   btn.disabled = true; btn.textContent = '⏳ ...';
   const r = await fetch('/api/disc/selftest').catch(() => null);
@@ -6734,6 +6833,8 @@ async function discValidate() {
   }).catch(() => null);
   if (!r?.ok) { showError('اعتبارسنجی شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
   btn.disabled = true; btn.textContent = '⏳ در حال اعتبارسنجی ...';
+  const tab = discNewTab('validation', 'اعتبارسنجی');
+  discTabSet(tab, 'اعتبارسنجی', true);
   const panel = document.getElementById('disc-val');
   panel.style.display = 'block';
   panel.innerHTML = '<div class="ob-p">⏳ شروع ...</div>';
@@ -6749,7 +6850,10 @@ async function discValidate() {
     }
     clearInterval(discValTimer); discValTimer = null;
     btn.disabled = false; btn.textContent = '🔬 اعتبارسنجی';
+    discTabSet(tab, 'اعتبارسنجی', false);
     if (!j.result || j.result.error) { panel.innerHTML = `<div class="dv-head bad">خطا: ${(j.result || {}).error || 'نامشخص'}</div>`; return; }
+    if (!discTabExists(tab.id)) return;                      // the tab was closed while it ran
+    discTabActivate(tab.id);                                 // the renderer looks panels up by id: make this tab current
     renderDiscValidation(j.result, p);
   };
   discValTimer = setInterval(poll, 1500);
@@ -6839,9 +6943,11 @@ async function discBacktest() {
   if (!r) { showError('بک‌تست ناموفق (سرور در دسترس نیست)'); return; }
   const res = await r.json();
   if (res.error) { showError('خطا: ' + res.error); return; }
-  document.getElementById('disc-opt').style.display = 'none';
-  document.getElementById('disc-stats').style.display = 'none';
+  const tab = discNewTab('backtest', 'بک‌تست');
   renderDiscBacktest(res, p);
+  const sm = res.summary || {};
+  discTabSet(tab, `بک‌تست · ${sm.portfolio_return_pct != null ? (sm.portfolio_return_pct >= 0 ? '+' : '') + sm.portfolio_return_pct + '%' : ''} · ${sm.trade_count ?? 0} معامله`, false);
+  window._discLastRes = res;
 }
 
 const discM = n => ((+n || 0) / 1e6).toLocaleString('en-US', {maximumFractionDigits: 1});
@@ -7131,6 +7237,8 @@ const DISC_TIP_RULES = [
   [/^اسپرد$/, 'مجموع نیم‌اسپردِ فرضیِ پرداخت‌شده در خرید و فروش.'],
   [/^خالص$/, 'سود خالص این صندوق = اثر NAV + اثر حباب − اسپرد − کارمزد.'],
   [/^نگه‌داری: حداقل زمان/, 'یک صندوقِ نگه‌داری‌شده تا این‌قدر دقیقه پس از خرید برای جابه‌جایی فروخته نمی‌شود؛ جلوی جابه‌جایی‌های پشت‌سرهمِ همان روز را می‌گیرد. ۰ = خاموش.'],
+  [/^(سقف حجم|مبنای حجم|تأخیر اجرا)/, 'فرض‌های اجرا: مبنای سقف حجم (تا همان لحظه یا کل روز) و تأخیرِ پر شدن سفارش بر حسب اسنپ‌شات بعدی.'],
+  [/^(حجم تا (همان )?لحظه|کل حجم روز)/, 'مبنای سقف حجم: حجمِ واقعاً معامله‌شده تا همان لحظه، یا حجم کل روز (خوش‌بینانه).'],
   [/^عمر قیمت/, 'قیمتِ آخرِ هر صندوق تا این‌قدر دقیقه «جاری» حساب می‌شود (برای کاندیدا شدن یا فروخته شدن در جابه‌جایی).'],
   [/^نگه‌داری: (حداقل برتری|برتری)/, 'صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که کاندیدایی دست‌کم این‌قدر نقطهٔ درصد ارزان‌تر (حباب نسبیِ کمتر) پیدا شود و نقد کافی نباشد؛ وگرنه به هر قیمتی نگه داشته می‌شود.'],
   [/^پر کردن: فروش وقتی/, 'پوزیشن پارک‌شده وقتی حبابش به این درصد بالای معمولِ خودش رسید فروخته می‌شود.'],
@@ -7367,6 +7475,9 @@ function discRenderTrades(res) {
 
 async function discBubFocus(i) {
   const t = ((window._discLastRes || {}).trades || [])[i]; if (!t) return;
+  const lastRes = window._discLastRes;
+  discNewTab('bubble', 'نمودار حباب', {reuse: true});
+  window._discLastRes = lastRes;                                        // the backtest tab keeps its own (restored when leaving)
   const sh = (d, n) => { const x = new Date(Date.UTC(Math.floor(d / 10000), Math.floor(d % 10000 / 100) - 1, d % 100) + n * 86400000);
     return x.getUTCFullYear() * 10000 + (x.getUTCMonth() + 1) * 100 + x.getUTCDate(); };
   const el = document.getElementById('disc-bub');
@@ -7525,8 +7636,9 @@ let _discBub = null;
 const DISC_BUB_COLORS = ['#4fa3ff', '#ff7a59', '#9b6bff', '#2fbf71', '#e0a030', '#ff5fa2', '#20c5c5', '#b0b0b0', '#c9d44a', '#7a8cff', '#d98a4e', '#5fbf9f'];
 
 function discBubToggle() {
+  discNewTab('bubble', 'نمودار حباب', {reuse: true});         // one bubble tab (its controls share one state)
   const el = document.getElementById('disc-bub');
-  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  if (el.style.display !== 'none' && el.innerHTML.trim()) return;       // already open: just show its tab
   el.style.display = '';
   discBubInit();
 }
@@ -7950,6 +8062,7 @@ async function discStats() {
   if (!r) { showError('آمار ناموفق'); return; }
   const j = await r.json();
   if (j.error) { showError('خطا: ' + j.error); return; }
+  discNewTab('stats', 'آمار تخفیف');
   const el = document.getElementById('disc-stats');
   el.style.display = '';
   const fs = j.funds || [];
@@ -7970,6 +8083,7 @@ async function discStats() {
 let _discSpace = null, _discStudy = null;
 const DISC_STUDY_KEY = 'discStudyCfg_v1';
 const DS_VAL = {
+  participation_basis: {sofar: 'حجم تا لحظه', day: 'کل حجم روز'},
   fill_mode: {off: 'خاموش', best: 'بهترین صندوق', hold: 'همیشه سرمایه‌گذاری'}, crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
   entry_mode: {fund: 'هر صندوق', index: 'شاخص', both: 'هر دو'},
   mr_center: {off: 'خاموش', zero: 'صفر', category: 'دسته', self: 'خود'},
@@ -7981,14 +8095,14 @@ const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_a
   crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
   session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
   fill_mode: 'پر کردن', fill_switch_pct: 'نگه‌داری: برتری≥', fill_min_hold_min: 'نگه‌داری: حداقل زمان', fill_quote_age_min: 'عمر قیمت', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
-  require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
+  require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', participation_basis: 'مبنای حجم', exec_delay_snaps: 'تأخیر اجرا', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
 // study dimension -> key of discParams() (the query the backtest/optimizer endpoints read)
 const DS_QKEY = {entry_mode: 'entrymode', baseline_days: 'base', max_nav_age_days: 'navage', max_nav_age_min: 'navmin', mr_center: 'mrcenter',
   mr_window_days: 'mrwin', mr_horizon_days: 'mrhor', mr_min_score: 'mrmin', entry_discount_pct: 'entry', exit_discount_pct: 'exit',
   index_entry_pct: 'ientry', index_exit_pct: 'iexit', max_hold_days: 'hold', stop_loss_pct: 'stop', stop_mode: 'stopmode', position_pct: 'pos',
   crash_drop_pct: 'crashdrop', crash_window_min: 'crashwin', crash_cooldown_min: 'crashcool', crash_scope: 'crashscope',
   session_mode: 'smode', session_start: 'sstart', session_end: 'send', index_min_share: 'imin', mr_lag: 'mrlag', require_fresh: 'fresh',
-  participation_pct: 'part', half_spread_pct: 'spread', buy_fee: 'buyfee', sell_fee: 'sellfee', fill_mode: 'fillmode',
+  participation_pct: 'part', participation_basis: 'partbasis', exec_delay_snaps: 'delay', half_spread_pct: 'spread', buy_fee: 'buyfee', sell_fee: 'sellfee', fill_mode: 'fillmode',
   fill_switch_pct: 'fillswitch', fill_min_hold_min: 'fillminhold', fill_quote_age_min: 'fillage', fill_max_rel_pct: 'fillmax', fill_exit_rel_pct: 'fillexit'};
 const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', max_nav_age_min: 'disc-navmin', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
@@ -7996,7 +8110,7 @@ const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_n
   stop_loss_pct: 'disc-stop', stop_mode: 'disc-stopmode', position_pct: 'disc-pos',
   crash_drop_pct: 'disc-crashdrop', crash_window_min: 'disc-crashwin', crash_cooldown_min: 'disc-crashcool',
   crash_scope: 'disc-crashscope', session_mode: 'disc-smode', session_start: 'disc-sstart', session_end: 'disc-send',
-  index_min_share: 'disc-imin', mr_lag: 'disc-mrlag', require_fresh: 'disc-fresh', participation_pct: 'disc-part',
+  index_min_share: 'disc-imin', mr_lag: 'disc-mrlag', require_fresh: 'disc-fresh', participation_pct: 'disc-part', participation_basis: 'disc-partbasis', exec_delay_snaps: 'disc-delay',
   half_spread_pct: 'disc-spread', buy_fee: 'disc-buyfee', sell_fee: 'disc-sellfee',
   fill_mode: 'disc-fillmode', fill_switch_pct: 'disc-fillswitch', fill_min_hold_min: 'disc-fillminhold', fill_quote_age_min: 'disc-fillage', fill_max_rel_pct: 'disc-fillmax', fill_exit_rel_pct: 'disc-fillexit'};
 const dsHM = v => { const x = String(Math.round(+v)).padStart(6, '0'); return x.slice(0, 2) + ':' + x.slice(2, 4); };
@@ -8187,9 +8301,12 @@ async function discPushResults() {
 }
 
 async function discFullTest() {
-  const btn = document.getElementById('disc-ft-btn'), panel = document.getElementById('disc-ft');
+  const btn = document.getElementById('disc-ft-btn');
   const r = await fetch('/api/disc/fulltest', {method: 'POST'}).catch(() => null);
   if (!r?.ok && r?.status !== 409) { showError('تست سراسری شروع نشد.'); return; }
+  const tab = discNewTab('fulltest', 'تست سراسری');
+  discTabSet(tab, 'تست سراسری', true);
+  const panel = document.getElementById('disc-ft');
   btn.disabled = true; panel.style.display = 'block';
   panel.innerHTML = '<div class="ob-p">⏳ تست سراسری در حال اجرا (حدود ۲ دقیقه) ...</div>';
   const t = setInterval(async () => {
@@ -8199,7 +8316,10 @@ async function discFullTest() {
     if (j.running) { panel.innerHTML = `<div class="ob-p">⏳ ${(j.progress || {}).phase || ''} — ${(j.progress || {}).done || 0}/${(j.progress || {}).total || 0}</div>`; return; }
     if (!j.result) return;
     clearInterval(t); btn.disabled = false;
+    discTabSet(tab, 'تست سراسری', false);
     if (j.result.error) { panel.innerHTML = `<div class="ob-p">خطا: ${(j.result || {}).error || ''}</div>`; return; }
+    if (!discTabExists(tab.id)) return;
+    discTabActivate(tab.id);
     discRenderFullTest(j.result);
   }, 2000);
 }
@@ -8256,6 +8376,8 @@ async function discOptimizeRun() {
   }).catch(() => null);
   if (!r?.ok) { showError('بهینه‌سازی شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
   btn.disabled = true; btn.textContent = '⏳ مطالعه ...';
+  const tab = discNewTab('optimize', 'بهینه‌سازی');
+  discTabSet(tab, 'بهینه‌سازی', true);
   const panel = document.getElementById('disc-opt');
   panel.style.display = 'block';
   panel.innerHTML = '<div class="ob-p">⏳ آماده‌سازی ...</div>';
@@ -8276,7 +8398,10 @@ async function discOptimizeRun() {
     if (!j.result) return;                       // not started yet / result not stored yet: keep waiting
     clearInterval(discOptTimer); discOptTimer = null;
     btn.disabled = false; btn.textContent = '🔧 بهینه‌سازی و مطالعهٔ جامع';
+    discTabSet(tab, 'بهینه‌سازی', false);
     if (j.result?.error) { panel.innerHTML = `<div class="ob-p">خطا: ${j.result.error}</div>`; return; }
+    if (!discTabExists(tab.id)) return;                      // the tab was closed while it ran
+    discTabActivate(tab.id);                                 // renderers look panels up by id: make this tab current
     try { if (j.result?.mode === 'grid') renderDiscOptimize(j.result, p); else renderDiscStudy(j.result, p); }
     catch (e) { panel.innerHTML = `<div class="ob-p">نمایش نتیجه با خطا مواجه شد: ${e.message}<br>این پیام را برای رفع مشکل بفرستید (کنسول مرورگر: F12).</div>`; console.error(e); }
   };

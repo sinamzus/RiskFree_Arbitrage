@@ -175,7 +175,7 @@ def _base(**kw) -> D.DiscountParams:
                          position_pct=10.0, fill_mode="off", fill_switch_pct=0.5, fill_max_rel_pct=0.0,
                          crash_drop_pct=0.0, crash_window_min=30, crash_cooldown_min=30, crash_scope="category",
                          mr_center="off", mr_min_score=70.0, mr_lag=4, max_nav_age_min=30,
-                         buy_fee=0.0012, sell_fee=0.0012)
+                         buy_fee=0.0012, sell_fee=0.0012, participation_basis="day", exec_delay_snaps=0)
     return replace(p, **kw) if kw else p
 
 
@@ -248,6 +248,9 @@ AUDIT = [
     ("حداکثر حباب نسبی وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_max_rel_pct", [-0.1, 0.5], "same"),
     ("آستانهٔ فروش پارک وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_exit_rel_pct", [0.1, 1.5], "same"),
     ("نگه‌داری: حداقل زمان پیش از جابه‌جایی", {"fill_mode": "hold", "fill_max_rel_pct": 1.0, "position_pct": 25}, "fill_min_hold_min", [0, 100000], "change"),
+    ("مبنای سقف حجم", {"participation_pct": 0.3}, "participation_basis", ["sofar", "day"], "change"),
+    ("تأخیر اجرا", {}, "exec_delay_snaps", [0, 2], "change"),
+    ("مبنای سقف حجم بدون سقف بی‌اثر است", {"participation_pct": 0.0}, "participation_basis", ["sofar", "day"], "same"),
     ("عمر قیمت جاری", {"fill_mode": "hold", "fill_max_rel_pct": 1.0, "position_pct": 25}, "fill_quote_age_min", [1, 600], "change"),
     ("حداقل زمان نگه‌داری وقتی «نگه‌داری» نیست بی‌اثر است", {"fill_mode": "best"}, "fill_min_hold_min", [0, 100000], "same"),
     ("عمر قیمت وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_quote_age_min", [1, 600], "same"),
@@ -321,6 +324,7 @@ WEB_MAP = {
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
     "navmin": ("max_nav_age_min", "17", 17), "fillswitch": ("fill_switch_pct", "0.9", 0.9),
     "fillminhold": ("fill_min_hold_min", "150", 150), "fillage": ("fill_quote_age_min", "45", 45),
+    "partbasis": ("participation_basis", "day", "day"), "delay": ("exec_delay_snaps", "3", 3),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
     "fillexit": ("fill_exit_rel_pct", "0.45", 0.45),
 }
@@ -393,7 +397,7 @@ UI_ID = {  # query key -> element id
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
-    "navmin": "disc-navmin", "fillswitch": "disc-fillswitch", "fillminhold": "disc-fillminhold", "fillage": "disc-fillage", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
+    "navmin": "disc-navmin", "fillswitch": "disc-fillswitch", "fillminhold": "disc-fillminhold", "fillage": "disc-fillage", "partbasis": "disc-partbasis", "delay": "disc-delay", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
 }
 
 
@@ -619,6 +623,8 @@ def test_optimizer(R: Results, db):
 def _random_params(rng: random.Random) -> D.DiscountParams:
     c = {d: rng.choice(S.DIMS[d]["choices"]) for d in S.ORDER}
     c["fill_mode"] = "off"                                    # parking has its own tests (its trades break the entry-rule invariants)
+    c["exec_delay_snaps"] = 0                                 # the invariants below are stated at the signal's own snapshot
+    c["participation_basis"] = "day"                          # ... and with the whole-day volume cap (see test_realism for the rest)
     c = S._normalize(c, _base())
     if not S._valid(c):
         c["exit_discount_pct"] = -0.5
@@ -917,6 +923,71 @@ def test_hold(R: Results, db):
           all(t["exit_reason"] == "end" for t in huge["trades"]) and huge["trades"], "")
 
 
+def test_realism(R: Results, db):
+    """Volume cap basis (so far vs whole day) and execution delay (fill at the N-th next fresh snapshot)."""
+    g = "واقع‌بینی اجرا (حجم تا لحظه، تأخیر)"
+    base = _base(entry_discount_pct=0.3)
+    funds = dict((lab, sid) for sid, lab in D._universe(db, None, None))
+    # --- volume cap: no entry is larger than participation × volume traded UP TO that snapshot ---------------
+    pct = 0.4
+    pv = replace(base, participation_pct=pct, participation_basis="sofar")
+    res = _run(db, pv)
+    bad, n = [], 0
+    loaded = {lab: D._load_ex(db, sid, None, None, pv) for lab, sid in funds.items()}
+    for t in res["trades"]:
+        cum = loaded[t["symbol"]]["day_vol"].cum.get((t["entry_date"], t["entry_time"]))
+        if cum is None:
+            continue
+        n += 1
+        if t["volume"] > cum * pct / 100.0 + 1:
+            bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {t['volume']} > {cum * pct / 100:.0f}")
+    R.add(g, "سقف حجم: هیچ ورودی از «سهم × حجمِ معامله‌شده تا همان لحظه» بزرگ‌تر نیست", not bad and n > 0,
+          "؛ ".join(bad[:3]) or f"{n} ورود")
+    day_res = _run(db, replace(pv, participation_basis="day"))
+    R.add(g, "مبنای «کل حجم روز» (خوش‌بینانه) معامله‌های بزرگ‌تر/بیشتر از «تا لحظه» می‌دهد",
+          sum(t["volume"] for t in day_res["trades"]) >= sum(t["volume"] for t in res["trades"]), "")
+    # --- execution delay ---------------------------------------------------------------------------------------
+    dly = 2
+    pd_ = replace(base, exec_delay_snaps=dly)
+    r0, r2 = _run(db, base), _run(db, pd_)
+    bad, n = [], 0
+    ld = {lab: D._load_ex(db, sid, None, None, pd_) for lab, sid in funds.items()}
+    thr = -pd_.entry_discount_pct / 100.0
+    for t in r2["trades"]:
+        rows = ld[t["symbol"]]["rows"]
+        j = next((k for k, r in enumerate(rows) if r[1] == t["entry_date"] and r[2] == t["entry_time"]), None)
+        if j is None:
+            continue
+        n += 1
+        fresh_back, i0 = 0, j - 1
+        while i0 >= 0 and rows[i0][1] == t["entry_date"]:
+            if rows[i0][5]:
+                fresh_back += 1
+                if fresh_back == dly:
+                    break
+            i0 -= 1
+        if fresh_back != dly or i0 < 0 or rows[i0][4] / rows[i0][3] - 1.0 > thr + 1e-9:
+            bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}")
+        if abs(t["entry_price"] - round(rows[j][4] * (1 + pd_.half_spread_pct / 100.0), 2)) > 0.011:
+            bad.append(f"{t['symbol']}: قیمت ورود ≠ قیمت اسنپ‌شات پرشدن")
+    R.add(g, "تأخیر اجرا: هر ورود دقیقاً در N‌امین اسنپ‌شات تازهٔ بعد از یک سیگنال معتبر و با قیمت همان اسنپ‌شات پر می‌شود",
+          not bad and n > 0, "؛ ".join(bad[:3]) or f"{n} ورود")
+    R.add(g, "تأخیر اجرا نتیجه را عوض می‌کند و دو اجرا یک‌سان نیستند", _sig(r0) != _sig(r2), "")
+    hp = _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=25, exec_delay_snaps=2, participation_basis="sofar",
+               participation_pct=5.0)
+    rh = _run(db, hp)
+    lo, cash_final = _cash_path(rh, hp)
+    bad = []
+    if lo < -1e-6 * hp.initial_capital - 1:
+        bad.append(f"نقد منفی {lo / hp.initial_capital * 100:.3f}٪")
+    if abs(cash_final - rh["summary"]["final_capital"]) > max(50, 1e-6 * hp.initial_capital):
+        bad.append("سرمایهٔ نهایی ≠ مسیر نقد")
+    if any(t["exit_reason"] not in ("rotate", "end") for t in rh["trades"]):
+        bad.append("علت خروجِ غیرمجاز")
+    R.add(g, "حالت «نگه‌داری» با تأخیر اجرا: نقد هرگز منفی نیست، سرمایهٔ نهایی با مسیر نقد می‌خواند، علت‌های خروج مجاز",
+          not bad and len(rh["trades"]) > 0, "؛ ".join(bad) or f"{len(rh['trades'])} معامله")
+
+
 def test_attribution(R: Results, db):
     """Profit attribution (NAV move vs bubble convergence vs spread vs fees) must reconcile exactly."""
     g = "تفکیک سود NAV / حباب"
@@ -1104,6 +1175,19 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             pg.click("#disc-run"); pg.wait_for_selector("#disc-cards .opt-mc", timeout=90000)
             R.add("مرورگر", "بک‌تست اجرا و نتیجه رسم می‌شود", True, "")
             R.add("مرورگر", "نمودار سرمایهٔ درگیر رسم می‌شود", pg.locator("#disc-exp-chart canvas").count() > 0, "")
+            # result tabs: a new result must not wipe the previous one
+            R.add("مرورگر", "نتیجهٔ بک‌تست در یک تب نمایش داده می‌شود", pg.locator("#disc-res-bar .dres-tab").count() == 1, "")
+            first_final = pg.evaluate("window._discLastRes.summary.final_capital")
+            pg.click("#disc-stats-btn"); pg.wait_for_selector("#disc-stats .disc-tbl", timeout=60000)
+            R.add("مرورگر", "نتیجهٔ جدید (آمار) تب جدید می‌سازد و بک‌تست پاک نمی‌شود",
+                  pg.locator("#disc-res-bar .dres-tab").count() == 2 and pg.locator("#disc-cards .opt-mc").count() == 0, "")
+            pg.locator("#disc-res-bar .dres-tab").first.click(); pg.wait_for_selector("#disc-cards .opt-mc")
+            R.add("مرورگر", "برگشتن به تب اول، همان بک‌تست (با نمودار) را نشان می‌دهد و آمار را نه",
+                  pg.locator("#disc-exp-chart canvas").count() > 0 and pg.locator("#disc-stats .disc-tbl").count() == 0
+                  and pg.evaluate("window._discLastRes.summary.final_capital") == first_final, "")
+            pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
+            R.add("مرورگر", "بستن یک تب فقط همان را حذف می‌کند", pg.locator("#disc-res-bar .dres-tab").count() == 1
+                  and pg.locator("#disc-cards .opt-mc").count() > 0, "")
             # optimizer: apply result must fill EVERY searched field in the form
             pg.select_option("#disc-fillmode", "hold")
             pg.click("#disc-opt-btn"); pg.wait_for_selector("#disc-study-cfg.visible #ds-dims tbody tr")
@@ -1245,6 +1329,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
              ("پر کردن سرمایهٔ بیکار", lambda: test_fill(R, db)),
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
+             ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
              ("ارسال نتایج برای تحلیل", lambda: test_export(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),

@@ -1770,6 +1770,8 @@ def create_app(db, scan_callback=None):
             index_exit_pct=_f("iexit", d.index_exit_pct),
             half_spread_pct=_f("spread", d.half_spread_pct),
             participation_pct=_f("part", d.participation_pct),
+            participation_basis=("day" if str(get("partbasis") or d.participation_basis) == "day" else "sofar"),
+            exec_delay_snaps=max(0, min(20, int(_f("delay", d.exec_delay_snaps)))),
             require_fresh=_b("fresh", d.require_fresh),
             max_nav_age_days=int(_f("navage", d.max_nav_age_days)),
             max_nav_age_min=max(0, int(_f("navmin", d.max_nav_age_min))),

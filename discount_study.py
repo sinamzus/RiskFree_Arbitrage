@@ -66,6 +66,8 @@ DIMS: dict[str, dict] = {
     "mr_lag":             {"kind": "slow", "label": "فاصلهٔ جفت‌های امتیاز بازگشت (اسنپ‌شات)", "choices": [2, 4, 8]},
     "require_fresh":      {"kind": "fast", "label": "فقط قیمت تازه", "choices": [True, False]},
     "participation_pct":  {"kind": "fast", "label": "سقف سهم از حجم روز ٪ (۰ = نامحدود)", "choices": [2.0, 5.0, 10.0, 0.0], "assumption": True},
+    "participation_basis": {"kind": "fast", "label": "مبنای سقف حجم (حجم تا همان لحظه / کل حجم روز)", "choices": ["sofar", "day"], "assumption": True},
+    "exec_delay_snaps":   {"kind": "fast", "label": "تأخیر اجرا (تعداد اسنپ‌شاتِ بعدی تا پر شدن سفارش)", "choices": [0, 1, 2, 3], "assumption": True},
     "half_spread_pct":    {"kind": "fast", "label": "نیم‌اسپرد فرضی ٪", "choices": [0.02, 0.05, 0.1, 0.2], "assumption": True},
     "buy_fee":            {"kind": "fast", "label": "کارمزد خرید (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
     "sell_fee":           {"kind": "fast", "label": "کارمزد فروش (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
@@ -84,7 +86,7 @@ SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "max_nav_age_mi
               "crash_window_min", "crash_cooldown_min", "crash_scope"]
 FAST_ORDER = ["entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct", "max_hold_days",
               "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "require_fresh", "fill_mode", "fill_max_rel_pct", "fill_exit_rel_pct", "fill_switch_pct", "fill_min_hold_min", "fill_quote_age_min", "position_pct",
-              "participation_pct", "half_spread_pct", "buy_fee", "sell_fee"]
+              "participation_basis", "exec_delay_snaps", "participation_pct", "half_spread_pct", "buy_fee", "sell_fee"]
 ORDER = SLOW_ORDER + FAST_ORDER
 
 PRESETS = {
@@ -117,6 +119,9 @@ def _active(dim: str, c: dict) -> bool:
     if hold and dim in ("entry_mode", "entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct",
                         "index_min_share", "max_hold_days", "stop_loss_pct", "stop_mode", "fill_exit_rel_pct"):
         return False                      # "always invested": the parker runs the strategy; these rules do not exist
+    if dim == "participation_basis":
+        v = c.get("participation_pct")
+        return v is None or float(v) > 0           # no volume cap = no basis to choose
     if dim in ("fill_switch_pct", "fill_min_hold_min"):
         return hold
     if dim == "fill_quote_age_min":
@@ -176,7 +181,7 @@ def _normalize(c: dict, base: D.DiscountParams) -> dict:
 def _to_params(base: D.DiscountParams, c: dict) -> D.DiscountParams:
     kw = {k: v for k, v in c.items() if v is not None}
     for k in ("max_hold_days", "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end",
-              "max_nav_age_min", "fill_min_hold_min", "fill_quote_age_min"):
+              "max_nav_age_min", "fill_min_hold_min", "fill_quote_age_min", "exec_delay_snaps"):
         if k in kw:
             kw[k] = int(kw[k])
     return replace(base, **kw)
@@ -600,7 +605,8 @@ class Study:
                 "buy_fee": b.buy_fee, "sell_fee": b.sell_fee,
                 "fill_mode": b.fill_mode, "fill_max_rel_pct": b.fill_max_rel_pct, "fill_exit_rel_pct": b.fill_exit_rel_pct,
                 "fill_switch_pct": b.fill_switch_pct, "fill_min_hold_min": b.fill_min_hold_min,
-                "fill_quote_age_min": b.fill_quote_age_min}
+                "fill_quote_age_min": b.fill_quote_age_min, "participation_basis": b.participation_basis,
+                "exec_delay_snaps": b.exec_delay_snaps}
 
     def _fill(self, partial: dict) -> dict:
         """Complete a configuration with base values for dimensions that are not searched."""
@@ -1043,9 +1049,9 @@ def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.Discoun
 
 _INT_DIMS = ("max_hold_days", "baseline_days", "max_nav_age_days", "max_nav_age_min", "mr_window_days", "mr_horizon_days",
              "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end",
-             "fill_min_hold_min", "fill_quote_age_min")
+             "fill_min_hold_min", "fill_quote_age_min", "exec_delay_snaps")
 _BOOL_DIMS = ("require_fresh",)
-_STR_CHOICES = {"fill_mode": {"off", "best", "hold"}, "crash_scope": {"category", "all"}, "session_mode": {"auto", "fixed"}, "entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},
+_STR_CHOICES = {"fill_mode": {"off", "best", "hold"}, "participation_basis": {"sofar", "day"}, "crash_scope": {"category", "all"}, "session_mode": {"auto", "fixed"}, "entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},
                 "stop_mode": {"nav_widen", "nav_level", "price"}}
 
 

@@ -132,7 +132,9 @@ class DiscountParams:
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
     baseline_days: int = 0              # per-fund typical discount window (trading days); 0 = off
     half_spread_pct: float = 0.02       # assumed half bid-ask spread (each side)
-    participation_pct: float = 10.0     # max share of the day's volume we can trade; 0 = unlimited
+    participation_pct: float = 10.0     # max share of the volume we can trade; 0 = unlimited
+    participation_basis: str = "sofar"  # sofar = volume traded UP TO the snapshot (known then) | day = the whole day's volume (look-ahead)
+    exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
     max_nav_age_days: int = 3           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
     max_nav_age_min: int = 120          # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
@@ -427,6 +429,29 @@ def _mr_summary(label: str, rows: list[tuple], mr: list, p: DiscountParams) -> d
             "eligible_now": by_day[days[-1]] >= p.mr_min_score}
 
 
+class _DayVol(dict):
+    """{date: total volume traded that day}; ``cum`` = {(date, time): volume traded up to that snapshot}.
+    It travels wherever ``day_vol`` does (a plain ``{}`` — e.g. synthetic worlds — simply has no ``cum``)."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.cum: dict = {}
+
+
+def _vol_cap(day_vol, p: "DiscountParams", d: int, t: int | None) -> float:
+    """Units-volume we may trade at snapshot (d, t): participation × (volume so far | whole day). 0 pct = unlimited."""
+    if p.participation_pct <= 0:
+        return float(1 << 60)
+    v = None
+    if p.participation_basis == "sofar" and t is not None:
+        cum = getattr(day_vol, "cum", None)
+        if cum:
+            v = cum.get((d, t))
+    if v is None:
+        v = day_vol.get(d, 0)
+    return v * p.participation_pct / 100.0
+
+
 def _day_windows(raw: list[tuple]) -> dict[int, tuple[int, int]]:
     """{date: (t_first, t_last)} — first / last snapshot of the day at which the
     cumulative volume GREW.  That is the real continuous-trading window of this fund
@@ -466,7 +491,7 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
     day_vol: {date: total volume traded that day}.
     """
     base_rows = []
-    day_vol: dict[int, int] = {}
+    day_vol = _DayVol()
     prev_vol = 0
     prev_date = 0
     windows = _day_windows(raw) if p.session_mode != "fixed" else {}
@@ -479,6 +504,7 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
             day_vol[d] = vol
         fresh = vol > prev_vol
         prev_vol = max(prev_vol, vol)
+        day_vol.cum[(d, t)] = prev_vol                # volume traded up to this snapshot (known at that moment)
         if not _in_session(p, windows.get(d), t):
             continue
         if not last or last <= 0 or not nav or nav <= 0:
@@ -687,10 +713,25 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     crash_thr = -p.crash_drop_pct / 100.0
     crash_on = p.crash_drop_pct > 0 and crash is not None
 
-    def _cap(date_int: int) -> int:
-        if p.participation_pct <= 0:
-            return big
-        return int(day_vol.get(date_int, 0) * p.participation_pct / 100.0)
+    def _cap(date_int: int, t_int: int | None = None) -> int:
+        return int(_vol_cap(day_vol, p, date_int, t_int))
+
+    dl = max(0, int(p.exec_delay_snaps))
+    skip_until = -1
+
+    def xi(i: int):
+        """Index of the row the order is filled at: the dl-th next fresh snapshot of the SAME day (None = no fill)."""
+        if dl <= 0:
+            return i
+        day, n = rows[i][1], 0
+        for j in range(i + 1, len(rows)):
+            if rows[j][1] != day:
+                return None
+            if not p.require_fresh or rows[j][5]:
+                n += 1
+                if n >= dl:
+                    return j
+        return None
 
     def _close(units: int, px: float, d: int, t: int, nav: float, fair: float, reason: str,
                x_idx: float | None = None):
@@ -724,6 +765,8 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
 
     last_i = len(rows) - 1
     for i, (o, d, t, nav, last, fresh, nav_raw) in enumerate(rows):
+        if i < skip_until:
+            continue                                  # an order is "in flight" until its fill snapshot
         if p.require_fresh and not fresh:
             if diag is not None and pos == 0:
                 diag["flat"] = diag.get("flat", 0) + 1
@@ -760,14 +803,22 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                         diag["gap_sum"] = diag.get("gap_sum", 0.0) + (r - ent_thr)
                         diag["gap_n"] = diag.get("gap_n", 0) + 1
                 continue
+            j = xi(i)                                  # the order fills a little later when a delay is modelled
+            if j is None:
+                if diag is not None:
+                    diag["liquidity"] = diag.get("liquidity", 0) + 1
+                continue
+            if j != i:
+                o, d, t, nav, last, _fr, nav_raw = rows[j]
             ask = last * (1 + hs)
-            units = min(int(_SIM_CAPITAL // ask), _cap(d))
+            units = min(int(_SIM_CAPITAL // ask), _cap(d, t))
             if units <= 0:
                 if diag is not None:
                     diag["liquidity"] = diag.get("liquidity", 0) + 1
                 continue
             if diag is not None:
                 diag["signal"] = diag.get("signal", 0) + 1
+            skip_until = j + 1                         # (the fill row itself is not re-evaluated)
             pos, cost = units, units * ask
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
             e_fair, e_rel = nav, r
@@ -788,10 +839,17 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                   or (mode != "index" and r >= ex_thr)):
                 reason = "signal"
             if reason:
-                units = min(pos, _cap(d))
+                j = xi(i)
+                if j is None:
+                    continue                          # no fill today: still holding, try again on the next snapshot
+                if j != i:
+                    o, d, t, nav, last, _fr, nav_raw = rows[j]
+                    bid = last * (1 - hs)
+                units = min(pos, _cap(d, t))
                 if units > 0:
                     _close(units, bid, d, t, nav_raw, nav, reason,
-                           idx[i] if idx is not None else None)
+                           idx[j] if idx is not None else None)
+                    skip_until = j + 1
                     if pos == 0:
                         blocked_date = d
 
@@ -1146,10 +1204,27 @@ class _Parker:
         self.gi += 1
         return g
 
-    def _cap(self, k: int, d: int) -> float:
-        if self.p.participation_pct <= 0:
-            return self.big
-        return self.loaded[k]["day_vol"].get(d, 0) * self.p.participation_pct / 100.0
+    def _cap(self, k: int, d: int, t: int | None = None) -> float:
+        return _vol_cap(self.loaded[k]["day_vol"], self.p, d, t)
+
+    def _xi(self, k: int, i: int, not_before: int | None = None):
+        """Row index at which an order on fund ``k`` decided at its row ``i`` is filled: the ``exec_delay_snaps``-th next
+        fresh snapshot of the same day (and, if given, not earlier than instant ``not_before``). None = no fill today."""
+        dl = max(0, int(self.p.exec_delay_snaps))
+        rows = self.rows[k]
+        if dl <= 0:
+            return i
+        day, n = rows[i][1], 0
+        for j in range(i + 1, len(rows)):
+            r = rows[j]
+            if r[1] != day:
+                return None
+            if self.p.require_fresh and not r[5]:
+                continue
+            n += 1
+            if n >= dl and (not_before is None or r[0] * 86400 + _sec(r[2]) >= not_before):
+                return j
+        return None
 
     def _close(self, k: int, units: float, i: int, reason: str, at_ts: int | None = None) -> tuple[float, float]:
         """Sell ``units`` of the parked fund at the bid of its quote at snapshot ``i``.  ``at_ts`` (rotation)
@@ -1228,12 +1303,16 @@ class _Parker:
             elif r >= self.exit_rel:
                 reason = "signal"
             if reason:
-                units = min(pos["units"], self._cap(k, d))
+                jx = self._xi(k, i)                   # fill row (a later snapshot when a delay is modelled)
+                if jx is None:
+                    continue
+                rj = self.rows[k][jx]
+                units = min(pos["units"], self._cap(k, rj[1], rj[2]))
                 if units > 0:
-                    dc, di = self._close(k, units, i, reason)
+                    dc, di = self._close(k, units, jx, reason)
                     cash, invested = cash + dc, invested + di
                     if k not in self.parked:
-                        self.blocked_day[k] = d
+                        self.blocked_day[k] = rj[1]
         # the fund's data ends here: sell what is still parked (same convention as normal trades)
         for k, i in group:
             if k in self.parked and i == len(self.rows[k]) - 1:
@@ -1267,10 +1346,11 @@ class _Parker:
             o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
             slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
             amount = min(slot, cash)
+            self._sale_ts = None
             if self.hold and slot > 0 and amount < 0.25 * slot:
                 # no cash: sell the least attractive holding, but only if this candidate is clearly better —
                 # and only if the candidate can then actually be bought (volume cap), or we would sell for nothing
-                if self._cap(k, d) * last * (1 + hs) * (1 + bf) < 0.25 * slot:
+                if self._cap(k, d, t) * last * (1 + hs) * (1 + bf) < 0.25 * slot:
                     self.sz["skip_cap"] += 1
                     continue
                 cash, invested = self._switch_out(k, i, T, cash, invested)
@@ -1278,8 +1358,14 @@ class _Parker:
                 amount = min(slot, cash)
             if slot <= 0 or amount < 0.25 * slot:
                 continue
+            jb = self._xi(k, i, not_before=self._sale_ts)       # the buy fills at the fund's next snapshot when a delay is modelled
+            if jb is None:
+                continue
+            if jb != i:
+                o, d, t, nav, last, _f, nav_raw = self.rows[k][jb]
+            t_in = o * 86400 + _sec(t)
             ask = last * (1 + hs)
-            cap_u = self._cap(k, d)
+            cap_u = self._cap(k, d, t)
             units = min(amount / (ask * (1 + bf)), cap_u)
             if units <= 0 or units * ask * (1 + bf) < 0.25 * slot:
                 continue
@@ -1291,7 +1377,7 @@ class _Parker:
             if ratio < 0.999:                 # what limited the size: the volume cap or the cash at hand?
                 self.sz["liq" if cap_u * ask * (1 + bf) < amount * 0.999 else "cash"] += 1
             mr_score = round(self.mr[k][i], 1) if mr_on and self.mr[k] and self.mr[k][i] is not None else None
-            self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": T,
+            self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": t_in,
                               "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score}
             cash -= units * ask * (1 + bf)
             invested += units * ask
@@ -1312,14 +1398,28 @@ class _Parker:
         if worst is None or self.rel[k][i] > w_rel - self.switch:
             return cash, invested
         pw = self.parked[worst]
-        cap_u = self._cap(worst, self.rows[worst][self.cur_i[worst]][1])
-        val = pw["units"] * self.rows[worst][self.cur_i[worst]][4]
+        if self.p.exec_delay_snaps > 0:
+            # the sale fills at the held fund's next snapshot; the buy not before that instant (so the cash exists)
+            ja = self._xi(worst, self.cur_i[worst])
+            if ja is None:
+                return cash, invested
+            ra = self.rows[worst][ja]
+            ta = ra[0] * 86400 + _sec(ra[2])
+            if self._xi(k, i, not_before=ta) is None:
+                return cash, invested
+            self._sale_ts = ta
+            sale_i, at_ts = ja, None
+        else:
+            sale_i, at_ts = self.cur_i[worst], T
+        rs = self.rows[worst][sale_i]
+        cap_u = self._cap(worst, rs[1], rs[2])
+        val = pw["units"] * rs[4]
         self.sz["sales"] += 1
         self.sz["sale_value"] += val
         if pw["units"] > cap_u:               # more than the volume cap would let us sell at once (still sold in full)
             self.sz["sales_over_cap"] += 1
             self.sz["sale_value_over_cap"] += val * (1 - cap_u / pw["units"])
-        dc, di = self._close(worst, pw["units"], self.cur_i[worst], "rotate", T)
+        dc, di = self._close(worst, pw["units"], sale_i, "rotate", at_ts)
         return cash + dc, invested + di
 
     def flush(self, cash: float, invested: float) -> tuple[float, float]:
