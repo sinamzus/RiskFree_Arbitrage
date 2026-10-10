@@ -28,6 +28,12 @@ import tse_gold as G
 GRID_VERSION = 1
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS tse_window (
+    date     INTEGER PRIMARY KEY,
+    n_funds  INTEGER NOT NULL,
+    first    INTEGER,
+    last     INTEGER
+);
 CREATE TABLE IF NOT EXISTS tse_grid (
     symbol_id INTEGER NOT NULL,
     date      INTEGER NOT NULL,
@@ -120,6 +126,29 @@ def grid_day(db, symbol_id: int, date: int, grid_sec: int) -> list[list] | None:
         conn.execute("INSERT OR REPLACE INTO tse_grid VALUES (?,?,?,?,?,?)",
                      (symbol_id, date, grid_sec, GRID_VERSION, len(rows), _pack(rows)))
     return rows
+
+
+def market_window(db, date: int) -> tuple[int, int] | None:
+    """(first, last) second of the day at which ANY collected fund traded on TSE — the market's continuous-trading
+    window. Outside it nothing can be bought or sold, whatever the order book shows. Cached in ``tse_window`` (and
+    rebuilt when more funds of that day are collected)."""
+    with db._conn() as conn:
+        sids = [int(r[0]) for r in conn.execute(
+            "SELECT symbol_id FROM tse_raw WHERE date=? AND kind='trades' AND n>0", (date,))]
+        r = conn.execute("SELECT n_funds, first, last FROM tse_window WHERE date=?", (date,)).fetchone()
+    if r is not None and r[0] == len(sids):
+        return (r[1], r[2]) if r[1] is not None else None
+    lo = hi = None
+    for sid in sids:
+        for row in G.load_day(db, sid, date, "trades") or []:
+            if row[4] or row[2] <= 0 or row[3] <= 0:
+                continue
+            x = _sec(row[1])
+            lo = x if lo is None or x < lo else lo
+            hi = x if hi is None or x > hi else hi
+    with db._conn() as conn:
+        conn.execute("INSERT OR REPLACE INTO tse_window VALUES (?,?,?,?)", (date, len(sids), lo, hi))
+    return (lo, hi) if lo is not None else None
 
 
 def tse_days(db, symbol_id: int, start: int | None = None, end: int | None = None) -> list[int]:
@@ -216,8 +245,15 @@ def load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tuple
         by_day.setdefault(r[0], []).append(r)
     rows, book = [], Book(db, symbol_id)
     for d in sorted(by_day):
+        win = market_window(db, d)
+        if win is None:
+            continue
+        # only snapshots taken while the market was trading (a snapshot after the close still shows a book, but
+        # nothing could be executed against it)
+        rr = [r for r in by_day[d] if win[0] <= _sec(r[1]) <= win[1]]
+        if not rr:
+            continue
         bk = G.load_day(db, symbol_id, d, "book") or []
-        rr = by_day[d]
         states = _book_states(bk, [_sec(r[1]) for r in rr])
         for r, (bids, asks) in zip(rr, states):
             if bids and asks:
@@ -266,7 +302,9 @@ def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | 
                 max_days: int = 12) -> dict:
     """How well the NAV dump's last price matches the TSE tape at the same instant — and at shifted instants, to
     expose a clock offset — plus how many dump snapshots / backtest trades fall outside the day's TSE trading window
-    (first → last real trade). A trade outside the window was filled against a book that could not trade."""
+    (first → last real trade of any collected fund). A trade outside the window was filled against a book that
+    could not trade (the hybrid dataset drops such snapshots, so it should report none)."""
+    ensure_schema(db)
     cache: dict = {}
     devs: dict[int, list[float]] = {o: [] for o in CLOCK_OFFSETS_MIN}
     rows_in = rows_out = 0
@@ -279,8 +317,9 @@ def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | 
         for r in db.get_nav_intraday(sid, min(pick), max(pick)):
             if r[0] not in want or not r[4] or r[4] <= 0:
                 continue
-            tp, win = _tape(db, sid, r[0], cache)
-            if not tp:
+            tp, _w = _tape(db, sid, r[0], cache)
+            win = market_window(db, r[0])
+            if not tp or win is None:
                 continue
             s = _sec(r[1])
             if win[0] <= s <= win[1]:
@@ -299,7 +338,7 @@ def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | 
         if sid is None:
             continue
         for d, tm, side in ((t["entry_date"], t["entry_time"], "خرید"), (t["exit_date"], t["exit_time"], "فروش")):
-            _tp, win = _tape(db, sid, d, cache)
+            win = market_window(db, d)
             if win is None:
                 continue
             t_n += 1

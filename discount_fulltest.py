@@ -1165,8 +1165,9 @@ def test_tse_dataset(R: Results, db_path: str):
     # order-book datasets: the assumed spread plays no part; every buy is inside the asks and every sale inside the
     # bids of the book at that very instant (also a switch sale, whose instant is the candidate's snapshot)
     ck = rhy["dataset"].get("clock") or {}
-    R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است و هم‌خوان گزارش می‌شود",
-          ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0,
+    R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است؛ هیچ معامله‌ای بیرون از ساعت بازار نیست",
+          ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0
+          and ck.get("trade_legs_outside_window") == 0 and (ck.get("rows_outside_window_pct") or 0) > 0,
           json.dumps({k: ck.get(k) for k in ("best_offset_min", "dev_at_0_pct", "best_dev_pct", "rows_outside_window_pct",
                                               "trade_legs_outside_pct")}))
     # a NAV file whose clock runs 2 hours late must be caught (best offset −120 min, not aligned)

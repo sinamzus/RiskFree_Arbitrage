@@ -8377,7 +8377,7 @@ function discClockHtml(c) {
     ${bad ? '⚠️' : '✅'} بررسی ساعت NAV↔TSE: اختلاف میانهٔ قیمت در همان لحظه <b>${c.dev_at_0_pct}%</b>،
     کمترین اختلاف در جابه‌جایی <b>${c.best_offset_min > 0 ? '+' : ''}${c.best_offset_min} دقیقه</b> (${c.best_dev_pct}%)
     ${c.aligned ? '— ساعت‌ها هم‌خوان‌اند' : '— <b>ساعت دو منبع هم‌خوان نیست</b>'} ·
-    اسنپ‌شات بیرون از ساعت معاملهٔ TSE: ${c.rows_outside_window_pct}% ·
+    اسنپ‌شات فایل NAV بیرون از ساعت معاملهٔ TSE: ${c.rows_outside_window_pct}% (در دیتاست ترکیبی کنار گذاشته می‌شوند) ·
     معاملهٔ بیرون از ساعت معامله: <b>${c.trade_legs_outside_window}</b> از ${c.trade_legs_checked} (${c.trade_legs_outside_pct}%)
     ${ex ? `<details><summary>نمونه‌ها</summary>${ex}</details>` : ''}</div>`;
 }
