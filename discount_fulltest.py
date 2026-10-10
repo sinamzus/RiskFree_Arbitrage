@@ -454,8 +454,10 @@ def test_optimizer_static(R: Results, db):
                 modes = st.space.get("entry_mode") or [mode]
                 centers = st.space.get("mr_center") or [base.mr_center]
                 sess = st.space.get("session_mode") or [base.session_mode]
+                fills = st.space.get("fill_mode") or [base.fill_mode]
                 ok = any(S._active(d, {"entry_mode": m, "mr_center": c, "stop_loss_pct": 1.0, "crash_drop_pct": 1.0,
-                                       "session_mode": sm}) for m in modes for c in centers for sm in sess)
+                                       "session_mode": sm, "fill_mode": fm})
+                         for m in modes for c in centers for sm in sess for fm in fills)
                 if not ok:
                     inert.append(d)
             need = set()
@@ -478,7 +480,8 @@ def test_optimizer_static(R: Results, db):
              ({"mr_center": "zero"}, "mr_min_score"), ({"mr_center": "zero"}, "mr_lag"),
              ({"crash_drop_pct": 1.0}, "crash_window_min"), ({"crash_drop_pct": 1.0}, "crash_cooldown_min"),
              ({"crash_drop_pct": 1.0}, "crash_scope"), ({"session_mode": "fixed"}, "session_start"),
-             ({"session_mode": "fixed"}, "session_end")]
+             ({"session_mode": "fixed"}, "session_end"), ({"fill_mode": "best"}, "fill_max_rel_pct"),
+             ({"fill_mode": "best"}, "fill_exit_rel_pct")]
     for change, dim in cases:
         off = st._complete({})                           # the form's configuration (everything inactive stays None)
         cand = dict(off)
@@ -488,6 +491,42 @@ def test_optimizer_static(R: Results, db):
             bad.append(f"{list(change)[0]}→{dim}")
     R.add("بهینه‌ساز", "هر پارامتری که در جابه‌جایی فعال شود مقدار مشخص می‌گیرد", not bad, ", ".join(bad) or f"{len(cases)} حالت")
 
+
+
+def test_optimizer_fill(R: Results, db):
+    """The optimizer evaluates idle-capital parking through its own universe slices: it must give exactly the
+    result of the normal backtest (two code paths), and the fill dimensions must be searched and applicable."""
+    g = "بهینه‌ساز"
+    import discount_validation as V
+    base = _base()
+    st = S.Study(db, None, None, None, None, base, S.default_space(), n_samples=40, blocks=6, min_trades=5,
+                 max_seconds=60, max_universes=3, seed=2)
+    R.add(g, "پر کردن سرمایهٔ بیکار جزو ابعاد جستجوی پیش‌فرض است",
+          all(d in st.space for d in ("fill_mode", "fill_max_rel_pct", "fill_exit_rel_pct")), "")
+    rng = random.Random(4)
+    bad = []
+    n_on = 0
+    for it in range(4):
+        cfg = {d: rng.choice(S.DIMS[d]["choices"]) for d in S.ORDER if d in st.space}
+        cfg.update(fill_mode="best", fill_max_rel_pct=rng.choice([-0.1, 0.0, 0.1]), fill_exit_rel_pct=rng.choice([0.2, 0.5]))
+        cfg = S._normalize(st._fill(cfg), base)
+        if not S._valid(cfg):
+            continue
+        p = S._to_params(base, cfg)
+        full = _run(db, p)
+        if "db_raw" not in st.__dict__:
+            st.db_raw = S._RawCache(db, None)
+            st._setup()
+        U = st._universe(p)
+        tr = V._sim_all(U, p)
+        dd0, dd1 = full["period"]
+        fill = st._fill_ctx(U, dd0, dd1)
+        _a, s, _c = D._portfolio_summary(tr, p, dd0, dd1, fill=fill)
+        n_on += 1
+        if abs(s["final_capital"] - full["summary"]["final_capital"]) > 1:
+            bad.append(f"{s['final_capital']:,.0f} ≠ {full['summary']['final_capital']:,.0f}")
+    R.add(g, "ارزیابی ترکیب با «پر کردن» در مسیر بهینه‌ساز = بک‌تست مستقیم (دو مسیر کدی)", not bad and n_on > 0,
+          "؛ ".join(bad[:2]) or f"{n_on} ترکیب")
 
 
 def test_optimizer(R: Results, db):
@@ -511,7 +550,8 @@ def test_optimizer(R: Results, db):
         U = st._universe(p)
         import discount_validation as V
         tr = V._sim_all(U, p)
-        _a, s, _c = D._portfolio_summary(tr, p, d0, d1)
+        fill = st._fill_ctx(U, d0, d1) if p.fill_mode == "best" else None
+        _a, s, _c = D._portfolio_summary(tr, p, d0, d1, fill=fill)
         if abs(s["final_capital"] - full) > 1:
             bad.append(f"{rec['cfg']}: {s['final_capital']:,.0f} ≠ {full:,.0f}")
     R.add("بهینه‌ساز", "نتیجهٔ ثبت‌شدهٔ هر ترکیب = اجرای مستقیم همان ترکیب در بک‌تست (دو مسیر کدی)", not bad,
@@ -544,6 +584,7 @@ def test_optimizer(R: Results, db):
 
 def _random_params(rng: random.Random) -> D.DiscountParams:
     c = {d: rng.choice(S.DIMS[d]["choices"]) for d in S.ORDER}
+    c["fill_mode"] = "off"                                    # parking has its own tests (its trades break the entry-rule invariants)
     c = S._normalize(c, _base())
     if not S._valid(c):
         c["exit_discount_pct"] = -0.5
@@ -592,6 +633,8 @@ def test_invariants(R: Results, db, n: int = 24):
             if ind and abs(e["invested_rial_seconds"] / ind - 1) > 3e-3:
                 fail("انتگرال سرمایهٔ درگیر = جمع مستقل معاملات", f"{tag}: نسبت {e['invested_rial_seconds'] / ind:.4f}")
         for t in tr:
+            if t.get("origin") == "fill":
+                continue
             key = (t["entry_date"], t["entry_time"])
             if (t["exit_date"], t["exit_time"]) < key:
                 fail("خروج پس از ورود", f"{tag} {t['symbol']}")
@@ -1006,7 +1049,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("هزینه و تکرارپذیری", lambda: test_cost_monotonic(R, db)),
              ("سیم‌کشی وب", lambda: test_web_wiring(R, db)),
              ("رابط کاربری ایستا", lambda: test_static_ui(R)),
-             ("بهینه‌ساز", lambda: (test_optimizer_static(R, db), test_optimizer(R, db))),
+             ("بهینه‌ساز", lambda: (test_optimizer_static(R, db), test_optimizer_fill(R, db), test_optimizer(R, db))),
              ("ناوردایی‌ها", lambda: test_invariants(R, db)),
              ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
              ("پر کردن سرمایهٔ بیکار", lambda: test_fill(R, db)),

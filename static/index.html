@@ -7877,7 +7877,7 @@ async function discStats() {
 let _discSpace = null, _discStudy = null;
 const DISC_STUDY_KEY = 'discStudyCfg_v1';
 const DS_VAL = {
-  crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
+  fill_mode: {off: 'خاموش', best: 'بهترین صندوق'}, crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
   entry_mode: {fund: 'هر صندوق', index: 'شاخص', both: 'هر دو'},
   mr_center: {off: 'خاموش', zero: 'صفر', category: 'دسته', self: 'خود'},
   stop_mode: {nav_widen: 'NAV بازتر', nav_level: 'NAV سطح', price: 'قیمت'},
@@ -7887,6 +7887,7 @@ const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_a
   index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن',
   crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
   session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
+  fill_mode: 'پر کردن', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
   require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
 const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
@@ -7895,7 +7896,8 @@ const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_n
   crash_drop_pct: 'disc-crashdrop', crash_window_min: 'disc-crashwin', crash_cooldown_min: 'disc-crashcool',
   crash_scope: 'disc-crashscope', session_mode: 'disc-smode', session_start: 'disc-sstart', session_end: 'disc-send',
   index_min_share: 'disc-imin', mr_lag: 'disc-mrlag', require_fresh: 'disc-fresh', participation_pct: 'disc-part',
-  half_spread_pct: 'disc-spread', buy_fee: 'disc-buyfee', sell_fee: 'disc-sellfee'};
+  half_spread_pct: 'disc-spread', buy_fee: 'disc-buyfee', sell_fee: 'disc-sellfee',
+  fill_mode: 'disc-fillmode', fill_max_rel_pct: 'disc-fillmax', fill_exit_rel_pct: 'disc-fillexit'};
 const dsHM = v => { const x = String(Math.round(+v)).padStart(6, '0'); return x.slice(0, 2) + ':' + x.slice(2, 4); };
 const dsVal = (d, v) => v == null ? '—'
   : (d === 'session_start' || d === 'session_end') ? dsHM(v)

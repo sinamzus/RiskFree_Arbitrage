@@ -68,6 +68,9 @@ DIMS: dict[str, dict] = {
     "half_spread_pct":    {"kind": "fast", "label": "نیم‌اسپرد فرضی ٪", "choices": [0.02, 0.05, 0.1, 0.2], "assumption": True},
     "buy_fee":            {"kind": "fast", "label": "کارمزد خرید (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
     "sell_fee":           {"kind": "fast", "label": "کارمزد فروش (کسر)", "choices": [0.001, 0.0012, 0.0015], "assumption": True},
+    "fill_mode":          {"kind": "fast", "label": "پر کردن سرمایهٔ بیکار (خاموش / بهترین صندوق)", "choices": ["off", "best"]},
+    "fill_max_rel_pct":   {"kind": "fast", "label": "پر کردن: حداکثر حباب نسبی ٪", "choices": [-0.3, -0.1, 0.0, 0.1, 0.3]},
+    "fill_exit_rel_pct":  {"kind": "fast", "label": "پر کردن: فروش وقتی حباب نسبی ≥ ٪", "choices": [0.1, 0.2, 0.3, 0.5, 1.0]},
     "stop_loss_pct":      {"kind": "fast", "label": "حد ضرر", "choices": [0.0, 1.0, 2.0, 3.0, 5.0]},
     "stop_mode":          {"kind": "fast", "label": "نوع حد ضرر", "choices": ["nav_widen", "nav_level", "price"]},
     "position_pct":       {"kind": "fast", "label": "سهم هر پوزیشن از سرمایه ٪", "choices": [5, 10, 20, 33, 50]},
@@ -76,7 +79,7 @@ SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "session_mode",
               "index_min_share", "mr_center", "mr_window_days", "mr_horizon_days", "mr_lag",
               "crash_window_min", "crash_cooldown_min", "crash_scope"]
 FAST_ORDER = ["entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct", "max_hold_days",
-              "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "require_fresh", "position_pct",
+              "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "require_fresh", "fill_mode", "fill_max_rel_pct", "fill_exit_rel_pct", "position_pct",
               "participation_pct", "half_spread_pct", "buy_fee", "sell_fee"]
 ORDER = SLOW_ORDER + FAST_ORDER
 
@@ -124,6 +127,8 @@ def _active(dim: str, c: dict) -> bool:
         return (c.get("session_mode") or "auto") == "fixed"
     if dim == "index_min_share":
         return mode in ("index", "both")
+    if dim in ("fill_max_rel_pct", "fill_exit_rel_pct"):
+        return (c.get("fill_mode") or "off") == "best"
     return True
 
 
@@ -350,6 +355,12 @@ class Study:
         if all(c == "off" for c in centers) and "mr_lag" in self.space:
             del self.space["mr_lag"]
             self.dropped.append("mr_lag")
+        fills = self.space.get("fill_mode") or [self.base.fill_mode]
+        if all(f == "off" for f in fills):
+            for d in ("fill_max_rel_pct", "fill_exit_rel_pct"):
+                if d in self.space:
+                    del self.space[d]
+                    self.dropped.append(d)
         drops = self.space.get("crash_drop_pct") or [self.base.crash_drop_pct]
         if all(float(x) == 0 for x in drops):
             for d in ("crash_window_min", "crash_cooldown_min", "crash_scope"):
@@ -420,9 +431,27 @@ class Study:
         return U
 
     # ---- evaluation ---------------------------------------------------------------
-    def _summ(self, trades, p, lo, hi, with_t=False):
+    def _fill_ctx(self, U: dict, lo: int, hi: int) -> dict:
+        """Universe restricted to [lo, hi] for the idle-capital parker (cached per universe and window)."""
+        cache = U.setdefault("_fill_pre", {})
+        key = (lo, hi)
+        if key not in cache:
+            items, crash = [], []
+            for it in U["items"]:
+                a, b = bisect.bisect_left(it["dates"], lo), bisect.bisect_right(it["dates"], hi)
+                if b - a < 2:
+                    continue
+                items.append({"label": it["label"], "rows": it["rows"][a:b], "day_vol": it["day_vol"],
+                              "mr": it["mr"][a:b] if it.get("mr") is not None else None})
+                crash.append(it["crash"][a:b] if it.get("crash") is not None else None)
+            cache[key] = {"loaded": items, "crash": crash if all(c is not None for c in crash) and crash else None,
+                          "pre": D._Parker.prepare(items)}
+        return cache[key]
+
+    def _summ(self, trades, p, lo, hi, with_t=False, U=None):
         sub = [t for t in trades if lo <= t.entry_date <= hi]
-        acc, s, _c = D._portfolio_summary(sub, p, lo, hi)
+        fill = self._fill_ctx(U, lo, hi) if (p.fill_mode == "best" and U is not None) else None
+        acc, s, _c = D._portfolio_summary(sub, p, lo, hi, fill=fill)
         if with_t:
             nets = [t.net_pct for t in acc]
             n = len(nets)
@@ -456,10 +485,10 @@ class Study:
         trades = V._sim_all(U, p)
         blocks = []
         for lo, hi in self.bounds:
-            s = self._summ(trades, p, lo, hi)
+            s = self._summ(trades, p, lo, hi, U=U)
             blocks.append({"ret": s["portfolio_return_pct"], "n": s["trade_count"], "win": s["win_rate"]})
-        tr = self._summ(trades, p, *self.train_rng)
-        ho = self._summ(trades, p, *self.hold_rng, with_t=True)
+        tr = self._summ(trades, p, *self.train_rng, U=U)
+        ho = self._summ(trades, p, *self.hold_rng, with_t=True, U=U)
         rets = [b["ret"] for b in blocks[:self.T]]
         robust = _mean(rets) - 0.5 * _std(rets)
         if self.objective == "robust":
@@ -551,7 +580,8 @@ class Study:
                 "session_mode": b.session_mode, "session_start": b.session_start, "session_end": b.session_end,
                 "index_min_share": b.index_min_share, "mr_lag": b.mr_lag, "require_fresh": b.require_fresh,
                 "participation_pct": b.participation_pct, "half_spread_pct": b.half_spread_pct,
-                "buy_fee": b.buy_fee, "sell_fee": b.sell_fee}
+                "buy_fee": b.buy_fee, "sell_fee": b.sell_fee,
+                "fill_mode": b.fill_mode, "fill_max_rel_pct": b.fill_max_rel_pct, "fill_exit_rel_pct": b.fill_exit_rel_pct}
 
     def _fill(self, partial: dict) -> dict:
         """Complete a configuration with base values for dimensions that are not searched."""
@@ -916,9 +946,14 @@ class Study:
             findings.append("چون با حالت ورودِ انتخابی لازم بودند، خودکار به جستجو اضافه شدند: " + lab(self.auto_added) + ".")
         if self.dropped:
             findings.append("در حالت/تنظیم فعلی هیچ اثری ندارند و از جستجو حذف شدند: " + lab(self.dropped) + ".")
-        if self.base.fill_mode != "off":
-            findings.append("«پر کردن سرمایهٔ بیکار» در مطالعه لحاظ نمی‌شود (نتیجهٔ همهٔ ترکیب‌ها بدون پارک کردن است)؛ "
-                            "اثرش را جداگانه در بک‌تست ببینید.")
+        if "fill_mode" in self.space or self.base.fill_mode != "off":
+            m = marg.get("fill_mode") if "fill_mode" in self.space else None
+            if m and len(m) == 2:
+                off_ = next((x for x in m if x["value"] == "off"), None)
+                on_ = next((x for x in m if x["value"] == "best"), None)
+                if off_ and on_:
+                    findings.append(f"پر کردن سرمایهٔ بیکار: میانگین بازدهٔ آزمون {on_['hold_mean']:+.2f}٪ با پر کردن در برابر "
+                                    f"{off_['hold_mean']:+.2f}٪ بدونِ آن (میانگین روی همهٔ ترکیب‌های دیگر؛ هر بلوک روی سرمایهٔ جداگانه).")
         if self.min_trades < self.min_trades_requested:
             findings.append(f"کمتر از ۲۰ ترکیب به {self.min_trades_requested} معامله در آموزش رسیدند؛ «حداقل معامله» خودکار به {self.min_trades} کاهش یافت. "
                             "نتیجه با نمونهٔ معاملاتیِ کم ضعیف‌تر است؛ بازهٔ بلندتر یا صندوق بیشتر بگیرید.")
@@ -987,7 +1022,7 @@ def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.Discoun
 _INT_DIMS = ("max_hold_days", "baseline_days", "max_nav_age_days", "mr_window_days", "mr_horizon_days",
              "crash_window_min", "crash_cooldown_min", "mr_lag", "session_start", "session_end")
 _BOOL_DIMS = ("require_fresh",)
-_STR_CHOICES = {"crash_scope": {"category", "all"}, "session_mode": {"auto", "fixed"}, "entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},
+_STR_CHOICES = {"fill_mode": {"off", "best"}, "crash_scope": {"category", "all"}, "session_mode": {"auto", "fixed"}, "entry_mode": {"fund", "index", "both"}, "mr_center": {"off", "zero", "category", "self"},
                 "stop_mode": {"nav_widen", "nav_level", "price"}}
 
 

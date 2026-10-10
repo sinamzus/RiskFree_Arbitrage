@@ -861,7 +861,7 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
     # at a tie: other exits, then entries (deepest discount vs own norm first), then own-instant exits
     events.sort(key=lambda e: (e[0], e[1], e[2], e[3], e[4]))
 
-    parker = _Parker(fill["loaded"], p, fill.get("crash")) if fill else None
+    parker = _Parker(fill["loaded"], p, fill.get("crash"), fill.get("pre")) if fill else None
     real_open: dict[str, int] = {}
     if parker is not None:
         parker.real_open = real_open
@@ -1062,24 +1062,33 @@ class _Parker:
     Parked trades are ``Trade`` objects with ``origin == "fill"``.
     """
 
-    def __init__(self, loaded: list[dict], p: DiscountParams, crash_all: list | None):
+    @staticmethod
+    def prepare(loaded: list[dict]) -> dict:
+        """Everything that depends only on the rows (not on the parameters): reusable across many replays."""
+        rows = [l["rows"] for l in loaded]
+        rel = [[r[4] / r[3] - 1.0 for r in rr] for rr in rows]
+        snaps = sorted((_ord(r[1]) * 86400 + _sec(r[2]), k, i)
+                       for k, rr in enumerate(rows) for i, r in enumerate(rr))
+        groups: list[tuple] = []
+        for ts, k, i in snaps:
+            if groups and groups[-1][0] == ts:
+                groups[-1][1].append((k, i))
+            else:
+                groups.append((ts, [(k, i)]))
+        return {"rows": rows, "rel": rel, "groups": groups}
+
+    def __init__(self, loaded: list[dict], p: DiscountParams, crash_all: list | None, pre: dict | None = None):
         self.p = p
         self.loaded = loaded
         self.n = len(loaded)
-        self.rows = [l["rows"] for l in loaded]
+        pre = pre or _Parker.prepare(loaded)
+        self.rows = pre["rows"]
         self.labels = [l["label"] for l in loaded]
         self.k_of = {lab: k for k, lab in enumerate(self.labels)}
-        self.rel = [[r[4] / r[3] - 1.0 for r in rr] for rr in self.rows]
+        self.rel = pre["rel"]
         self.crash = crash_all
         self.mr = [l.get("mr") for l in loaded]
-        snaps = sorted((_ord(r[1]) * 86400 + _sec(r[2]), k, i)
-                       for k, rr in enumerate(self.rows) for i, r in enumerate(rr))
-        self.groups: list[tuple] = []
-        for ts, k, i in snaps:
-            if self.groups and self.groups[-1][0] == ts:
-                self.groups[-1][1].append((k, i))
-            else:
-                self.groups.append((ts, [(k, i)]))
+        self.groups = pre["groups"]
         self.gi = 0
         self.parked: dict[int, dict] = {}
         self.out: list[Trade] = []
