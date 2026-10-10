@@ -104,7 +104,7 @@ CATEGORIES = {
 @dataclass
 class DiscountParams:
     initial_capital: float = 10_000_000_000   # rials, one shared pool
-    position_pct: float = 10.0          # max % of the CURRENT capital in one position
+    position_pct: float = 50.0          # max % of the CURRENT capital in one position
     entry_discount_pct: float = 0.50    # buy when price ≤ NAV·(1−this/100)
     exit_discount_pct: float = 0.0      # sell when price ≥ NAV·(1−this/100); <0 = wait for premium
     max_hold_days: int = 10             # calendar days; 0 = no limit
@@ -112,33 +112,33 @@ class DiscountParams:
     index_entry_pct: float = 0.30       # enter (index modes) when the bubble index ≤ −this %
     index_exit_pct: float = 0.0         # exit  (mode "index") when the bubble index ≥ −this %
     index_min_share: float = 0.5        # share of the funds that must have quoted today
-    mr_center: str = "off"              # off | zero | category | self  (mean-reversion eligibility filter)
+    mr_center: str = "self"             # off | zero | category | self  (mean-reversion eligibility filter)
     mr_window_days: int = 20            # trading days of history the score is computed from
-    mr_min_score: float = 70.0          # 0-100; below this the fund is not tradable that day
+    mr_min_score: float = 50.0          # 0-100; below this the fund is not tradable that day
     mr_horizon_days: int = 5            # score = share of the gap expected to close within this
-    mr_lag: int = 4                     # snapshots between the AR(1) pairs (≈ 1 hour)
-    fill_mode: str = "off"              # off | best (park idle cash in the best-ranked fund) | hold (always invested: the
+    mr_lag: int = 8                     # snapshots between the AR(1) pairs (≈ 1 hour)
+    fill_mode: str = "hold"             # off | best (park idle cash in the best-ranked fund) | hold (always invested: the
                                         #   parker IS the strategy; a position is sold ONLY to switch into a better candidate)
-    fill_switch_pct: float = 0.5        # hold: switch only if the candidate's bubble is this many % points below the held fund's
-    fill_max_rel_pct: float = 0.0       # park only into a fund trading at or below its own norm + this %
+    fill_switch_pct: float = 0.8        # hold: switch only if the candidate's bubble is this many % points below the held fund's
+    fill_max_rel_pct: float = 0.1       # park only into a fund trading at or below its own norm + this %
     fill_exit_rel_pct: float = 0.3      # sell a parked position once it trades this % above its norm
-    crash_drop_pct: float = 0.0         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
-    crash_window_min: int = 30          # look-back (minutes) over which the group's price change is measured
-    crash_cooldown_min: int = 30        # temporary stop: entries stay blocked this many minutes after the last trigger
-    crash_scope: str = "category"       # category = funds of the same category | all = every selected fund
+    crash_drop_pct: float = 1.5         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
+    crash_window_min: int = 60          # look-back (minutes) over which the group's price change is measured
+    crash_cooldown_min: int = 60        # temporary stop: entries stay blocked this many minutes after the last trigger
+    crash_scope: str = "all"            # category = funds of the same category | all = every selected fund
     stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
-    baseline_days: int = 20             # per-fund typical discount window (trading days); 0 = off
-    half_spread_pct: float = 0.05       # assumed half bid-ask spread (each side)
-    participation_pct: float = 5.0      # max share of the day's volume we can trade; 0 = unlimited
+    baseline_days: int = 0              # per-fund typical discount window (trading days); 0 = off
+    half_spread_pct: float = 0.02       # assumed half bid-ask spread (each side)
+    participation_pct: float = 10.0     # max share of the day's volume we can trade; 0 = unlimited
     require_fresh: bool = True          # only trade on snapshots where volume grew
     max_nav_age_days: int = 3           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
-    max_nav_age_min: int = 30           # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
+    max_nav_age_min: int = 120          # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
     session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
     session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
     session_end: int = 123000
-    buy_fee: float = 0.0012             # 0.12% each side (all-in broker + exchange fee for these ETFs)
-    sell_fee: float = 0.0012
+    buy_fee: float = 0.0010             # 0.10% each side (all-in broker + exchange fee for these ETFs)
+    sell_fee: float = 0.0010
 
 
 def fill_on(p: "DiscountParams") -> bool:

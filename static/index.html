@@ -970,6 +970,22 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   align-items: center; justify-content: center; padding: 20px;
 }
 #dm-overlay.visible { display: flex; }
+/* ─── Optimizer parameter-selection dialog ───────────────────── */
+#disc-study-cfg {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100001;
+  align-items: center; justify-content: center; padding: 20px;
+}
+#disc-study-cfg.visible { display: flex; }
+#ds-modal {
+  background: var(--surf); border: 1px solid var(--brd2); border-radius: 12px; width: min(1180px, 97vw); max-height: 92vh;
+  display: flex; flex-direction: column; box-shadow: 0 12px 48px rgba(0,0,0,.5); overflow: hidden;
+}
+#ds-head { display: flex; align-items: center; gap: 10px; padding: 13px 18px; border-bottom: 1px solid var(--brd); background: var(--surf2); }
+#ds-head .dm-title { font-size: var(--fs-lg); font-weight: 700; color: var(--txt); }
+#ds-close { margin-inline-start: auto; background: none; border: none; color: var(--sub); font-size: 22px; cursor: pointer; line-height: 1; }
+#ds-close:hover { color: var(--red); }
+#disc-study-body { padding: 10px 18px; overflow: auto; flex: 1; }
+#ds-foot { display: flex; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--brd); background: var(--surf2); }
 #dm-modal {
   background: var(--surf); border: 1px solid var(--brd2);
   border-radius: 12px; width: min(1040px, 97vw); max-height: 92vh;
@@ -2372,7 +2388,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="سرمایهٔ اولیهٔ کل حساب، به میلیون ریال (۱۰۰۰۰ = ده میلیارد ریال). همهٔ صندوق‌ها از همین یک حساب خرید می‌کنند."><label>سرمایه اولیه (میلیون ریال)</label>
         <input id="disc-capital" type="number" step="1000" min="1" value="10000" style="width:130px"></div>
       <div class="bbt-field" title="هر پوزیشن جدید حداکثر این درصد از «سرمایهٔ همان لحظه» (نقد + بهای پوزیشن‌های باز) است؛ پس با رشد یا افت سرمایه، اندازه هم تغییر می‌کند (مرکب)."><label>حداکثر سهم هر پوزیشن ٪ از سرمایهٔ آن لحظه</label>
-        <input id="disc-pos" type="number" step="1" min="0.1" max="100" value="10" style="width:90px"></div>
+        <input id="disc-pos" type="number" step="1" min="0.1" max="100" value="50" style="width:90px"></div>
     </div>
 
     <div class="bbt-group-h">۲) قواعد ورود و تغییر پوزیشن</div>
@@ -2402,35 +2418,35 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="مقدار حد ضرر (٪ یا واحد درصد، طبق نوع انتخابی)؛ ۰ = خاموش"><label>حد ضرر</label>
         <input id="disc-stop" type="number" step="0.5" value="0" style="width:70px"></div>
       <div class="bbt-field" title="پر کردن سرمایهٔ بیکار: وقتی نقد بی‌کار مانده، آن را در «بهترین» صندوق (کمترین حباب نسبت به معمولِ خودش) می‌گذارد، بدون اینکه جلوی معاملهٔ سیگنال‌دار را بگیرد: هر وقت ورودِ عادی نقد لازم داشت، پارک‌شده‌ها فروخته می‌شوند. همان قواعد زمان/حد ضرر/فیلترها اعمال می‌شود. «خاموش» = رفتار قبلی."><label>پر کردن سرمایهٔ بیکار</label>
-        <select id="disc-fillmode" style="width:230px"><option value="off">خاموش</option><option value="best">با بهترین صندوق (کمترین حباب نسبی)</option><option value="hold">همیشه سرمایه‌گذاری؛ فقط با کاندیدای بهتر بفروش</option></select></div>
+        <select id="disc-fillmode" style="width:230px"><option value="off">خاموش</option><option value="best">با بهترین صندوق (کمترین حباب نسبی)</option><option value="hold" selected>همیشه سرمایه‌گذاری؛ فقط با کاندیدای بهتر بفروش</option></select></div>
       <div class="bbt-field" title="فقط برای حالت «همیشه سرمایه‌گذاری»: صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که صندوق دیگری حبابش (نسبت به معمولِ خودش) دست‌کم این‌قدر نقطهٔ درصد پایین‌تر باشد و نقد برای خریدش نباشد. در این حالت سیگنال فروش، زمان نگه‌داری و حد ضرر وجود ندارد؛ فقط جابه‌جایی به کاندیدای بهتر یا پایان داده. هزینهٔ رفت‌وبرگشت (کارمزد + اسپرد) حدود ۰٫۳۵٪ است؛ کمتر از آن جابه‌جایی ضرر است."><label>نگه‌داری: حداقل برتری برای جابه‌جایی ٪</label>
-        <input id="disc-fillswitch" type="number" step="0.1" min="0" value="0.5" style="width:70px"></div>
+        <input id="disc-fillswitch" type="number" step="0.1" min="0" value="0.8" style="width:70px"></div>
       <div class="bbt-field" title="فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد؛ ۰ = فقط وقتی در/زیر معمولِ خودش است (صندوقِ گران‌شده خریده نمی‌شود)."><label>پر کردن: حداکثر حباب نسبی ٪</label>
-        <input id="disc-fillmax" type="number" step="0.1" value="0" style="width:70px"></div>
+        <input id="disc-fillmax" type="number" step="0.1" value="0.1" style="width:70px"></div>
       <div class="bbt-field" title="پوزیشن پارک‌شده وقتی فروخته می‌شود که حبابش نسبت به معمولِ خودش به این درصد (یا بیشتر) برسد (سودبردن)."><label>پر کردن: فروش وقتی حباب نسبی ≥ ٪</label>
         <input id="disc-fillexit" type="number" step="0.1" value="0.3" style="width:70px"></div>
       <div class="bbt-field" title="فیلتر ریزش بازار: اگر میانگین قیمتِ صندوق‌های گروه در «پنجرهٔ ریزش» بیش از این‌قدر درصد افت کرده باشد، ورودِ جدید موقتاً متوقف می‌شود (خروج‌ها و پوزیشن‌های باز دست نمی‌خورند). در ریزش، «تخفیف از NAV» اغلب ظاهری است (قیمت زودتر از NAV می‌افتد). ۰ = خاموش. برای داده‌ای با اسنپ‌شات‌های کم، مقدار را بزرگ‌تر از نوسان عادی بگذارید."><label>فیلتر ریزش: افت گروه ≥ ٪</label>
-        <input id="disc-crashdrop" type="number" step="0.1" min="0" value="0" style="width:70px"></div>
+        <input id="disc-crashdrop" type="number" step="0.1" min="0" value="1.5" style="width:70px"></div>
       <div class="bbt-field" title="افت قیمتِ گروه در این‌قدر دقیقهٔ اخیر سنجیده می‌شود (نسبت به آخرین قیمتِ ثبت‌شده در/قبل از آن لحظه؛ اگر در همین روز نباشد، آخرین قیمت روز قبل). مثلاً ۳۰ = «در نیم‌ساعت اخیر ریزش سریع نباشد»."><label>پنجرهٔ ریزش (دقیقه)</label>
-        <input id="disc-crashwin" type="number" step="5" min="1" value="30" style="width:70px"></div>
+        <input id="disc-crashwin" type="number" step="5" min="1" value="60" style="width:70px"></div>
       <div class="bbt-field" title="توقف موقت: پس از دیده شدن ریزش، ورودِ جدید تا این‌قدر دقیقه ممنوع می‌ماند؛ ۰ = فقط در همان لحظهٔ ریزش."><label>توقف موقت پس از ریزش (دقیقه)</label>
-        <input id="disc-crashcool" type="number" step="5" min="0" value="30" style="width:70px"></div>
+        <input id="disc-crashcool" type="number" step="5" min="0" value="60" style="width:70px"></div>
       <div class="bbt-field" title="گروهی که میانگین قیمتش سنجیده می‌شود: «دستهٔ صندوق» = فقط صندوق‌های هم‌دسته (طلا با طلا)، «همهٔ صندوق‌ها» = همهٔ صندوق‌های انتخاب‌شده."><label>گروه ریزش</label>
-        <select id="disc-crashscope" style="width:150px"><option value="category">دستهٔ صندوق</option><option value="all">همهٔ صندوق‌ها</option></select></div>
+        <select id="disc-crashscope" style="width:150px"><option value="category">دستهٔ صندوق</option><option value="all" selected>همهٔ صندوق‌ها</option></select></div>
       <div class="bbt-field" title="هر صندوق ممکن است دائماً بالا یا پایین NAV معامله شود (حباب دائمی). با این گزینه سیگنال‌ها نسبت به «حباب معمول همان صندوق» سنجیده می‌شوند: NAV × (1 + میانهٔ تخفیف همین چند روز گذشتهٔ صندوق). فقط از روزهای قبل استفاده می‌شود. ۰ = خاموش (مقایسه مستقیم با NAV)."><label>تعدیل حباب دائمی: میانهٔ چند روز قبل</label>
-        <input id="disc-base" type="number" step="1" min="0" value="20" style="width:80px"></div>
+        <input id="disc-base" type="number" step="1" min="0" value="0" style="width:80px"></div>
       <div class="bbt-field" title="فیلتر شایستگی: امتیاز بازگشت به میانگینِ سری حباب هر صندوق در N روز گذشته محاسبه می‌شود (۰ تا ۱۰۰ = درصدِ شکافی که انتظار می‌رود در افق مشخص بسته شود). صندوقی که امتیازش کمتر از حداقل باشد تا وقتی دوباره بالا بیاید معامله نمی‌شود. مرکز: صفر، میانگین حباب همان دسته، یا میانگین حبابِ خود صندوق (از N روز قبل از پنجرهٔ امتیازدهی)."><label>فیلتر بازگشت به میانگین</label>
         <select id="disc-mrcenter" style="width:260px">
           <option value="off">خاموش</option>
           <option value="zero">بازگشت حول صفر (NAV)</option>
           <option value="category">بازگشت حول میانگین حبابِ دستهٔ صندوق</option>
-          <option value="self">بازگشت حول میانگین حبابِ خود صندوق</option></select></div>
+          <option value="self" selected>بازگشت حول میانگین حبابِ خود صندوق</option></select></div>
       <div class="bbt-field" title="جفت‌های محاسبهٔ ضریب بازگشتِ AR(1) هر این‌قدر اسنپ‌شاتِ همان روز از هم فاصله دارند (۴ ≈ یک ساعت). عدد کوچک‌تر = حساس‌تر به نوسان کوتاه، بزرگ‌تر = حساس‌تر به روند."><label>فاصلهٔ جفت‌های امتیاز (اسنپ‌شات)</label>
-        <input id="disc-mrlag" type="number" step="1" min="1" value="4" style="width:70px"></div>
+        <input id="disc-mrlag" type="number" step="1" min="1" value="8" style="width:70px"></div>
       <div class="bbt-field" title="تعداد روزهای معاملاتیِ اخیر که امتیاز از آن‌ها ساخته می‌شود"><label>پنجرهٔ امتیاز (روز)</label>
         <input id="disc-mrwin" type="number" step="1" min="5" value="20" style="width:70px"></div>
       <div class="bbt-field" title="حداقل امتیاز (۰–۱۰۰) برای مجاز بودن صندوق. روی دادهٔ قدم‌زدن تصادفی حدود ۱۰٪ لحظه‌ها در ۷۰ و حدود ۶٪ در ۸۰ پذیرفته می‌شوند."><label>حداقل امتیاز</label>
-        <input id="disc-mrmin" type="number" step="5" min="0" max="100" value="70" style="width:70px"></div>
+        <input id="disc-mrmin" type="number" step="5" min="0" max="100" value="50" style="width:70px"></div>
       <div class="bbt-field" title="امتیاز یعنی چند درصد از شکافِ حباب تا مرکز، در این تعداد روز بسته می‌شود"><label>افق بازگشت (روز)</label>
         <input id="disc-mrhor" type="number" step="1" min="1" value="5" style="width:70px"></div>
     </div>
@@ -2438,17 +2454,17 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
     <div class="bbt-group-h">۳) اجرا، کارمزد و فیلتر NAV</div>
     <div class="bbt-group">
       <div class="bbt-field" title="نیم‌اسپردِ فرضی هر طرف (دادهٔ اردربوک نداریم). خرید = قیمت×(1+این)، فروش = قیمت×(1−این)"><label>نیم‌اسپرد فرضی ٪</label>
-        <input id="disc-spread" type="number" step="0.01" value="0.05" style="width:70px"></div>
+        <input id="disc-spread" type="number" step="0.01" value="0.02" style="width:70px"></div>
       <div class="bbt-field" title="سقف حجم معامله به‌صورت درصدی از حجم کل همان روز؛ ۰ = نامحدود"><label>سهم از حجم روز ٪</label>
-        <input id="disc-part" type="number" step="0.5" value="5" style="width:70px"></div>
+        <input id="disc-part" type="number" step="0.5" value="10" style="width:70px"></div>
       <div class="bbt-field"><label>کارمزد خرید ٪</label>
-        <input id="disc-buyfee" type="number" step="0.005" value="0.12" style="width:70px"></div>
+        <input id="disc-buyfee" type="number" step="0.005" value="0.1" style="width:70px"></div>
       <div class="bbt-field"><label>کارمزد فروش ٪</label>
-        <input id="disc-sellfee" type="number" step="0.005" value="0.12" style="width:70px"></div>
+        <input id="disc-sellfee" type="number" step="0.005" value="0.1" style="width:70px"></div>
       <div class="bbt-field" title="NAVهای کهنه‌تر از این‌قدر روز نادیده گرفته می‌شود (برای طلا/سهام مهم است)"><label>حداکثر سن NAV (روز)</label>
         <input id="disc-navage" type="number" step="1" value="3" style="width:70px"></div>
       <div class="bbt-field" title="اگر NAV آخرین بار بیش از این‌قدر دقیقه پیش از لحظهٔ اسنپ‌شات محاسبه شده باشد، آن اسنپ‌شات «NAV کهنه» است و کاملاً حذف می‌شود: صندوق در آن لحظه کاندید ورود، پرکردن سرمایه بیکار یا سیگنال خروج نیست. ۰ = غیرفعال. اگر ساعت NAV در داده نباشد اسنپ‌شات نگه داشته می‌شود."><label>حداکثر سن NAV (دقیقه)</label>
-        <input id="disc-navmin" type="number" step="1" min="0" value="30" style="width:70px"></div>
+        <input id="disc-navmin" type="number" step="1" min="0" value="120" style="width:70px"></div>
       <div class="bbt-field" title="«خودکار از حجم»: برای هر صندوق و هر روز، بازهٔ معامله از اولین تا آخرین لحظه‌ای است که حجم تجمعی بالا رفته. قبل از آن پیش‌گشایش است (سفارش اجرا نمی‌شود) و بعد از آن قیمت کهنه. برای صندوق‌هایی که ساعت معاملهٔ هر روزشان فرق می‌کند (مثلاً طلا ۱۱ تا ۱۵ یا ۱۲ تا ۱۸) این حالت درست است. «ساعت ثابت»: فقط بازهٔ ساعتی دستی."><label>ساعت جلسه</label>
         <select id="disc-smode" style="width:190px" onchange="document.getElementById('disc-sfix').style.display = this.value === 'fixed' ? '' : 'none'">
           <option value="auto">خودکار از حجم (هر صندوق، هر روز)</option>
@@ -2462,9 +2478,20 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-fresh" type="checkbox" checked> فقط قیمت تازه</label>
     </div>
 
-    <details id="disc-study-cfg" ontoggle="discStudyBuild()" style="margin:8px 0">
-      <summary class="bbt-group-h" style="cursor:pointer" title="انتخاب پارامترهایی که بهینه‌ساز جستجو می‌کند و دامنهٔ مقدارهای هر کدام">۴) تنظیمات بهینه‌سازی و مطالعهٔ جامع — کدام پارامترها و با چه دامنه‌ای جستجو شوند</summary>
-      <div id="disc-study-body"></div></details>
+    <div class="dv-note" style="margin:8px 0">با زدن «🔧 بهینه‌سازی و مطالعهٔ جامع» یک پنجره باز می‌شود تا پارامترهای جستجو، دامنه‌ها و مقدارهای ثابتِ بقیه را انتخاب کنید.</div>
+    <div id="disc-study-cfg" onclick="if(event.target===this)discStudyClose()">
+      <div id="ds-modal">
+        <div id="ds-head">
+          <span class="dm-title">🔧 انتخاب پارامترهای بهینه‌سازی</span>
+          <button id="ds-close" type="button" onclick="discStudyClose()" title="بستن (بدون اجرا)">×</button>
+        </div>
+        <div id="disc-study-body"></div>
+        <div id="ds-foot">
+          <button type="button" class="scan-btn" id="ds-start" onclick="discStudyStart()" title="با پارامترهای انتخاب‌شده در همین پنجره، مطالعه را شروع می‌کند">▶ شروع بهینه‌سازی</button>
+          <button type="button" class="scan-btn" id="ds-cancel" onclick="discStudyClose()">انصراف</button>
+        </div>
+      </div>
+    </div>
     <div class="bbt-actions">
       <div class="bbt-field bbt-metric"><label>معیار بهینه‌ساز</label>
         <select id="disc-optmetric">
@@ -2484,6 +2511,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
         <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
       <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
       <button class="scan-btn" id="disc-ft-btn" onclick="discFullTest()" title="تست سراسری روی دنیای ساختگی: پارامتر مرده، سیم‌کشی فرم↔سرور↔موتور، پیش‌فرض‌ها، بهینه‌ساز، ناوردایی‌های حسابداری و آزمونِ خودِ آزمون‌ها (حدود ۲ دقیقه)">🧪 تست سراسری برنامه</button>
+      <button class="scan-btn" id="disc-push-btn" onclick="discPushResults()" title="آخرین نتایج (بک‌تست، بهینه‌سازی، اعتبارسنجی، آمار) را در پوشهٔ analysis_results ذخیره می‌کند و روی شاخهٔ analysis-results در GitHub پوش می‌کند تا تحلیل و پیشنهاد بهبود بگیرید. فقط نتایج ارسال می‌شود، نه دادهٔ خام. پوشهٔ کاری و شاخهٔ فعلی شما دست نمی‌خورد.">📤 ارسال آخرین نتایج برای تحلیل</button>
       <button class="scan-btn" id="disc-self-btn" onclick="discSelfTest()" title="آزمون خودِ شبیه‌ساز: دنیای با پاسخ معلوم، حسابداری، نگاه به آینده، کالیبراسیون">🧪 آزمون سلامت شبیه‌ساز</button>
       <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="مطالعهٔ جامعِ همهٔ پارامترهای مدل: جستجوی متوازن، اهمیت و رفتار هر پارامتر، آزمون خارج از نمونه، پایداری اطراف برنده، walk-forward و حساسیت به فرض‌های اجرایی">🔧 بهینه‌سازی و مطالعهٔ جامع</button>
       <button class="scan-btn" id="disc-run" onclick="discBacktest()">🧪 اجرای بک‌تست</button>
@@ -2495,6 +2523,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   <div id="disc-stats" style="display:none"></div>
   <div id="disc-opt" style="display:none"></div>
   <div id="disc-ft" style="display:none"></div>
+  <div id="disc-push" style="display:none"></div>
   <div id="disc-val" style="display:none"></div>
   <div id="disc-bub" style="display:none"></div>
   <div id="disc-cards"></div>
@@ -7148,6 +7177,17 @@ const DISC_TIP_RULES = [
 
 // <option> texts (matched before the generic rules)
 const DISC_TIP_OPTS = [
+  [/^NAV بازتر$/, 'حد ضرر: فروش وقتی تخفیف نسبت به لحظهٔ ورود این‌قدر واحد درصد بازتر شد.'],
+  [/^NAV سطح$/, 'حد ضرر: فروش وقتی قیمت به NAV×(۱−این٪) رسید.'],
+  [/^قیمت$/, 'حد ضرر کلاسیک: افت درصدی نسبت به قیمت خرید.'],
+  [/^(بله|خیر)$/, 'مقدار ثابتِ بله/خیر برای این پارامتر.'],
+  [/^بهترین صندوق$/, 'نقدِ بی‌کار در صندوقی با کمترین حباب نسبت به معمولِ خودش پارک می‌شود.'],
+  [/^فرم:/, 'مقدار ثابت خالی است: این پارامتر روی مقدار فعلیِ فرم (همین‌جا نشان داده شده) می‌ماند.'],
+  [/^همیشه سرمایه‌گذاری/, 'همیشه سرمایه‌گذاری: هیچ سیگنال فروش، زمان یا حد ضرری نیست؛ صندوق فقط وقتی فروخته می‌شود که کاندیدای بهتری پیدا شود (و نقد نباشد).'],
+  [/^(هر صندوق|شاخص|هر دو)$/, 'حالت ورود: هر صندوق جداگانه / شاخص حبابِ همهٔ صندوق‌ها / هر دو.'],
+  [/^(خودکار|ثابت)$/, 'خودکار = ساعت جلسه از حجم هر صندوق و هر روز؛ ثابت = بازهٔ ساعتیِ دستی (در مورد گروه ریزش: ثابت = بدون تغییر).'],
+  [/^دسته$/, 'دستهٔ صندوق (گروه ریزش: صندوق‌های هم‌دسته؛ مرکز بازگشت: میانگین حبابِ دسته).'],
+  [/^(صفر|خود)$/, 'مرکزِ بازگشت به میانگین در فیلتر شایستگی: صفر (قیمت = NAV) یا میانگین حبابِ خودِ صندوق.'],
   [/^پایدار:/, 'میانگین بازدهِ بلوک‌های آموزش منهای نصف انحراف معیارشان؛ ترکیبی که فقط در یک بلوک خوب بوده امتیاز کمی می‌گیرد.'],
   [/^بازده کل دورهٔ آموزش/, 'بازده کل پرتفوی در کل دورهٔ آموزش.'],
   [/^بازده سالانهٔ مرکب آموزش/, 'بازده سالانهٔ مرکبِ دورهٔ آموزش.'],
@@ -7953,7 +7993,7 @@ function discStudySave(st) { try { localStorage.setItem(DISC_STUDY_KEY, JSON.str
 
 async function discStudyBuild() {
   const box = document.getElementById('disc-study-body');
-  if (!box || !document.getElementById('disc-study-cfg').open) return;
+  if (!box || !document.getElementById('disc-study-cfg').classList.contains('visible')) return;
   const sp = await discStudyLoadSpace();
   if (!sp) { box.innerHTML = '<div class="dv-note">تنظیمات در دسترس نیست.</div>'; return; }
   const st = discStudyState();
@@ -8038,6 +8078,11 @@ function discStudyEntryDims(mode) {
     : ['entry_discount_pct', 'exit_discount_pct'];
 }
 function discStudyPresetDims(k, sp) {
+  // always-invested mode has no entry/exit/hold/stop rules: the short presets search its own parameters instead
+  if ((k === 'quick' || k === 'medium') && document.getElementById('disc-fillmode').value === 'hold') {
+    const extra = k === 'medium' ? (sp.presets.medium || []).filter(d => !['entry_discount_pct', 'exit_discount_pct', 'max_hold_days', 'stop_loss_pct', 'stop_mode'].includes(d)) : [];
+    return ['fill_max_rel_pct', 'fill_switch_pct'].concat(extra);
+  }
   const mode = document.getElementById('disc-entrymode').value;
   const strip = ['entry_discount_pct', 'exit_discount_pct', 'index_entry_pct', 'index_exit_pct'];
   const base = (sp.presets[k] || []).filter(d => !strip.includes(d));
@@ -8085,6 +8130,26 @@ async function discStudyPayload() {
   return {space, opts: st.opts || {}, fixed, fixedDims};
 }
 
+async function discPushResults() {
+  const btn = document.getElementById('disc-push-btn'), panel = document.getElementById('disc-push');
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '⏳ در حال ارسال ...';
+  panel.style.display = 'block'; panel.innerHTML = '<div class="ob-p">⏳ ذخیره و پوش نتایج ...</div>';
+  const NAMES = {backtest: 'بک‌تست', study: 'بهینه‌سازی', validation: 'اعتبارسنجی', stats: 'آمار تخفیف'};
+  try {
+    const r = await fetch('/api/disc/push_results', {method: 'POST'});
+    const j = await r.json().catch(() => ({message: 'پاسخ نامعتبر'}));
+    const sent = (j.sent || []).map(k => NAMES[k] || k).join('، ');
+    const kb = j.bytes ? ` · ${Math.round(j.bytes / 1024).toLocaleString('en-US')} KB` : '';
+    if (j.ok) panel.innerHTML = `<div class="dv-head ok">✅ ${j.message} — ارسال‌شده: ${sent}${kb}</div>
+      <div class="dv-note">حالا به من بگویید «نتایج را تحلیل کن» تا از همین شاخه بخوانم. نسخهٔ محلی: ${discLtr(j.local_dir || '')}</div>`;
+    else panel.innerHTML = `<div class="dv-head bad">❌ ${(j.message || 'ناموفق').replace(/\n/g, '<br>')}</div>
+      ${j.local_dir ? `<div class="dv-note">نتایج در پوشهٔ ${discLtr(j.local_dir)} ذخیره شد؛ می‌توانید دستی آن را بفرستید.</div>` : ''}`;
+  } catch (e) {
+    panel.innerHTML = `<div class="dv-head bad">❌ ارسال ناموفق: ${e.message}</div>`;
+  }
+  btn.disabled = false; btn.textContent = old;
+}
+
 async function discFullTest() {
   const btn = document.getElementById('disc-ft-btn'), panel = document.getElementById('disc-ft');
   const r = await fetch('/api/disc/fulltest', {method: 'POST'}).catch(() => null);
@@ -8117,7 +8182,26 @@ function discRenderFullTest(res) {
     }).join('')}`;
 }
 
+// "🔧 بهینه‌سازی" opens the parameter-selection dialog; "▶ شروع" inside it runs the study
 async function discOptimize() {
+  if (!discCheckSel()) return;
+  document.getElementById('disc-study-cfg').classList.add('visible');
+  await discStudyBuild();
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('disc-study-cfg')?.classList.contains('visible')) discStudyClose();
+});
+function discStudyClose() {
+  if (document.getElementById('ds-dims')) discStudyCollect();           // keep what was chosen
+  document.getElementById('disc-study-cfg').classList.remove('visible');
+}
+async function discStudyStart() {
+  const pl = await discStudyPayload();
+  if (!Object.keys(pl.space).length) { showError('حداقل یک پارامتر را برای جستجو تیک بزنید.'); return; }
+  document.getElementById('disc-study-cfg').classList.remove('visible');
+  await discOptimizeRun();
+}
+async function discOptimizeRun() {
   const p = discCheckSel(); if (!p) return;
   const btn = document.getElementById('disc-opt-btn');
   const pl = await discStudyPayload();

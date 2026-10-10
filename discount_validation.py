@@ -617,7 +617,9 @@ def self_test() -> dict:
 
     p = DiscountParams(initial_capital=1e10, position_pct=20, participation_pct=0,
                        half_spread_pct=0.02, entry_discount_pct=0.8, exit_discount_pct=0.0,
-                       max_hold_days=10, baseline_days=0)
+                       max_hold_days=10, baseline_days=0,
+                       fill_mode="off", crash_drop_pct=0.0, mr_center="off", max_nav_age_min=30,
+                       buy_fee=0.0012, sell_fee=0.0012)
     # --- known-answer worlds ------------------------------------------------
     U = universe_from_rows([{"label": f"W-revert-{i}", "rows": _synthetic_rows("revert", seed=3 + i),
                              "day_vol": {}} for i in range(4)])
@@ -669,7 +671,7 @@ def self_test() -> dict:
         share_ev <= 0.35, f"{round(share_ev * 100)}٪ از {len(pv_ev)} دنیا")
 
     # --- mean-reversion score: discriminates + causal ----------------------
-    pm = DiscountParams(mr_center="zero", mr_window_days=20, mr_horizon_days=5, mr_lag=4)
+    pm = DiscountParams(mr_center="zero", mr_window_days=20, mr_horizon_days=5, mr_lag=4, mr_min_score=70.0)
     sc_rev, sc_rw = [], []
     for sd in range(20):
         for kind, acc_ in (("revert", sc_rev), ("noise", sc_rw)):
@@ -691,7 +693,7 @@ def self_test() -> dict:
                   (day, a, 1000.0, day, 995.0, 50, 0), (day, a + 10000, 1000.0, day, 996.0, 90, 0),
                   (day, b, 1000.0, day, 997.0, 120, 0), (day, b + 500, 1000.0, day, 970.0, 120, 0)]
     win_s = D._day_windows(raw_s)
-    rows_s, _ = D._prep(raw_s, D.DiscountParams(baseline_days=0, session_mode="auto"))
+    rows_s, _ = D._prep(raw_s, D.DiscountParams(baseline_days=0, session_mode="auto", max_nav_age_min=30))
     got = sorted({(r[1], r[2]) for r in rows_s})
     want = sorted({(d, t) for d, t, _n, _nd, _l, v, _nt in raw_s if v > 0 and win_s[d][0] <= t <= win_s[d][1]})
     add("ساعت جلسه از روی حجم تعیین می‌شود: پیش‌گشایش و قیمتِ کهنهٔ بعد از بسته‌شدن هرگز معامله نمی‌شود",
@@ -728,7 +730,7 @@ def self_test() -> dict:
         nav *= 1.0003
         for k in range(8):
             raw.append((d, 91500 + k * 3000, nav, d, nav * (1 + 0.02 + rng.gauss(0, 0.004)), 1000 * (k + 1), 0))
-    pb = DiscountParams(baseline_days=15, max_nav_age_days=3)
+    pb = DiscountParams(baseline_days=15, max_nav_age_days=3, max_nav_age_min=30)
     rows_full, _ = D._prep(raw, pb)
     cut_day = raw[len(raw) * 6 // 10][0]
     rows_part, _ = D._prep([r for r in raw if r[0] <= cut_day], pb)

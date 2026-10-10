@@ -48,3 +48,4 @@ tools/archive/
 tools/tsetmc_history_*.html
 *.tmp
 *.bak
+analysis_results/

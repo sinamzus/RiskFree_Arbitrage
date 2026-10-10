@@ -1899,6 +1899,8 @@ def create_app(db, scan_callback=None):
             logger.exception("selftest failed")
             return jsonify({"error": str(e)}), 500
 
+    _disc_last: dict = {}                       # latest results, kept in memory for "send results for analysis"
+
     @app.route("/api/disc/backtest")
     def api_disc_backtest():
         from discount_backtest import run_discount_backtest
@@ -1911,6 +1913,7 @@ def create_app(db, scan_callback=None):
         except Exception as e:
             logger.exception("disc backtest failed")
             return jsonify({"error": str(e)}), 500
+        _disc_last["backtest"] = res
         return jsonify(res)
 
     @app.route("/api/disc/bubble")
@@ -1940,6 +1943,7 @@ def create_app(db, scan_callback=None):
         except Exception as e:
             logger.exception("disc stats failed")
             return jsonify({"error": str(e)}), 500
+        _disc_last["stats"] = res
         return jsonify(res)
 
     _disc_opt_state = {"running": False, "progress": {}, "result": None}
@@ -1971,6 +1975,26 @@ def create_app(db, scan_callback=None):
     def api_disc_fulltest_status():
         return jsonify({"running": _disc_test_state["running"], "progress": _disc_test_state["progress"],
                         "result": _disc_test_state["result"]})
+
+    @app.route("/api/disc/push_results", methods=["POST"])
+    def api_disc_push_results():
+        """Save the latest backtest / optimizer / validation / stats results next to the app and push them to the
+        ``analysis-results`` git branch (without touching the working tree) so they can be analysed."""
+        from pathlib import Path
+        import result_export as X
+        root = Path(__file__).resolve().parent
+        state = {"backtest": _disc_last.get("backtest"), "stats": _disc_last.get("stats"),
+                 "study": _disc_opt_state.get("result"), "validation": _val_state.get("result")}
+        state = {k: v for k, v in state.items() if v and not (isinstance(v, dict) and v.get("error"))}
+        if not state:
+            return jsonify({"ok": False, "message": "هنوز نتیجه‌ای نیست: ابتدا بک‌تست یا بهینه‌سازی را اجرا کنید."}), 400
+        files = X.build_files(state, X.code_version(root))
+        local = X.save_local(files, root)
+        res = X.push_files(root, files)
+        res["sent"] = sorted(state)
+        res["local_dir"] = str(local)
+        res["bytes"] = sum(len(v) for v in files.values())
+        return jsonify(res), (200 if res.get("ok") else 502)
 
     @app.route("/api/disc/study_space")
     def api_disc_study_space():

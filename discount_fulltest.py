@@ -32,6 +32,7 @@ import math
 import os
 import random
 import re
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -169,7 +170,12 @@ class Results:
 
 def _base(**kw) -> D.DiscountParams:
     p = D.DiscountParams(initial_capital=5e9, entry_discount_pct=0.4, exit_discount_pct=0.0, max_hold_days=5,
-                         participation_pct=0.0, baseline_days=0, half_spread_pct=0.05)
+                         participation_pct=0.0, baseline_days=0, half_spread_pct=0.05,
+                         # neutral engine settings the tests were written against (the UI defaults differ on purpose)
+                         position_pct=10.0, fill_mode="off", fill_switch_pct=0.5, fill_max_rel_pct=0.0,
+                         crash_drop_pct=0.0, crash_window_min=30, crash_cooldown_min=30, crash_scope="category",
+                         mr_center="off", mr_min_score=70.0, mr_lag=4, max_nav_age_min=30,
+                         buy_fee=0.0012, sell_fee=0.0012)
     return replace(p, **kw) if kw else p
 
 
@@ -300,14 +306,14 @@ WEB_MAP = {
     "hold": ("max_hold_days", "7", 7), "stop": ("stop_loss_pct", "2.5", 2.5),
     "stopmode": ("stop_mode", "price", "price"), "base": ("baseline_days", "33", 33),
     "entrymode": ("entry_mode", "both", "both"), "ientry": ("index_entry_pct", "0.44", 0.44),
-    "iexit": ("index_exit_pct", "-0.12", -0.12), "mrcenter": ("mr_center", "self", "self"),
+    "iexit": ("index_exit_pct", "-0.12", -0.12), "mrcenter": ("mr_center", "category", "category"),
     "mrwin": ("mr_window_days", "25", 25), "mrmin": ("mr_min_score", "77", 77.0), "mrhor": ("mr_horizon_days", "7", 7),
     "spread": ("half_spread_pct", "0.07", 0.07), "part": ("participation_pct", "3.5", 3.5),
     "buyfee": ("buy_fee", "0.2", 0.002), "sellfee": ("sell_fee", "0.25", 0.0025), "navage": ("max_nav_age_days", "2", 2),
     "fresh": ("require_fresh", "0", False), "smode": ("session_mode", "fixed", "fixed"),
     "sstart": ("session_start", "10:15", 101500), "send": ("session_end", "17:45", 174500),
     "crashdrop": ("crash_drop_pct", "0.8", 0.8), "crashwin": ("crash_window_min", "45", 45),
-    "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "all", "all"),
+    "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "category", "category"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
     "navmin": ("max_nav_age_min", "17", 17), "fillswitch": ("fill_switch_pct", "0.9", 0.9),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
@@ -883,6 +889,44 @@ def test_hold(R: Results, db):
           all(t["exit_reason"] == "end" for t in huge["trades"]) and huge["trades"], "")
 
 
+def test_export(R: Results, db):
+    """Result export: pushes to a separate branch of a (temporary) bare remote, fast-forward on the second push,
+    and never touches the working tree, index, HEAD or current branch."""
+    import subprocess
+    import result_export as X
+    g = "ارسال نتایج برای تحلیل"
+    tmp = tempfile.mkdtemp(prefix="disc_export_test_")
+    def git(*a, cwd=None):
+        return subprocess.run(["git", *a], cwd=cwd or work, capture_output=True, text=True,
+                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+    bare, work = os.path.join(tmp, "remote.git"), os.path.join(tmp, "work")
+    subprocess.run(["git", "init", "--bare", "-q", bare], check=True)
+    os.makedirs(work)
+    git("init", "-q", "-b", "main"); git("remote", "add", "origin", bare)
+    open(os.path.join(work, "a.txt"), "w").write("x"); git("add", "a.txt"); git("commit", "-q", "-m", "init")
+    open(os.path.join(work, "dirty.txt"), "w").write("keep me")                  # untracked file must survive
+    head0 = git("rev-parse", "HEAD").stdout.strip()
+    res1 = _run(db, _base(entry_discount_pct=0.5))
+    files = X.build_files({"backtest": res1, "study": {"mode": "study", "x": [1, 2]}}, {"commit": head0})
+    r1 = X.push_files(Path(work), files)
+    R.add(g, "اولین پوش شاخهٔ نتایج را می‌سازد", r1["ok"], r1.get("message", ""))
+    ls = git("ls-tree", "-r", "--name-only", "analysis-results", cwd=bare).stdout.split()
+    R.add(g, "فایل‌های نتایج روی شاخهٔ راه دور هستند", {"results/backtest.json", "results/optimizer.json", "results/meta.json"} <= set(ls), str(ls))
+    r2 = X.push_files(Path(work), X.build_files({"backtest": res1}, {}))
+    n = git("rev-list", "--count", "analysis-results", cwd=bare).stdout.strip()
+    R.add(g, "پوش دوم fast-forward است (تاریخچهٔ هر ارسال می‌ماند)", r2["ok"] and n == "2", f"{n} commit; {r2.get('message', '')}")
+    R.add(g, "پوشهٔ کاری، ایندکس، HEAD و شاخهٔ فعلی دست‌نخورده‌اند",
+          git("rev-parse", "HEAD").stdout.strip() == head0 and git("status", "--porcelain").stdout.strip() == "?? dirty.txt"
+          and git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "main", "")
+    big = json.loads(files["results/backtest.json"])
+    R.add(g, "محتوای ارسالی همان بک‌تست است (پارامترها و خلاصه)", big["summary"]["final_capital"] == res1["summary"]["final_capital"]
+          and "params" in big, "")
+    bad = X.push_files(Path(work), files, remote="nowhere")
+    R.add(g, "خطای مخزن راه دور به‌صورت پیام قابل فهم برمی‌گردد (کرش نمی‌کند)", (not bad["ok"]) and bool(bad.get("message")), "")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_fill(R: Results, db):
     g = "پر کردن سرمایهٔ بیکار"
     rng = random.Random(8)
@@ -1006,7 +1050,16 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             R.add("مرورگر", "بک‌تست اجرا و نتیجه رسم می‌شود", True, "")
             R.add("مرورگر", "نمودار سرمایهٔ درگیر رسم می‌شود", pg.locator("#disc-exp-chart canvas").count() > 0, "")
             # optimizer: apply result must fill EVERY searched field in the form
-            pg.click("#disc-study-cfg summary"); pg.wait_for_selector("#ds-dims tbody tr")
+            pg.select_option("#disc-fillmode", "hold")
+            pg.click("#disc-opt-btn"); pg.wait_for_selector("#disc-study-cfg.visible #ds-dims tbody tr")
+            pg.click("text=⚡ سریع"); pg.wait_for_timeout(300)
+            on = pg.evaluate("[...document.querySelectorAll('#ds-dims [data-dim]')].filter(c=>c.checked).map(c=>c.dataset.dim)")
+            R.add("مرورگر", "در حالت «همیشه سرمایه‌گذاری» پیش‌تنظیم سریع پارامترهای همان حالت را تیک می‌زند",
+                  set(on) == {"fill_max_rel_pct", "fill_switch_pct"}, str(on))
+            pg.click("#ds-cancel"); pg.select_option("#disc-fillmode", "off")
+            pg.click("#disc-opt-btn"); pg.wait_for_selector("#disc-study-cfg.visible #ds-dims tbody tr")
+            R.add("مرورگر", "دکمهٔ بهینه‌سازی یک پنجرهٔ انتخاب پارامتر باز می‌کند و هنوز چیزی اجرا نشده",
+                  pg.locator("#disc-opt .dv-head").count() == 0 and pg.locator("#ds-start").is_visible(), "")
             pg.fill("#ds-n", "60"); pg.fill("#ds-sec", "60"); pg.locator("#ds-n").blur()
             for mode in ("index", "fund"):
                 pg.select_option("#disc-entrymode", mode)
@@ -1015,7 +1068,8 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
                 want = {"index": {"index_entry_pct", "index_exit_pct"}, "fund": {"entry_discount_pct", "exit_discount_pct"}}[mode]
                 R.add("مرورگر", f"پیش‌تنظیم سریع در حالت «{mode}» پارامترهای همان حالت را تیک می‌زند", want <= set(on), str(on))
             pg.select_option("#disc-entrymode", "fund")
-            pg.click("#disc-opt-btn")
+            pg.click("#ds-start")
+            R.add("مرورگر", "با «شروع» پنجره بسته می‌شود و مطالعه اجرا می‌شود", not pg.locator("#disc-study-cfg.visible").count(), "")
             for _ in range(150):
                 pg.wait_for_timeout(1000)
                 if pg.locator("#disc-opt .dv-head").count():
@@ -1110,7 +1164,7 @@ def test_mutations(R: Results, db):
     finally:
         D._Parker.make_room = o
     cases.append(("پیش‌فرض فرم با موتور فرق کند", with_html(lambda h: h.replace(
-        'id="disc-buyfee" type="number" step="0.005" value="0.12"', 'id="disc-buyfee" type="number" step="0.005" value="0.145"'))))
+        'id="disc-buyfee" type="number" step="0.005" value="0.1"', 'id="disc-buyfee" type="number" step="0.005" value="0.145"'))))
     cases.append(("discParams یک کنترل را نخواند", with_html(lambda h: h.replace("navage: v('disc-navage'), ", ""))))
     cases.append(("نگاشت «اعمال» یک پارامتر را نداشته باشد", with_html(lambda h: h.replace(
         "stop_mode: 'disc-stopmode', ", "", 1))))
@@ -1136,6 +1190,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("فیلتر ریزش بازار", lambda: test_crash_filter(R, db)),
              ("پر کردن سرمایهٔ بیکار", lambda: test_fill(R, db)),
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
+             ("ارسال نتایج برای تحلیل", lambda: test_export(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),
              ("جهش (آزمونِ آزمون‌ها)", lambda: test_mutations(R, db))]
     if ui:
