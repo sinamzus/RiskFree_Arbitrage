@@ -447,6 +447,12 @@ def test_static_ui(R: Results):
           set(ds) == set(S.DIMS), f"کم: {sorted(set(S.DIMS) - set(ds))} · اضافه: {sorted(set(ds) - set(S.DIMS))}")
     bad = [f"{k}→{i}" for k, i in ds.items() if _el(html, i) is None or f"'{i}'" not in body]
     R.add("رابط کاربری (ایستا)", "هر کنترلِ مقصدِ «اعمال» وجود دارد و در بک‌تست خوانده می‌شود", not bad, ", ".join(bad) or "درست")
+    # "fixed value" column: each searched dimension maps to the query key the server reads for that very field
+    mq = re.search(r"const DS_QKEY = \{(.*?)\};", html, re.S)
+    qk = dict(re.findall(r"(\w+):\s*'(\w+)'", mq.group(1))) if mq else {}
+    bad = [d for d in S.DIMS if d not in qk or qk[d] not in WEB_MAP or WEB_MAP[qk[d]][0] != d]
+    R.add("رابط کاربری (ایستا)", "ستون «مقدار ثابت»: هر پارامتر به کلید درستِ فرم/سرور نگاشت می‌شود", not bad,
+          ", ".join(bad) or f"{len(qk)} پارامتر")
     # each searched dimension is really a DiscountParams field the server parses
     web_fields = {f for f, _v, _e in WEB_MAP.values()}
     bad = [d for d in S.DIMS if d not in web_fields]

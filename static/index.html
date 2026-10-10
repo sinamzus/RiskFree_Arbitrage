@@ -7906,6 +7906,14 @@ const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_a
   session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
   fill_mode: 'پر کردن', fill_switch_pct: 'نگه‌داری: برتری≥', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
   require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
+// study dimension -> key of discParams() (the query the backtest/optimizer endpoints read)
+const DS_QKEY = {entry_mode: 'entrymode', baseline_days: 'base', max_nav_age_days: 'navage', max_nav_age_min: 'navmin', mr_center: 'mrcenter',
+  mr_window_days: 'mrwin', mr_horizon_days: 'mrhor', mr_min_score: 'mrmin', entry_discount_pct: 'entry', exit_discount_pct: 'exit',
+  index_entry_pct: 'ientry', index_exit_pct: 'iexit', max_hold_days: 'hold', stop_loss_pct: 'stop', stop_mode: 'stopmode', position_pct: 'pos',
+  crash_drop_pct: 'crashdrop', crash_window_min: 'crashwin', crash_cooldown_min: 'crashcool', crash_scope: 'crashscope',
+  session_mode: 'smode', session_start: 'sstart', session_end: 'send', index_min_share: 'imin', mr_lag: 'mrlag', require_fresh: 'fresh',
+  participation_pct: 'part', half_spread_pct: 'spread', buy_fee: 'buyfee', sell_fee: 'sellfee', fill_mode: 'fillmode',
+  fill_switch_pct: 'fillswitch', fill_max_rel_pct: 'fillmax', fill_exit_rel_pct: 'fillexit'};
 const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', max_nav_age_days: 'disc-navage', max_nav_age_min: 'disc-navmin', mr_center: 'disc-mrcenter',
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
   exit_discount_pct: 'disc-exit', index_entry_pct: 'disc-ientry', index_exit_pct: 'disc-iexit', max_hold_days: 'disc-hold',
@@ -7961,13 +7969,17 @@ async function discStudyBuild() {
       ${preset('full', '● کامل (همهٔ پارامترهای راهبرد و داده)', 'همهٔ پارامترهای راهبرد و داده با هم جستجو و تحلیل می‌شوند؛ فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) جستجو نمی‌شوند')}
       ${preset('everything', '⚠ همه، با فرض‌های اجرایی', 'علاوه بر همهٔ پارامترها، اسپرد، کارمزد و سقف حجم هم جستجو می‌شوند. هشدار: بهینه‌ساز ارزان‌ترین هزینه را برمی‌گزیند و این یافته نیست؛ فقط برای دیدن اندازهٔ اثر هزینه‌هاست.')}
       ${preset('reset', '↻ دامنه‌های پیش‌فرض', 'برگرداندن مقدارهای هر پارامتر به دامنهٔ پیش‌فرض')}
+      ${preset('all', '☑ همه را جستجو کن', 'همهٔ پارامترهای راهبرد و داده (بدون فرض‌های اجرایی) تیک می‌خورند')}
+      ${preset('none', '☐ هیچ‌کدام', 'همهٔ تیک‌ها برداشته می‌شود؛ سپس فقط آن‌هایی را که می‌خواهید تیک بزنید')}
+      ${preset('clearfix', '✕ پاک کردن مقدارهای ثابت', 'همهٔ مقدارهای ثابت پاک می‌شود و پارامترهای تیک‌نخورده دوباره از فرم خوانده می‌شوند')}
     </div>
     <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl" id="ds-dims"><thead><tr>
-      <th>جستجو؟</th><th style="text-align:start">پارامتر</th><th>نوع</th><th style="text-align:start">مقدارهای آزمون (با کاما جدا کنید)</th></tr></thead><tbody>
+      <th>جستجو؟</th><th style="text-align:start">پارامتر</th><th>نوع</th><th style="text-align:start">مقدارهای آزمون (با کاما جدا کنید)</th><th style="text-align:start" title="وقتی پارامتر تیک نخورده، در همهٔ ترکیب‌ها روی این مقدار ثابت می‌ماند. خالی = همان مقدارِ فعلیِ فرم (خاکستری نشان داده شده).">مقدار ثابت (وقتی جستجو نمی‌شود)</th></tr></thead><tbody>
     ${sp.dims.map(d => `<tr><td><input type="checkbox" data-dim="${d.key}" ${on[d.key] ? 'checked' : ''} onchange="discStudyCollect()"></td>
       <td style="text-align:start" title="${d.assumption ? 'فرض اجرایی: جستجوی آن معمولاً بی‌معناست (بهینه‌ساز ارزان‌ترین گزینه را انتخاب می‌کند). فقط برای دیدن اندازهٔ اثر روشن کنید. ' : ''}${d.kind === 'slow' ? 'تغییرش داده‌های ورودی را از نو می‌سازد (کندتر)؛ مقدارهای آن گروه‌بندی می‌شوند' : 'فقط شبیه‌سازی را تغییر می‌دهد (سریع)'}">${d.label}</td>
       <td>${d.assumption ? '⚠ فرض اجرایی' : d.kind === 'slow' ? 'ساختاری' : 'آستانه'}</td>
-      <td><input type="text" data-vals="${d.key}" value="${(st.vals[d.key] != null ? st.vals[d.key] : d.choices.map(c => (d.key === 'session_start' || d.key === 'session_end') ? dsHM(c) : c).join(', ')).replace(/"/g, '&quot;')}" style="width:100%;min-width:260px;direction:ltr" onchange="discStudyCollect()"></td></tr>`).join('')}
+      <td><input type="text" data-vals="${d.key}" value="${(st.vals[d.key] != null ? st.vals[d.key] : d.choices.map(c => (d.key === 'session_start' || d.key === 'session_end') ? dsHM(c) : c).join(', ')).replace(/"/g, '&quot;')}" style="width:100%;min-width:260px;direction:ltr" onchange="discStudyCollect()"></td>
+      <td>${dsFixedCtl(d, st, on[d.key])}</td></tr>`).join('')}
     </tbody></table></div>
     <div class="bbt-group" style="margin-top:6px">
       <div class="bbt-field" title="ملاک انتخاب برنده روی دورهٔ آموزش. «پایدار» میانگین بازدهِ بلوک‌ها منهای نصف انحراف معیارشان است تا ترکیبی که فقط در یک بلوک خوب بوده برنده نشود."><label>معیار انتخاب</label>
@@ -7981,12 +7993,35 @@ async function discStudyBuild() {
       <div class="bbt-field" title="پارامترهای ساختاری (تعدیل حباب، فیلتر بازگشت، حالت ورود، سن NAV) هر ترکیبشان داده را از نو می‌سازد؛ حداکثر این‌قدر ترکیبِ ساختاری نمونه‌گیری می‌شود."><label>حداکثر ترکیب ساختاری</label>
         <input id="ds-univ" type="number" min="1" max="200" value="${o.max_universes}" style="width:64px" onchange="discStudyCollect()"></div>
     </div>
-    <div class="dv-note">پارامترهایی که تیک نخورده‌اند روی مقدار فعلیِ فرم ثابت می‌مانند. فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) عمداً جستجو نمی‌شوند؛ حساسیتِ برنده به آن‌ها جداگانه گزارش می‌شود.</div>`;
+    <div class="dv-note">پارامترهایی که تیک نخورده‌اند روی «مقدار ثابت» همان سطر می‌مانند؛ اگر آن را خالی بگذارید، مقدار فعلیِ فرم (خاکستری در همان ستون) استفاده می‌شود. فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) عمداً جستجو نمی‌شوند؛ حساسیتِ برنده به آن‌ها جداگانه گزارش می‌شود.</div>`;
+}
+
+// the form's current value of a study dimension, as text (what the optimizer uses when the dimension is not searched)
+function dsFormText(k) {
+  const el = document.getElementById(DS_FORM[k]);
+  if (!el) return '';
+  if (el.type === 'checkbox') return el.checked ? 'بله' : 'خیر';
+  if (el.tagName === 'SELECT') return el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : el.value;
+  return el.value;
+}
+function dsFixedCtl(d, st, searched) {
+  const cur = (st.fix || {})[d.key];
+  const dis = searched ? 'disabled' : '';
+  const sty = 'style="width:130px;direction:ltr' + (searched ? ';opacity:.4' : '') + '"';
+  const tip = 'title="' + (searched ? 'این پارامتر جستجو می‌شود؛ مقدار ثابت استفاده نمی‌شود' : 'خالی = مقدار فعلی فرم') + '"';
+  const bool = typeof d.choices[0] === 'boolean', str = typeof d.choices[0] === 'string';
+  if (bool || str) {
+    const opts = bool ? [['1', 'بله'], ['0', 'خیر']] : d.choices.map(c => [c, (DS_VAL[d.key] || {})[c] || c]);
+    return `<select data-fix="${d.key}" ${dis} ${tip} ${sty} onchange="discStudyCollect()"><option value="">فرم: ${dsFormText(d.key)}</option>${
+      opts.map(([v, l]) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  }
+  return `<input type="text" data-fix="${d.key}" ${dis} ${tip} ${sty} placeholder="فرم: ${dsFormText(d.key)}" value="${cur != null ? String(cur).replace(/"/g, '&quot;') : ''}" onchange="discStudyCollect()">`;
 }
 
 function discStudyCollect() {
   const st = discStudyState();
-  st.on = {}; st.vals = {};
+  st.on = {}; st.vals = {}; st.fix = {};
+  document.querySelectorAll('#ds-dims [data-fix]').forEach(c => { if (c.value !== '') st.fix[c.dataset.fix] = c.value; });
   document.querySelectorAll('#ds-dims [data-dim]').forEach(c => { st.on[c.dataset.dim] = c.checked; });
   document.querySelectorAll('#ds-dims [data-vals]').forEach(c => { st.vals[c.dataset.vals] = c.value; });
   const g = id => { const e = document.getElementById(id); return e ? e.value : null; };
@@ -8013,6 +8048,9 @@ function discStudyPreset(k) {
   const sp = _discSpace; if (!sp) return;
   const st = discStudyState();
   if (k === 'reset') st.vals = {};
+  else if (k === 'clearfix') st.fix = {};
+  else if (k === 'all') st.on = Object.fromEntries(sp.dims.map(d => [d.key, !d.assumption]));
+  else if (k === 'none') st.on = Object.fromEntries(sp.dims.map(d => [d.key, false]));
   else st.on = Object.fromEntries(sp.dims.map(d => [d.key, discStudyPresetDims(k, sp).includes(d.key)]));
   discStudySave(st);
   discStudyBuild();
@@ -8036,7 +8074,15 @@ async function discStudyPayload() {
     }).filter(x => typeof x === 'string' || typeof x === 'boolean' || Number.isFinite(x));
     if (arr.length) space[d.key] = arr;
   });
-  return {space, opts: st.opts || {}};
+  // values typed in the "fixed" column replace the form value for parameters that are NOT searched
+  const fixed = {}, fixedDims = {};
+  (sp ? sp.dims : []).forEach(d => {
+    const raw = (st.fix || {})[d.key];
+    if (on[d.key] || raw == null || raw === '' || !DS_QKEY[d.key]) return;
+    fixed[DS_QKEY[d.key]] = raw;
+    fixedDims[d.key] = raw;
+  });
+  return {space, opts: st.opts || {}, fixed, fixedDims};
 }
 
 async function discFullTest() {
@@ -8077,7 +8123,8 @@ async function discOptimize() {
   const pl = await discStudyPayload();
   if (!Object.keys(pl.space).length) { showError('حداقل یک پارامتر را برای جستجو تیک بزنید.'); return; }
   const o = pl.opts;
-  const body = Object.assign({}, p, {
+  window._dsFixedUsed = pl.fixedDims || {};
+  const body = Object.assign({}, p, pl.fixed || {}, {
     mode: 'study', space: pl.space, objective: o.objective || 'robust', n_samples: o.n_samples || 400, blocks: o.blocks || 6,
     max_seconds: o.max_seconds || 300, max_universes: o.max_universes || 20,
     opt_metric: document.getElementById('disc-optmetric').value,
@@ -8126,6 +8173,13 @@ function dsFormValue(k, v) {
 
 function discApplyStudy(cfg) {
   const changed = [], same = [];
+  // parameters that were held at a typed "fixed" value during the study: put them in the form too
+  Object.entries(window._dsFixedUsed || {}).forEach(([k, raw]) => {
+    const el = document.getElementById(DS_FORM[k]);
+    if (!el || (cfg[k] != null)) return;
+    if (el.type === 'checkbox') el.checked = String(raw) === '1';
+    else el.value = raw;
+  });
   Object.keys(cfg).forEach(k => {
     const el = document.getElementById(DS_FORM[k]);
     if (!el || cfg[k] == null) return;
