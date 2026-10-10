@@ -8362,7 +8362,7 @@ async function discPushResults() {
 //  TSE tick + order-book collection for the gold funds
 // ---------------------------------------------------------------------------
 let _tseTimer = null;
-async function discDatasetChanged() {
+function discDatasetChanged() {
   const ds = (document.getElementById('disc-dataset') || {}).value || 'dump';
   const g = document.getElementById('disc-gridf');
   if (g) g.style.display = ds === 'tse' ? '' : 'none';
@@ -8370,7 +8370,7 @@ async function discDatasetChanged() {
   if (sp) sp.disabled = ds !== 'dump';                  // order-book datasets: real asks / bids, no assumed spread
   if (sf) sf.style.opacity = ds !== 'dump' ? '0.45' : '';
 }
-function discTseOpen() {
+async function discTseOpen() {
   discNewTab('tse', 'دادهٔ TSE', {reuse: true});
   const el = document.getElementById('disc-tse');
   el.style.display = 'block';

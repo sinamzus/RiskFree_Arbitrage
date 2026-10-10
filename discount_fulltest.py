@@ -413,6 +413,20 @@ def test_static_ui(R: Results):
     dflt = asdict(D.DiscountParams())
     missing = [i for i in UI_ID.values() if _el(html, i) is None]
     R.add("رابط کاربری (ایستا)", "همهٔ کنترل‌های پارامتر در صفحه وجود دارند", not missing, ", ".join(missing) or "کامل")
+    import shutil as _sh
+    import subprocess as _sp
+    node = _sh.which("node")
+    if node:                                  # a JS syntax error leaves the whole app stuck on "loading"
+        errs = []
+        for k, js in enumerate(re.findall(r"<script(?![^>]*src)[^>]*>(.*?)</script>", html, re.S)):
+            fd, fp = tempfile.mkstemp(suffix=".js")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(js)
+            r = _sp.run([node, "--check", fp], capture_output=True, text=True)
+            os.remove(fp)
+            if r.returncode:
+                errs.append(r.stderr.strip()[:300])
+        R.add("رابط کاربری (ایستا)", "اسکریپت‌های صفحه خطای نحوی ندارند", not errs, "؛ ".join(errs) or "سالم")
     bad = []
     for k, eid in UI_ID.items():
         el = _el(html, eid)
