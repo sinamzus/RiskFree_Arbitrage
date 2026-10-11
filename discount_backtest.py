@@ -312,11 +312,19 @@ def dataset_dates(db, sids: list[int], start: int | None, end: int | None, p: "D
     return db.get_nav_intraday_dates(start, end)
 
 
+_LOAD_T = {"raw": 0.0, "prep": 0.0}     # time spent reading the dataset / preparing the rows (diagnostics)
+
+
 def _load_ex(db, sid: int, start: int | None, end: int | None, p: DiscountParams) -> dict:
     """Like _load but also returns the warm-up rows and the offset of the first kept row."""
+    import time as _time
+    t0 = _time.time()
     raw_all, book = _raw_for(db, sid, _warmup_start(start, p), end, p)
+    t1 = _time.time()
     pstats: dict = {}
     rows_all, day_vol = _prep(raw_all, p, pstats, start or 0)
+    _LOAD_T["raw"] += t1 - t0
+    _LOAD_T["prep"] += _time.time() - t1
     if start:
         off = next((i for i, r in enumerate(rows_all) if r[1] >= start), len(rows_all))
         raw = [r for r in raw_all if r[0] >= start]
@@ -1869,6 +1877,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     p = params or DiscountParams()
     import time as _time
     t_start = _time.time()
+    _LOAD_T["raw"] = _LOAD_T["prep"] = 0.0
     funds = _universe(db, cats, symbols)
     use_index = p.entry_mode in ("index", "both")
     raw_trades: list[Trade] = []
@@ -1970,7 +1979,8 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "dataset": {"name": p.dataset, "grid_sec": p.tse_grid_sec if p.dataset == "tse" else None,
                     "days": len(dates), "first": d0, "last": d1, "clock": clock},
         # where the time went: reading / preparing the data vs simulating (+ explaining) vs the clock check
-        "timing": {"load_s": round(t_loaded - t_start, 2), "sim_s": round(t_sim - t_loaded, 2),
+        "timing": {"load_s": round(t_loaded - t_start, 2), "read_s": round(_LOAD_T["raw"], 2),
+                   "prep_s": round(_LOAD_T["prep"], 2), "sim_s": round(t_sim - t_loaded, 2),
                    "check_s": round(_time.time() - t_sim, 2), "total_s": round(_time.time() - t_start, 2)},
         "funds_tested": tested, "funds_skipped": skipped_funds,
         "params": asdict(p),

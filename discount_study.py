@@ -692,8 +692,13 @@ class Study:
     def _start_pool(self, db):
         """Worker processes that evaluate configurations in parallel (each with its own copy of the data).
         None when parallelism is off, impossible (no database file) or not worth it (a very short run)."""
+        import os
+        import sys
         path = getattr(db, "path", None)
         if self.workers <= 1 or path is None or self.max_seconds < 45:
+            return None
+        main = getattr(sys.modules.get("__main__"), "__file__", None)
+        if not main or not os.path.exists(main):     # (an interactive session: worker processes cannot start)
             return None
         try:
             import multiprocessing as mp

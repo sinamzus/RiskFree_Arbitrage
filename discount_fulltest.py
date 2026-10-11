@@ -1197,6 +1197,8 @@ def test_tse_dataset(R: Results, db_path: str):
         return [(r[0], _hms_add(r[1], 7200), *r[2:]) for r in _orig(sid, s, e)]
     db.get_nav_intraday = _late
     _TD._CLOCK.clear()                        # (the NAV rows changed behind the database's back)
+    with db._conn() as _c:
+        _c.execute("DELETE FROM tse_cache WHERE name LIKE 'clock|%'")
     try:
         ck2 = _TD.clock_check(db, [(f["symbol_id"], f["symbol"]) for f in funds], None, None, [])
     finally:

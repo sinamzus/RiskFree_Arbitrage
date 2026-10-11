@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS tse_window (
     first    INTEGER,
     last     INTEGER
 );
+CREATE TABLE IF NOT EXISTS tse_cache (
+    name  TEXT PRIMARY KEY,
+    ver   TEXT NOT NULL,
+    blob  BLOB
+);
 CREATE TABLE IF NOT EXISTS tse_hybrid (
     symbol_id INTEGER NOT NULL,
     date      INTEGER NOT NULL,
@@ -226,15 +231,59 @@ def _collected_version(db, symbol_id: int) -> tuple:
     return (int(r[0]), r[1], int(n[0]), int(n[1]))
 
 
+def _pc_get(db, name: str, ver: str):
+    """Persistent cache (table ``tse_cache``): the stored object when its version matches, else None."""
+    import pickle
+    try:
+        with db._conn() as conn:
+            r = conn.execute("SELECT ver, blob FROM tse_cache WHERE name=?", (name,)).fetchone()
+        if r is None or r[0] != ver:
+            return None
+        return pickle.loads(zlib.decompress(r[1]))
+    except Exception:
+        return None
+
+
+def _pc_put(db, name: str, ver: str, obj) -> None:
+    import pickle
+    try:
+        blob = zlib.compress(pickle.dumps(obj, protocol=4), 3)
+        with db._conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO tse_cache VALUES (?,?,?)", (name, ver, blob))
+    except Exception:
+        pass
+
+
+def _global_version(db) -> tuple:
+    """Changes whenever any TSE data is added or replaced (the market windows depend on every fund)."""
+    with db._conn() as conn:
+        r = conn.execute("SELECT COUNT(*), COALESCE(MAX(fetched_at), '') FROM tse_raw").fetchone()
+    return (int(r[0]), r[1])
+
+
 def _memo_load(db, kind: str, symbol_id: int, start, end, grid: int, fn):
     """The order book of a fund depends only on the dataset and the period, not on the strategy parameters: load
-    it once per process and share it between all backtests / optimizer configurations."""
-    key = (str(getattr(db, "path", id(db))), kind, symbol_id, start, end, grid, _collected_version(db, symbol_id))
+    it once and share it between all backtests / optimizer configurations — in memory within a process, and on
+    disk (``tse_cache``) across restarts, so reopening the app does not prepare the data again."""
+    cv = _collected_version(db, symbol_id)
+    key = (str(getattr(db, "path", id(db))), kind, symbol_id, start, end, grid, cv)
     hit = _LOADS.get(key)
     if hit is None:
+        name = f"load|{kind}|{symbol_id}|{start}|{end}|{grid}"
+        ver = f"{HYBRID_VERSION}|{GRID_VERSION}|{cv}|{_global_version(db)}"
+        got = _pc_get(db, name, ver)
+        if got is not None:
+            rows, items = got
+            book = Book(db, symbol_id)
+            book.hybrid = kind == "hybrid"
+            dict.update(book, items)
+            hit = (rows, book)
+        else:
+            hit = fn()
+            _pc_put(db, name, ver, (hit[0], dict(hit[1])))
         if len(_LOADS) >= _LOADS_MAX:
             _LOADS.pop(next(iter(_LOADS)))
-        hit = _LOADS[key] = fn()
+        _LOADS[key] = hit
     rows, book = hit
     return list(rows), book
 
@@ -505,7 +554,17 @@ def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | 
     mkey = (_dbkey(db), sids, start, end, max_days, n_raw, n_nav)
     hit = _CLOCK.get(mkey)
     if hit is None:
-        hit = _CLOCK[mkey] = _clock_offsets(db, funds, start, end, max_days, cache)
+        name, ver = f"clock|{sids}|{start}|{end}|{max_days}", f"{n_raw}|{n_nav}|{_global_version(db)}"
+        hit = _pc_get(db, name, ver)
+        if hit is None:
+            devs, rows_in, rows_out = _clock_offsets(db, funds, start, end, max_days, cache)
+            med = {}
+            for o, v in devs.items():
+                v = sorted(v)
+                med[o] = (v[len(v) // 2] if v else None, len(v))
+            hit = (med, rows_in, rows_out)
+            _pc_put(db, name, ver, hit)
+        _CLOCK[mkey] = hit
     devs, rows_in, rows_out = hit
     return _clock_result(db, funds, trades, devs, rows_in, rows_out, cache)
 
@@ -560,10 +619,8 @@ def _clock_result(db, funds, trades, devs, rows_in, rows_out, cache) -> dict:
                     ex.append({"symbol": t["symbol"], "side": side, "date": d, "time": tm,
                                "window": [_hms(win[0]), _hms(win[1])]})
 
-    def _med(v):
-        v = sorted(v)
-        return v[len(v) // 2] if v else None
-    offs = [{"min": o, "median_dev_pct": round(_med(devs[o]), 4) if devs[o] else None, "n": len(devs[o])}
+    # devs: {offset: (median deviation %, n)} (reduced once, stored with the persistent cache)
+    offs = [{"min": o, "median_dev_pct": round(devs[o][0], 4) if devs[o][0] is not None else None, "n": devs[o][1]}
             for o in CLOCK_OFFSETS_MIN]
     ok = [x for x in offs if x["median_dev_pct"] is not None]
     best = min(ok, key=lambda x: x["median_dev_pct"]) if ok else None
