@@ -2440,7 +2440,7 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="فقط برای حالت «همیشه سرمایه‌گذاری»: صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که صندوق دیگری حبابش (نسبت به معمولِ خودش) دست‌کم این‌قدر نقطهٔ درصد پایین‌تر باشد و نقد برای خریدش نباشد. در این حالت سیگنال فروش، زمان نگه‌داری و حد ضرر وجود ندارد؛ فقط جابه‌جایی به کاندیدای بهتر یا پایان داده. هزینهٔ رفت‌وبرگشت (کارمزد + اسپرد) حدود ۰٫۳۵٪ است؛ کمتر از آن جابه‌جایی ضرر است."><label>نگه‌داری: حداقل برتری برای جابه‌جایی ٪</label>
         <input id="disc-fillswitch" type="number" step="0.1" min="0" value="0.8" style="width:70px"></div>
       <div class="bbt-field" title="فقط حالت «همیشه سرمایه‌گذاری»: صندوقِ خریده‌شده تا این‌قدر دقیقه برای جابه‌جایی فروخته نمی‌شود. در بک‌تست اولیه ۱۳ از ۵۵ معامله همان روز خریده و فروخته شدند و ۱۰ تا زیان‌ده بودند؛ مثلاً ۲۴۰ یا ۱۴۴۰ جلوی این جابه‌جایی‌های پشت‌سرهم را می‌گیرد. ۰ = خاموش."><label>نگه‌داری: حداقل زمان پیش از جابه‌جایی (دقیقه)</label>
-        <input id="disc-fillminhold" type="number" step="30" min="0" value="0" style="width:70px"></div>
+        <input id="disc-fillminhold" type="number" step="30" min="0" value="60" style="width:70px"></div>
       <div class="bbt-field" title="قیمتِ آخرِ هر صندوق تا این‌قدر دقیقه «جاری» حساب می‌شود: برای کاندیدا شدن و برای فروخته شدن در جابه‌جایی (فروش با آخرین قیمتِ شناخته‌شده انجام می‌شود). عدد کوچک‌تر = واقع‌بینانه‌تر ولی جابه‌جایی کمتر."><label>عمر قیمت جاری (دقیقه)</label>
         <input id="disc-fillage" type="number" step="5" min="1" value="90" style="width:70px"></div>
       <div class="bbt-field" title="فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد؛ ۰ = فقط وقتی در/زیر معمولِ خودش است (صندوقِ گران‌شده خریده نمی‌شود)."><label>پر کردن: حداکثر حباب نسبی ٪</label>
@@ -2450,19 +2450,19 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field" title="فیلتر ریزش بازار: اگر میانگین قیمتِ صندوق‌های گروه در «پنجرهٔ ریزش» بیش از این‌قدر درصد افت کرده باشد، ورودِ جدید موقتاً متوقف می‌شود (خروج‌ها و پوزیشن‌های باز دست نمی‌خورند). در ریزش، «تخفیف از NAV» اغلب ظاهری است (قیمت زودتر از NAV می‌افتد). ۰ = خاموش. برای داده‌ای با اسنپ‌شات‌های کم، مقدار را بزرگ‌تر از نوسان عادی بگذارید."><label>فیلتر ریزش: افت گروه ≥ ٪</label>
         <input id="disc-crashdrop" type="number" step="0.1" min="0" value="1.5" style="width:70px"></div>
       <div class="bbt-field" title="افت قیمتِ گروه در این‌قدر دقیقهٔ اخیر سنجیده می‌شود (نسبت به آخرین قیمتِ ثبت‌شده در/قبل از آن لحظه؛ اگر در همین روز نباشد، آخرین قیمت روز قبل). مثلاً ۳۰ = «در نیم‌ساعت اخیر ریزش سریع نباشد»."><label>پنجرهٔ ریزش (دقیقه)</label>
-        <input id="disc-crashwin" type="number" step="5" min="1" value="60" style="width:70px"></div>
+        <input id="disc-crashwin" type="number" step="5" min="1" value="30" style="width:70px"></div>
       <div class="bbt-field" title="توقف موقت: پس از دیده شدن ریزش، ورودِ جدید تا این‌قدر دقیقه ممنوع می‌ماند؛ ۰ = فقط در همان لحظهٔ ریزش."><label>توقف موقت پس از ریزش (دقیقه)</label>
-        <input id="disc-crashcool" type="number" step="5" min="0" value="60" style="width:70px"></div>
+        <input id="disc-crashcool" type="number" step="5" min="0" value="120" style="width:70px"></div>
       <div class="bbt-field" title="گروهی که میانگین قیمتش سنجیده می‌شود: «دستهٔ صندوق» = فقط صندوق‌های هم‌دسته (طلا با طلا)، «همهٔ صندوق‌ها» = همهٔ صندوق‌های انتخاب‌شده."><label>گروه ریزش</label>
-        <select id="disc-crashscope" style="width:150px"><option value="category">دستهٔ صندوق</option><option value="all" selected>همهٔ صندوق‌ها</option></select></div>
+        <select id="disc-crashscope" style="width:150px"><option value="category" selected>دستهٔ صندوق</option><option value="all">همهٔ صندوق‌ها</option></select></div>
       <div class="bbt-field" title="هر صندوق ممکن است دائماً بالا یا پایین NAV معامله شود (حباب دائمی). با این گزینه سیگنال‌ها نسبت به «حباب معمول همان صندوق» سنجیده می‌شوند: NAV × (1 + میانهٔ تخفیف همین چند روز گذشتهٔ صندوق). فقط از روزهای قبل استفاده می‌شود. ۰ = خاموش (مقایسه مستقیم با NAV)."><label>تعدیل حباب دائمی: میانهٔ چند روز قبل</label>
         <input id="disc-base" type="number" step="1" min="0" value="0" style="width:80px"></div>
       <div class="bbt-field" title="فیلتر شایستگی: امتیاز بازگشت به میانگینِ سری حباب هر صندوق در N روز گذشته محاسبه می‌شود (۰ تا ۱۰۰ = درصدِ شکافی که انتظار می‌رود در افق مشخص بسته شود). صندوقی که امتیازش کمتر از حداقل باشد تا وقتی دوباره بالا بیاید معامله نمی‌شود. مرکز: صفر، میانگین حباب همان دسته، یا میانگین حبابِ خود صندوق (از N روز قبل از پنجرهٔ امتیازدهی)."><label>فیلتر بازگشت به میانگین</label>
         <select id="disc-mrcenter" style="width:260px">
-          <option value="off">خاموش</option>
+          <option value="off" selected>خاموش</option>
           <option value="zero">بازگشت حول صفر (NAV)</option>
           <option value="category">بازگشت حول میانگین حبابِ دستهٔ صندوق</option>
-          <option value="self" selected>بازگشت حول میانگین حبابِ خود صندوق</option></select></div>
+          <option value="self">بازگشت حول میانگین حبابِ خود صندوق</option></select></div>
       <div class="bbt-field" title="جفت‌های محاسبهٔ ضریب بازگشتِ AR(1) هر این‌قدر اسنپ‌شاتِ همان روز از هم فاصله دارند (۴ ≈ یک ساعت). عدد کوچک‌تر = حساس‌تر به نوسان کوتاه، بزرگ‌تر = حساس‌تر به روند."><label>فاصلهٔ جفت‌های امتیاز (اسنپ‌شات)</label>
         <input id="disc-mrlag" type="number" step="1" min="1" value="8" style="width:70px"></div>
       <div class="bbt-field" title="تعداد روزهای معاملاتیِ اخیر که امتیاز از آن‌ها ساخته می‌شود"><label>پنجرهٔ امتیاز (روز)</label>
@@ -2488,9 +2488,9 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
       <div class="bbt-field"><label>کارمزد فروش ٪</label>
         <input id="disc-sellfee" type="number" step="0.005" value="0.125" style="width:70px"></div>
       <div class="bbt-field" title="NAVهای کهنه‌تر از این‌قدر روز نادیده گرفته می‌شود (برای طلا/سهام مهم است)"><label>حداکثر سن NAV (روز)</label>
-        <input id="disc-navage" type="number" step="1" value="3" style="width:70px"></div>
+        <input id="disc-navage" type="number" step="1" value="2" style="width:70px"></div>
       <div class="bbt-field" title="اگر NAV آخرین بار بیش از این‌قدر دقیقه پیش از لحظهٔ اسنپ‌شات محاسبه شده باشد، آن اسنپ‌شات «NAV کهنه» است و کاملاً حذف می‌شود: صندوق در آن لحظه کاندید ورود، پرکردن سرمایه بیکار یا سیگنال خروج نیست. ۰ = غیرفعال. اگر ساعت NAV در داده نباشد اسنپ‌شات نگه داشته می‌شود."><label>حداکثر سن NAV (دقیقه)</label>
-        <input id="disc-navmin" type="number" step="1" min="0" value="120" style="width:70px"></div>
+        <input id="disc-navmin" type="number" step="1" min="0" value="60" style="width:70px"></div>
       <div class="bbt-field" title="«خودکار از حجم»: برای هر صندوق و هر روز، بازهٔ معامله از اولین تا آخرین لحظه‌ای است که حجم تجمعی بالا رفته. قبل از آن پیش‌گشایش است (سفارش اجرا نمی‌شود) و بعد از آن قیمت کهنه. برای صندوق‌هایی که ساعت معاملهٔ هر روزشان فرق می‌کند (مثلاً طلا ۱۱ تا ۱۵ یا ۱۲ تا ۱۸) این حالت درست است. «ساعت ثابت»: فقط بازهٔ ساعتی دستی."><label>ساعت جلسه</label>
         <select id="disc-smode" style="width:190px" onchange="document.getElementById('disc-sfix').style.display = this.value === 'fixed' ? '' : 'none'">
           <option value="auto">خودکار از حجم (هر صندوق، هر روز)</option>
@@ -8143,7 +8143,7 @@ async function discStats() {
 //  Comprehensive parameter study (optimizer)
 // ---------------------------------------------------------------------------
 let _discSpace = null, _discStudy = null;
-const DISC_STUDY_KEY = 'discStudyCfg_v1';
+const DISC_STUDY_KEY = 'discStudyCfg_v2';   // v2: settled parameters unticked by default
 const DS_VAL = {
   participation_basis: {sofar: 'حجم تا لحظه', day: 'کل حجم روز'},
   fill_mode: {off: 'خاموش', best: 'بهترین صندوق', hold: 'همیشه سرمایه‌گذاری'}, crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
@@ -8209,7 +8209,7 @@ async function discStudyBuild() {
   const sp = await discStudyLoadSpace();
   if (!sp) { box.innerHTML = '<div class="dv-note">تنظیمات در دسترس نیست.</div>'; return; }
   const st = discStudyState();
-  const on = st.on || Object.fromEntries(sp.dims.map(d => [d.key, !d.assumption]));
+  const on = st.on || Object.fromEntries(sp.dims.map(d => [d.key, !d.assumption && !d.settled]));
   const o = Object.assign({objective: 'robust', n_samples: 400, blocks: 6, max_seconds: 300, max_universes: 20}, st.opts || {});
   const preset = (k, l, tip) => `<button type="button" class="pill" onclick="discStudyPreset('${k}')" title="${tip}">${l}</button>`;
   const mnow = document.getElementById('disc-entrymode').value;
@@ -8229,7 +8229,7 @@ async function discStudyBuild() {
       <th>جستجو؟</th><th style="text-align:start">پارامتر</th><th>نوع</th><th style="text-align:start">مقدارهای آزمون (با کاما جدا کنید)</th><th style="text-align:start" title="وقتی پارامتر تیک نخورده، در همهٔ ترکیب‌ها روی این مقدار ثابت می‌ماند. خالی = همان مقدارِ فعلیِ فرم (خاکستری نشان داده شده).">مقدار ثابت (وقتی جستجو نمی‌شود)</th></tr></thead><tbody>
     ${sp.dims.map(d => `<tr><td><input type="checkbox" data-dim="${d.key}" ${on[d.key] ? 'checked' : ''} onchange="discStudyCollect()"></td>
       <td style="text-align:start" title="${d.assumption ? 'فرض اجرایی: جستجوی آن معمولاً بی‌معناست (بهینه‌ساز ارزان‌ترین گزینه را انتخاب می‌کند). فقط برای دیدن اندازهٔ اثر روشن کنید. ' : ''}${d.kind === 'slow' ? 'تغییرش داده‌های ورودی را از نو می‌سازد (کندتر)؛ مقدارهای آن گروه‌بندی می‌شوند' : 'فقط شبیه‌سازی را تغییر می‌دهد (سریع)'}">${d.label}</td>
-      <td>${d.assumption ? '⚠ فرض اجرایی' : d.kind === 'slow' ? 'ساختاری' : 'آستانه'}</td>
+      <td${d.settled ? ` title="مسجل: ${(d.settled_why || '').replace(/"/g, '&quot;')} — مقدار پیش‌فرض فرم استفاده می‌شود؛ برای جستجوی دوباره تیک بزنید."` : ''}>${d.assumption ? '⚠ فرض اجرایی' : d.settled ? '✔ مسجل' : d.kind === 'slow' ? 'ساختاری' : 'آستانه'}</td>
       <td><input type="text" data-vals="${d.key}" value="${(st.vals[d.key] != null ? st.vals[d.key] : d.choices.map(c => (d.key === 'session_start' || d.key === 'session_end') ? dsHM(c) : c).join(', ')).replace(/"/g, '&quot;')}" style="width:100%;min-width:260px;direction:ltr" onchange="discStudyCollect()"></td>
       <td>${dsFixedCtl(d, st, on[d.key])}</td></tr>`).join('')}
     </tbody></table></div>
@@ -8308,7 +8308,7 @@ function discStudyPreset(k) {
   const st = discStudyState();
   if (k === 'reset') st.vals = {};
   else if (k === 'clearfix') st.fix = {};
-  else if (k === 'all') st.on = Object.fromEntries(sp.dims.map(d => [d.key, !d.assumption]));
+  else if (k === 'all') st.on = Object.fromEntries(sp.dims.map(d => [d.key, !d.assumption && !d.settled]));
   else if (k === 'none') st.on = Object.fromEntries(sp.dims.map(d => [d.key, false]));
   else st.on = Object.fromEntries(sp.dims.map(d => [d.key, discStudyPresetDims(k, sp).includes(d.key)]));
   discStudySave(st);
@@ -8319,7 +8319,7 @@ async function discStudyPayload() {
   const sp = await discStudyLoadSpace();
   let st = discStudyState();
   if (document.getElementById('ds-dims')) st = discStudyCollect();
-  const on = st.on || Object.fromEntries((sp ? sp.dims : []).map(d => [d.key, true]));
+  const on = st.on || Object.fromEntries((sp ? sp.dims : []).map(d => [d.key, !d.assumption && !d.settled]));
   const space = {};
   (sp ? sp.dims : []).forEach(d => {
     if (!on[d.key]) return;

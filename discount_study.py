@@ -98,6 +98,29 @@ PRESETS = {
 }
 ASSUMPTION_DIMS = [d for d in ORDER if DIMS[d].get("assumption")]
 
+# Parameters the studies have settled (hybrid dataset, real order book): their value is fixed in the defaults and
+# they are no longer searched by default (they can still be ticked by hand). With "hold" settled, every rule of the
+# normal entry/exit strategy is inactive, and with the mean-reversion filter off so are its settings.
+SETTLED = {
+    "fill_mode": "«همیشه سرمایه‌گذاری» (hold) با فاصلهٔ زیاد بهتر از پر کردن/خاموش است",
+    "session_mode": "خودکار از حجم بهتر یا برابر ساعت ثابت",
+    "session_start": "فقط برای ساعت ثابت", "session_end": "فقط برای ساعت ثابت",
+    "require_fresh": "اثری ندارد",
+    "mr_center": "خاموش در همهٔ ترکیب‌های برتر",
+    "mr_window_days": "فیلتر بازگشت خاموش است", "mr_horizon_days": "فیلتر بازگشت خاموش است",
+    "mr_lag": "فیلتر بازگشت خاموش است", "mr_min_score": "فیلتر بازگشت خاموش است",
+    "crash_scope": "دستهٔ صندوق در همهٔ ترکیب‌های برتر",
+    "entry_mode": "در حالت hold بی‌اثر", "index_min_share": "در حالت hold بی‌اثر",
+    "entry_discount_pct": "در حالت hold بی‌اثر", "exit_discount_pct": "در حالت hold بی‌اثر",
+    "index_entry_pct": "در حالت hold بی‌اثر", "index_exit_pct": "در حالت hold بی‌اثر",
+    "max_hold_days": "در حالت hold بی‌اثر", "stop_loss_pct": "در حالت hold بی‌اثر", "stop_mode": "در حالت hold بی‌اثر",
+    "fill_exit_rel_pct": "در حالت hold بی‌اثر",
+}
+for _d in SETTLED:
+    if _d in DIMS:
+        DIMS[_d]["settled"] = True
+PRESETS["full"] = [d for d in ORDER if not DIMS[d].get("assumption") and not DIMS[d].get("settled")]
+
 OBJECTIVES = {
     "robust": "پایدار: میانگین بازدهِ بلوک‌ها − ½ انحراف معیارشان (پیش‌فرض)",
     "portfolio_return_pct": "بازده کل دورهٔ آموزش",
@@ -109,7 +132,7 @@ OBJECTIVES = {
 def default_space() -> dict:
     """Default searched space: every strategy / data parameter. The execution assumptions (spread, fees, volume cap)
     are NOT searched by default: an optimizer would simply pick the cheapest costs, which is not a finding."""
-    return {k: list(v["choices"]) for k, v in DIMS.items() if not v.get("assumption")}
+    return {k: list(v["choices"]) for k, v in DIMS.items() if not v.get("assumption") and not v.get("settled")}
 
 
 def _active(dim: str, c: dict) -> bool:
@@ -1397,5 +1420,6 @@ def clean_space(raw: dict | None, enabled: list[str] | None = None) -> dict:
 
 def space_info() -> dict:
     return {"dims": [{"key": k, "label": DIMS[k]["label"], "kind": DIMS[k]["kind"], "choices": DIMS[k]["choices"],
-                      "assumption": bool(DIMS[k].get("assumption"))} for k in ORDER],
+                      "assumption": bool(DIMS[k].get("assumption")), "settled": bool(DIMS[k].get("settled")),
+                      "settled_why": SETTLED.get(k)} for k in ORDER],
             "presets": PRESETS, "objectives": OBJECTIVES}

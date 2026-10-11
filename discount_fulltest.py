@@ -556,10 +556,14 @@ def test_optimizer_fill(R: Results, db):
     g = "بهینه‌ساز"
     import discount_validation as V
     base = _base()
-    st = S.Study(db, None, None, None, None, base, S.default_space(), n_samples=40, blocks=6, min_trades=5,
+    dflt_space = S.default_space()
+    info = {d["key"]: d for d in S.space_info()["dims"]}
+    R.add(g, "پارامترهای مسجل (مثل fill_mode، mr_center، crash_scope) از جستجوی پیش‌فرض خارج‌اند ولی قابل انتخاب می‌مانند",
+          all(d not in dflt_space and info[d]["settled"] for d in ("fill_mode", "mr_center", "crash_scope", "session_mode"))
+          and "fill_max_rel_pct" in dflt_space and "fill_switch_pct" in dflt_space, "")
+    space = dict(dflt_space, **{d: list(S.DIMS[d]["choices"]) for d in ("fill_mode", "fill_exit_rel_pct", "mr_center")})
+    st = S.Study(db, None, None, None, None, base, space, n_samples=40, blocks=6, min_trades=5,
                  max_seconds=60, max_universes=3, seed=2)
-    R.add(g, "پر کردن سرمایهٔ بیکار جزو ابعاد جستجوی پیش‌فرض است",
-          all(d in st.space for d in ("fill_mode", "fill_max_rel_pct", "fill_exit_rel_pct")), "")
     rng = random.Random(4)
     bad = []
     n_on = 0

@@ -112,7 +112,7 @@ class DiscountParams:
     index_entry_pct: float = 0.30       # enter (index modes) when the bubble index ≤ −this %
     index_exit_pct: float = 0.0         # exit  (mode "index") when the bubble index ≥ −this %
     index_min_share: float = 0.5        # share of the funds that must have quoted today
-    mr_center: str = "self"             # off | zero | category | self  (mean-reversion eligibility filter)
+    mr_center: str = "off"              # off | zero | category | self  (mean-reversion eligibility filter)
     mr_window_days: int = 20            # trading days of history the score is computed from
     mr_min_score: float = 50.0          # 0-100; below this the fund is not tradable that day
     mr_horizon_days: int = 5            # score = share of the gap expected to close within this
@@ -120,14 +120,14 @@ class DiscountParams:
     fill_mode: str = "hold"             # off | best (park idle cash in the best-ranked fund) | hold (always invested: the
                                         #   parker IS the strategy; a position is sold ONLY to switch into a better candidate)
     fill_switch_pct: float = 0.8        # hold: switch only if the candidate's bubble is this many % points below the held fund's
-    fill_min_hold_min: int = 0          # hold: a holding cannot be switched out before it was held this many minutes (0 = off)
+    fill_min_hold_min: int = 60         # hold: a holding cannot be switched out before it was held this many minutes (0 = off)
     fill_quote_age_min: int = 90        # a fund's latest quote counts as "current" (candidate / sellable) for this many minutes
     fill_max_rel_pct: float = 0.1       # park only into a fund trading at or below its own norm + this %
     fill_exit_rel_pct: float = 0.3      # sell a parked position once it trades this % above its norm
     crash_drop_pct: float = 1.5         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
-    crash_window_min: int = 60          # look-back (minutes) over which the group's price change is measured
-    crash_cooldown_min: int = 60        # temporary stop: entries stay blocked this many minutes after the last trigger
-    crash_scope: str = "all"            # category = funds of the same category | all = every selected fund
+    crash_window_min: int = 30          # look-back (minutes) over which the group's price change is measured
+    crash_cooldown_min: int = 120       # temporary stop: entries stay blocked this many minutes after the last trigger
+    crash_scope: str = "category"       # category = funds of the same category | all = every selected fund
     stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
     baseline_days: int = 0              # per-fund typical discount window (trading days); 0 = off
@@ -140,8 +140,8 @@ class DiscountParams:
     tse_grid_sec: int = 300             # tse: sampling step of the book / tape (seconds)
     exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
-    max_nav_age_days: int = 3           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
-    max_nav_age_min: int = 120          # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
+    max_nav_age_days: int = 2           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
+    max_nav_age_min: int = 60           # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
     session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
     session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
     session_end: int = 123000
