@@ -753,11 +753,24 @@ class Study:
         main = getattr(sys.modules.get("__main__"), "__file__", None)
         if not main or not os.path.exists(main):     # (an interactive session: worker processes cannot start)
             return None
+        shared = None
+        try:                                   # hand the data this process already prepared to every worker
+            import tempfile
+            import tse_dataset as TD
+            if TD._LOADS:
+                fd, shared = tempfile.mkstemp(prefix="disc_shared_", suffix=".pkl")
+                os.close(fd)
+                if not TD.export_loads(shared):
+                    os.remove(shared)
+                    shared = None
+        except Exception:
+            shared = None
+        self._shared_file = shared
         try:
             import multiprocessing as mp
             from concurrent.futures import ProcessPoolExecutor
             return ProcessPoolExecutor(max_workers=self.workers, mp_context=mp.get_context("spawn"),
-                                       initializer=_w_init, initargs=(str(path), self._args))
+                                       initializer=_w_init, initargs=(str(path), self._args, shared))
         except Exception:
             return None
 
@@ -900,6 +913,13 @@ class Study:
         finally:
             if pool is not None:
                 pool.shutdown()
+            sf = getattr(self, "_shared_file", None)
+            if sf:
+                try:
+                    import os
+                    os.remove(sf)
+                except OSError:
+                    pass
         for ci, slow in enumerate(combos if not self.parallel or getattr(self, "parallel_error", None) else []):
             # every structural combination gets an equal share of the time budget
             slice_end = time.time() + max(2.0, (search_end - time.time()) / max(1, len(combos) - ci))
@@ -1316,11 +1336,20 @@ def _auto_workers() -> int:
 _W = None                      # the study replica of a worker process
 
 
-def _w_init(path: str, args: dict) -> None:
+def _w_init(path: str, args: dict, shared: str | None = None) -> None:
     global _W
     from pathlib import Path
     from database import Database
     db = Database(Path(path))
+    if shared:
+        try:                                   # the parent's prepared order-book data: one file, read once
+            import tse_dataset as TD
+            c0 = _cache_stats()
+            TD.import_loads(shared, db)
+            c1 = _cache_stats()
+            _W_INIT.update({k: c1[k] - c0.get(k, 0) for k in c1 if k.startswith("shared")})
+        except Exception:
+            pass
     st = Study(db, **args, workers=1)
     st._open(db)
     _W = st
@@ -1334,6 +1363,15 @@ def _cache_stats() -> dict:
         return {}
 
 
+_W_INIT: dict = {}                     # cache stats of the worker's start-up (reported with its first task)
+
+
+def _w_init_stats() -> dict:
+    out = dict(_W_INIT)
+    _W_INIT.clear()
+    return out
+
+
 def _w_eval(job):
     cfg, src = job
     l0, n0 = _W.tm["load_s"], _W.tm["loads"]
@@ -1343,8 +1381,10 @@ def _w_eval(job):
     except Exception:
         rec = None
     c1 = _cache_stats()
-    return rec, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0,
-                 "cache": {k: c1[k] - c0.get(k, 0) for k in c1}}
+    cache = {k: c1[k] - c0.get(k, 0) for k in c1}
+    for k, v in _w_init_stats().items():
+        cache[k] = cache.get(k, 0) + v
+    return rec, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0, "cache": cache}
 
 
 def _w_eval_combo(job):
@@ -1361,8 +1401,10 @@ def _w_eval_combo(job):
         except Exception:
             recs.append(None)
     c1 = _cache_stats()
-    return recs, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0,
-                  "cache": {k: c1[k] - c0.get(k, 0) for k in c1}}
+    cache = {k: c1[k] - c0.get(k, 0) for k in c1}
+    for k, v in _w_init_stats().items():
+        cache[k] = cache.get(k, 0) + v
+    return recs, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0, "cache": cache}
 
 
 def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.DiscountParams | None = None,

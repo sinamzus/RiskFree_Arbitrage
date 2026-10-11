@@ -648,3 +648,35 @@ def _clock_result(db, funds, trades, devs, rows_in, rows_out, cache) -> dict:
             "rows_checked": tot, "rows_outside_window_pct": round(rows_out / tot * 100, 1) if tot else None,
             "trade_legs_checked": t_n, "trade_legs_outside_window": t_out,
             "trade_legs_outside_pct": round(t_out / t_n * 100, 1) if t_n else None, "examples": ex}
+
+
+# --------------------------------------------------------------------------- #
+#  Sharing the prepared data with the optimizer's worker processes            #
+# --------------------------------------------------------------------------- #
+
+def export_loads(path: str) -> int:
+    """Write every prepared fund history held in memory to ONE file (plain pickle, no compression): the optimizer's
+    workers read it once at start instead of each querying / decompressing the disk cache fund by fund."""
+    import pickle
+    items = [(k, rows, dict(book), bool(getattr(book, "hybrid", False)), book.sid)
+             for k, (rows, book) in _LOADS.items() if isinstance(book, Book)]
+    with open(path, "wb") as f:
+        pickle.dump(items, f, protocol=pickle.HIGHEST_PROTOCOL)
+    return len(items)
+
+
+def import_loads(path: str, db) -> int:
+    """Counterpart of ``export_loads`` in a worker: fill the in-memory cache (same keys: same database file)."""
+    import pickle
+    import time as _t
+    t0 = _t.time()
+    with open(path, "rb") as f:
+        items = pickle.load(f)
+    for k, rows, d, hyb, sid in items:
+        book = Book(db, sid)
+        book.hybrid = hyb
+        dict.update(book, d)
+        _LOADS[k] = (rows, book)
+    CACHE_STATS["shared"] = CACHE_STATS.get("shared", 0) + len(items)
+    CACHE_STATS["shared_s"] = CACHE_STATS.get("shared_s", 0.0) + (_t.time() - t0)
+    return len(items)
