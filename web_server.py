@@ -2093,6 +2093,21 @@ def create_app(db, scan_callback=None):
         res["bytes"] = sum(len(v) for v in files.values())
         return jsonify(res), (200 if res.get("ok") else 502)
 
+    @app.route("/api/disc/trade_moment")
+    def api_disc_trade_moment():
+        """Order book + every fund's bubble at a backtest trade's instant (hover in the trades table)."""
+        from discount_inspect import trade_moment
+        try:
+            cats = [c for c in (request.args.get("cats") or "").split(",") if c]
+            syms = [x for x in (request.args.get("symbols") or "").split(",") if x]
+            res = trade_moment(db, cats or None, syms or None, request.args.get("focus", ""),
+                               int(request.args.get("date")), int(request.args.get("time")),
+                               float(request.args.get("base", 0) or 0))
+            return jsonify(res)
+        except Exception as e:
+            logger.exception("trade_moment failed")
+            return jsonify({"error": str(e)}), 400
+
     @app.route("/api/disc/study_space")
     def api_disc_study_space():
         from discount_study import space_info

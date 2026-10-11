@@ -1668,6 +1668,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
   pointer-events: none; min-width: 220px;
 }
 #bt-ob-pop .bt-pop-h { font-size: 10px; font-weight: 700; margin-bottom: 5px; }
+#bt-ob-pop.disc-wide { min-width: 360px; max-width: 460px; }
+#bt-ob-pop .dm-sig { font-size: 11px; line-height: 1.7; margin: 4px 0 6px; }
+#bt-ob-pop .dm-tbl { font-size: 10px; border-collapse: collapse; width: 100%; margin-top: 6px; }
+#bt-ob-pop .dm-tbl td, #bt-ob-pop .dm-tbl th { padding: 1px 4px; text-align: center; border-bottom: 1px solid var(--brd); }
+#bt-ob-pop .dm-tbl tr.dm-me td { font-weight: 700; background: rgba(79,163,255,.12); }
+td.disc-obc { cursor: help; }
 </style>
 </head>
 <body>
@@ -7520,11 +7526,12 @@ function discRenderTrades(res) {
     const c = discCls(t.net_pnl);
     const why = {signal:'سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده', rotate:'باز کردن جا'}[t.exit_reason] || t.exit_reason;
     const wcell = t.why ? `<td style="text-align:start;white-space:nowrap" title="${t.why.label} — کلیک روی ردیف: تفسیر کامل"><span class="neg">▸ ${t.why.label}</span></td>` : '<td></td>';
-    return `<tr ${t.why ? `onclick="discToggleWhy(${i})" style="cursor:pointer"` : ''}><td>${t.origin === 'fill' ? '<span title="معاملهٔ پر کردن سرمایهٔ بیکار">⟳ </span>' : ''}${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td>${discFmt(t.entry_price)}</td>
-      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}${showMr ? `<td>${t.mr_score == null ? '—' : t.mr_score}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td>${discFmt(t.exit_price)}</td>
+    return `<tr ${t.why ? `onclick="discToggleWhy(${i})" style="cursor:pointer"` : ''}><td>${t.origin === 'fill' ? '<span title="معاملهٔ پر کردن سرمایهٔ بیکار">⟳ </span>' : ''}${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td class="disc-obc" data-i="${i}" data-side="buy" title="اردربوک، سیگنال و حباب در لحظهٔ خرید">${discFmt(t.entry_price)} <span style="color:var(--muted);font-size:9px">📖</span></td>
+      <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}${showMr ? `<td>${t.mr_score == null ? '—' : t.mr_score}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td class="disc-obc" data-i="${i}" data-side="sell" title="اردربوک، سیگنال و حباب در لحظهٔ فروش">${discFmt(t.exit_price)} <span style="color:var(--muted);font-size:9px">📖</span></td>
       <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td>${showIdx ? `<td>${t.idx_exit_pct == null ? '—' : t.idx_exit_pct + '%'}</td>` : ''}<td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
       <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td>${wcell}</tr>${discWhyDetail(t, i, ncol)}`;
   }).join('');
+  setTimeout(discAttachObHover, 0);
   document.getElementById('disc-trades').innerHTML = `${discLossHtml(res)}
     <div class="disc-h" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">معاملات${idxs.length > LIM ? ` (${LIM} مورد اول از ${idxs.length})` : ` (${idxs.length})`}
       <label class="chk" title="فقط معاملات زیان‌ده را نشان بده؛ روی هر ردیف کلیک کنید تا تفسیر علت زیان باز شود"><input type="checkbox" ${_discOnlyLoss ? 'checked' : ''} onchange="_discOnlyLoss = this.checked; discRenderTrades(window._discLastRes)"> فقط زیان‌ده‌ها</label></div>
@@ -7533,6 +7540,98 @@ function discRenderTrades(res) {
       <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (خروج)</th>' : ''}<th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
       <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th><th>تفسیر زیان</th>
     </tr></thead><tbody>${rows || `<tr><td colspan="${ncol}" style="color:var(--muted)">${all.length ? 'معاملهٔ زیان‌ده‌ای نیست.' : 'معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.'}</td></tr>`}</tbody></table></div>`;
+}
+
+// ── hover a buy / sell price: the real order book, the signal and every fund's bubble at that instant ──
+const _discMomCache = {};
+let _discObCell = null;
+
+function discAttachObHover() {
+  const box = document.getElementById('disc-trades');
+  if (!box || box._obHover) return;
+  box._obHover = true;
+  box.addEventListener('mouseover', e => { const c = e.target.closest('td.disc-obc'); if (c) discShowOb(c, e); });
+  box.addEventListener('mousemove', e => { if (e.target.closest('td.disc-obc')) moveBtOb(e); });
+  box.addEventListener('mouseout', e => {
+    const c = e.target.closest('td.disc-obc');
+    if (c && !c.contains(e.relatedTarget)) { _discObCell = null; hideBtOb(); document.getElementById('bt-ob-pop').classList.remove('disc-wide'); }
+  });
+}
+
+function _dmLevels(book) {
+  // the bond renderer's snapshot shape: b1p, b1v ... a5p, a5v
+  const s = {};
+  (book.bids || []).slice(0, 5).forEach((x, k) => { s[`b${k + 1}p`] = x[0]; s[`b${k + 1}v`] = x[1]; });
+  (book.asks || []).slice(0, 5).forEach((x, k) => { s[`a${k + 1}p`] = x[0]; s[`a${k + 1}v`] = x[1]; });
+  return s;
+}
+
+async function discShowOb(cell, ev) {
+  if (cell === _discObCell) { moveBtOb(ev); return; }
+  _discObCell = cell;
+  const res = window._discLastRes || {};
+  const all = res.trades || [];
+  const t = all[+cell.dataset.i]; if (!t) return;
+  const side = cell.dataset.side, buy = side === 'buy';
+  const date = buy ? t.entry_date : t.exit_date, time = buy ? t.entry_time : t.exit_time;
+  const pop = document.getElementById('bt-ob-pop');
+  pop.classList.add('disc-wide');
+  pop.style.display = 'block';
+  pop.innerHTML = '<div class="bt-pop-h">در حال بارگذاری اردربوک و حباب‌ها ...</div>';
+  moveBtOb(ev);
+  const syms = [...new Set(all.map(x => x.symbol))];
+  const key = `${t.symbol}|${date}|${time}`;
+  let m = _discMomCache[key];
+  if (!m) {
+    const q = new URLSearchParams({focus: t.symbol, date, time, cats: (res.cats || []).join(','), symbols: syms.join(','),
+                                   base: t.base_pct || 0});
+    const r = await fetch('/api/disc/trade_moment?' + q).catch(() => null);
+    m = r && r.ok ? await r.json() : {error: 'خطا در دریافت'};
+    if (!m.error) _discMomCache[key] = m;
+  }
+  if (_discObCell !== cell) return;
+  if (m.error) { pop.innerHTML = `<div class="bt-pop-h">${m.error}</div>`; return; }
+  const p = res.params || {};
+  const me = (m.funds || []).find(f => f.symbol === t.symbol) || {};
+  const pc = v => v == null ? '—' : `<b dir="ltr">${(v >= 0 ? '+' : '') + (+v).toFixed(2)}%</b>`;
+  const hm = x => String(x).padStart(6, '0').replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2:$3');
+  let sig = '';
+  if (buy) {
+    const thr = p.fill_mode === 'hold' || p.fill_mode === 'best' ? p.fill_max_rel_pct : -p.entry_discount_pct;
+    const okL = me.bubble_last_pct != null && thr != null && me.bubble_last_pct <= thr + 1e-9;
+    const okA = me.bubble_ask_pct == null || (thr != null && me.bubble_ask_pct <= thr + 1e-9);
+    const cand = (m.funds || []).filter(f => f.bubble_ask_pct != null || f.bubble_last_pct != null)
+      .map(f => ({s: f.symbol, v: Math.max(f.bubble_last_pct ?? -1e9, f.bubble_ask_pct ?? -1e9)})).sort((a, b) => a.v - b.v);
+    const rank = cand.findIndex(c => c.s === t.symbol) + 1;
+    sig = `حباب با آخرین قیمت ${pc(me.bubble_last_pct)} · با <span style="color:var(--red)">سر صف فروش</span> ${pc(me.bubble_ask_pct)}
+      ${thr != null ? ` · حد ورود ${pc(thr)}` : ''}<br>
+      ${okL && okA ? '✔ هر دو شرط (آخرین قیمت و سر صف فروش) برقرار' : '⚠ یکی از دو شرط در این لحظه برقرار نیست (ممکن است تصمیم در اسنپ‌شات دیگری/با تأخیر گرفته شده باشد)'}
+      ${rank ? ` · رتبهٔ حباب بین ${cand.length} صندوق: <b>${rank}</b>` : ''}`;
+  } else {
+    const rep = t.exit_reason === 'rotate' ? all.find(x => x !== t && x.entry_date === t.exit_date && x.entry_time === t.exit_time) : null;
+    const rm = rep ? (m.funds || []).find(f => f.symbol === rep.symbol) : null;
+    const held = Math.min(me.bubble_last_pct ?? 1e9, me.bubble_bid_pct ?? 1e9);
+    const cv = rm ? Math.max(rm.bubble_last_pct ?? -1e9, rm.bubble_ask_pct ?? -1e9) : null;
+    sig = `حباب با آخرین قیمت ${pc(me.bubble_last_pct)} · با <span style="color:var(--green)">سر صف خرید</span> ${pc(me.bubble_bid_pct)}<br>
+      علت فروش: <b>${{rotate: 'جابه‌جایی با کاندیدای بهتر', end: 'پایان داده', signal: 'سیگنال خروج', stop: 'حد ضرر', time: 'سقف زمان'}[t.exit_reason] || t.exit_reason}</b>
+      ${rep ? `<br>جایگزین: <b>${rep.symbol}</b> با حباب (سر صف فروش) ${pc(rm && rm.bubble_ask_pct)}
+         ${cv != null && held < 1e8 ? ` → برتری ${pc(held - cv)} (آستانهٔ جابه‌جایی ${pc(p.fill_switch_pct)})` : ''}` : ''}`;
+  }
+  const others = (m.funds || []).slice().sort((a, b) =>
+    (buy ? (a.bubble_ask_pct ?? a.bubble_last_pct ?? 99) - (b.bubble_ask_pct ?? b.bubble_last_pct ?? 99)
+         : (b.bubble_bid_pct ?? b.bubble_last_pct ?? -99) - (a.bubble_bid_pct ?? a.bubble_last_pct ?? -99))).slice(0, 8);
+  if (!others.some(f => f.symbol === t.symbol) && me.symbol) others.push(me);
+  const tbl = `<table class="dm-tbl"><thead><tr><th>صندوق</th><th>حباب (آخرین)</th><th>حباب (${buy ? 'سر صف فروش' : 'سر صف خرید'})</th><th>سن قیمت</th></tr></thead><tbody>
+    ${others.map(f => `<tr class="${f.symbol === t.symbol ? 'dm-me' : ''}"><td>${f.symbol}</td><td>${pc(f.bubble_last_pct)}</td>
+      <td>${pc(buy ? f.bubble_ask_pct : f.bubble_bid_pct)}</td><td>${f.age_min} د</td></tr>`).join('')}</tbody></table>`;
+  const col = buy ? 'var(--green)' : 'var(--red)';
+  pop.innerHTML = `<div class="bt-pop-h" style="color:${col}">${t.symbol} · ${buy ? 'خرید ← از صف فروش' : 'فروش ← به صف خرید'} · ${gregIntToJalaliStr(date)} ${hm(time)}</div>
+    <div class="dm-sig">NAV ${discFmt(me.nav)} (ساعت ${me.nav_time ? hm(me.nav_time) : '—'}) · آخرین قیمت ${discFmt(me.last)} · قیمت اجرا <b>${discFmt(buy ? t.entry_price : t.exit_price)}</b><br>${sig}</div>
+    ${m.book ? bondOBTableHtml(_dmLevels(m.book), side, buy ? t.entry_price : t.exit_price)
+             : '<div class="bt-pop-h" style="color:var(--muted)">اردربوکی برای این لحظه ثبت نشده (دادهٔ TSE این روز جمع نشده)</div>'}
+    ${m.book_source === 'snapshots' ? '<div style="font-size:9px;color:var(--muted)">منبع: اسنپ‌شات‌های اردربوک خود برنامه</div>' : ''}
+    <div style="font-size:10px;color:var(--sub);margin-top:6px">${buy ? 'ارزان‌ترین' : 'گران‌ترین'} صندوق‌ها در همین لحظه:</div>${tbl}`;
+  moveBtOb(ev);
 }
 
 async function discBubFocus(i) {

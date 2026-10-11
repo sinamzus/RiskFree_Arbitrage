@@ -1210,6 +1210,28 @@ def test_tse_dataset(R: Results, db_path: str):
     neg = sum(1 for arr in (pre["xb"][0] or []) + (pre["xs"][0] or []) if arr < 0)
     R.add(g, "سیگنال دوتأییدی: هر ورود هم با آخرین قیمت و هم با سر صف فروش شرط را دارد؛ اردربوک هرگز سیگنال را آسان‌تر نمی‌کند",
           not bad and n > 0 and neg == 0, "؛ ".join(bad[:3]) or f"{n} ورود، اصلاح منفی: {neg}")
+    # hover in the trades table: the book / bubbles at a trade's instant are exactly what the backtest saw
+    from web_server import create_app
+    cl = create_app(db).test_client()
+    bad, n = [], 0
+    for t in rhy["trades"][:12]:
+        for side, d, tm, px in (("buy", t["entry_date"], t["entry_time"], t["entry_price"]),
+                                ("sell", t["exit_date"], t["exit_time"], t["exit_price"])):
+            r = cl.get(f"/api/disc/trade_moment?focus={t['symbol']}&date={d}&time={tm}&cats=gold&base={t['base_pct']}")
+            j = r.get_json() or {}
+            if r.status_code != 200 or not j.get("book"):
+                bad.append(f"{t['symbol']} {side}: {r.status_code} {j.get('error')}")
+                continue
+            n += 1
+            lv = j["book"]["asks"] if side == "buy" else j["book"]["bids"]
+            lo, hi = min(x[0] for x in lv), max(x[0] for x in lv)
+            if not (lo - 0.02 <= px <= hi + 0.02):
+                bad.append(f"{t['symbol']} {side} {px} خارج از {lo}–{hi}")
+            me = next((f for f in j["funds"] if f["symbol"] == t["symbol"]), None)
+            if me is None or me["bubble_last_pct"] is None or len(j["funds"]) < 2:
+                bad.append(f"{t['symbol']} {side}: حباب‌ها ناقص")
+    R.add(g, "نمایش اردربوک و حباب در لحظهٔ هر خرید و فروش (hover): همان صف‌هایی که بک‌تست با آن معامله کرد",
+          not bad and n > 0, "؛ ".join(bad[:3]) or f"{n} لحظه")
     ck = rhy["dataset"].get("clock") or {}
     R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است؛ هیچ معامله‌ای بیرون از ساعت بازار نیست",
           ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0
