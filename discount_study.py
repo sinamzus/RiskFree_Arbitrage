@@ -494,6 +494,12 @@ class Study:
             s["t_stat"] = (_mean(nets) / (sd / math.sqrt(n))) if n >= 5 and sd > 1e-12 else None
         return s
 
+    def _run_once(self, p, U):
+        d0, d1 = self.dates[0], self.dates[-1]
+        marks: list = []
+        acc, _s, _c = D._portfolio_summary([], p, d0, d1, fill=self._fill_ctx(U, d0, d1), marks=marks)
+        return acc, marks
+
     def _passive(self, U) -> dict:
         """Equal-weight buy-and-hold of the same funds over every block / region (no fees)."""
         def span(lo, hi):
@@ -528,12 +534,23 @@ class Study:
         if not U["items"]:
             return None
         trades = V._sim_all(U, p)
-        blocks = []
-        for lo, hi in self.bounds:
-            s = self._summ(trades, p, lo, hi, U=U)
-            blocks.append({"ret": s["portfolio_return_pct"], "n": s["trade_count"], "win": s["win_rate"]})
-        tr = self._summ(trades, p, *self.train_rng, U=U)
-        ho = self._summ(trades, p, *self.hold_rng, with_t=True, U=U)
+        if p.fill_mode == "hold" and not trades:
+            # "always invested": ONE continuous run over the whole period; every block / region is read from its
+            # daily liquidation-value marks (the strategy is not restarted flat at each block boundary)
+            acc, marks = self._run_once(p, U)
+            blocks = []
+            for lo, hi in self.bounds:
+                s = _window(acc, marks, lo, hi, p)
+                blocks.append({"ret": s["portfolio_return_pct"], "n": s["trade_count"], "win": s["win_rate"]})
+            tr = _window(acc, marks, *self.train_rng, p)
+            ho = _window(acc, marks, *self.hold_rng, p, with_t=True)
+        else:
+            blocks = []
+            for lo, hi in self.bounds:
+                s = self._summ(trades, p, lo, hi, U=U)
+                blocks.append({"ret": s["portfolio_return_pct"], "n": s["trade_count"], "win": s["win_rate"]})
+            tr = self._summ(trades, p, *self.train_rng, U=U)
+            ho = self._summ(trades, p, *self.hold_rng, with_t=True, U=U)
         rets = [b["ret"] for b in blocks[:self.T]]
         robust = _mean(rets) - 0.5 * _std(rets)
         if self.objective == "robust":
@@ -1150,6 +1167,46 @@ class Study:
             "walk_forward": {"rows": wf, "stats": wf_stats},
             "sensitivity": sens, "scatter": scatter, "findings": findings, "passive": self.passive,
         }
+
+
+def _window(acc: list, marks: list, lo: int, hi: int, p: D.DiscountParams, with_t: bool = False) -> dict:
+    """Summary of [lo, hi] read from one continuous run: return / drawdown / exposure from the daily liquidation-value
+    marks (start = the last mark before ``lo``, or the initial capital), trades = those entered in the window."""
+    cap = float(p.initial_capital)
+    start, a_area, a_t = cap, 0.0, 0
+    path = []
+    for d, eq, area, el in marks:
+        if d < lo:
+            start, a_area, a_t = eq, area, el
+        elif d <= hi:
+            path.append((eq, area, el))
+    end = path[-1][0] if path else start
+    ret = end / start - 1.0 if start > 0 else 0.0
+    peak, dd = start, 0.0
+    for eq, _a, _e in path:
+        peak = max(peak, eq)
+        if peak > 0:
+            dd = max(dd, (peak - eq) / peak)
+    span = (path[-1][2] - a_t) if path else 0
+    expo = (path[-1][1] - a_area) / span * 100 if span > 0 else 0.0
+    ts = [t for t in acc if lo <= t.entry_date <= hi]
+    nets = [t.net_pct for t in ts]
+    wins = sum(1 for t in ts if t.net_pnl > 0)
+    gain = sum(t.net_pnl for t in ts if t.net_pnl > 0)
+    loss = -sum(t.net_pnl for t in ts if t.net_pnl < 0)
+    years = max(1, D._ord(hi) - D._ord(lo)) / 365.0
+    s = {"portfolio_return_pct": round(ret * 100, 3), "trade_count": len(ts),
+         "win_rate": round(wins / len(ts) * 100, 1) if ts else 0.0,
+         "profit_factor": round(gain / loss, 2) if loss > 0 else 0,
+         "max_drawdown_pct": round(dd * 100, 3),
+         "cagr_pct": round(((1 + ret) ** (1 / years) - 1) * 100, 2) if years >= 30 / 365.0 and ret > -1 else None,
+         "final_capital": round(cap * (1 + ret), 0), "net_profit": round(cap * ret, 0),
+         "avg_exposure_pct": round(expo, 1)}
+    if with_t:
+        n = len(nets)
+        sd = _std(nets) * math.sqrt(n / (n - 1)) if n > 2 else 0.0
+        s["t_stat"] = (_mean(nets) / (sd / math.sqrt(n))) if n >= 5 and sd > 1e-12 else None
+    return s
 
 
 def _auto_workers() -> int:

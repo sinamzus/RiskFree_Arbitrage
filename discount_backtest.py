@@ -1016,10 +1016,14 @@ def _sec(t: int) -> int:
 
 
 def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False,
-            fill: dict | None = None):
+            fill: dict | None = None, marks: list | None = None):
     """Replay maximum-liquidity trades against ONE capital pool, in time order.
 
     Returns (accepted_trades, portfolio_dict, equity_curve, skipped_positions).
+
+    ``marks`` (a list, "hold" mode): receives one entry per trading day, (date, liquidation equity at the end of the
+    day, cumulative exposure-seconds, elapsed seconds) — the open positions valued at the bid net of the sell fee —
+    so any sub-period's return, drawdown and exposure can be read from ONE run.
     A position (all its exit chunks) is scaled by f = min(1, affordable/intended):
     intended = position_pct % of book capital (cash + open cost); affordable = cash.
     P&L is linear in size, so scaling a trade is exact (no market impact modelled).
@@ -1088,10 +1092,19 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
             if peak > 0:
                 max_dd = max(max_dd, (peak - eq2) / peak)
 
+    mk = {"day": None, "date": None}
+
     def run_parker(limit_ts):
         nonlocal cash, invested, peak_exp
         while parker is not None and parker.peek_ts() is not None and (limit_ts is None or parker.peek_ts() < limit_ts):
             T, grp = parker.pop_group()
+            if marks is not None and T // 86400 != mk["day"]:
+                if mk["day"] is not None:                   # the previous day is over: value the book as it stands
+                    advance(T)
+                    marks.append((mk["date"], parker.mtm(cash, invested), exp_area, last_ts - start_ts))
+                mk["day"] = T // 86400
+            k0_, i0_ = grp[0]
+            mk["date"] = parker.rows[k0_][i0_][1]
             advance(T)
             n0 = len(parker.out)
             cash, invested = parker.step(T, grp, cash, invested)
@@ -1182,6 +1195,8 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
         if want_exposure:
             eq = cash + invested
             exp_curve.append([d1, 235959, round(invested / eq * 100, 3) if eq > 0 else 0.0])
+    if marks is not None and mk["date"] is not None:
+        marks.append((mk["date"], final, exp_area, last_ts - start_ts))
     total_s = max(1, end_ts - start_ts)
     span_days = max(1, _ord(d1) - first_ord)
     years = span_days / 365.0
@@ -1400,6 +1415,20 @@ class _Parker:
             del self.parked[k]
         return sell_n * (1 - sf), -cost_part
 
+    def mtm(self, cash: float, invested: float) -> float:
+        """Liquidation value of the book now: cash + every parked position at its latest bid, net of the sell fee."""
+        p = self.p
+        hs, sf = p.half_spread_pct / 100.0, p.sell_fee
+        v = cash
+        for k, pos in self.parked.items():
+            i = self.cur_i[k]
+            if i < 0:
+                v += pos["cost"]
+                continue
+            _o, d, t, _n, last, _f, _r = self.rows[k][i]
+            v += pos["units"] * _best(self.book[k], d, t, 0, last * (1 - hs)) * (1 - sf)
+        return v
+
     def make_room(self, symbol: str, need_cash: float, cash: float, invested: float, ts: int) -> tuple[float, float]:
         """A normal entry on ``symbol`` needs ``need_cash`` at instant ``ts``: hand back the same fund, then the
         biggest others (sold at the latest known bid)."""
@@ -1584,8 +1613,8 @@ class _Parker:
 
 
 def _portfolio_summary(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False,
-                       fill: dict | None = None):
-    accepted, pf, curve, skipped = _replay(trades, p, d0, d1, want_exposure, fill)
+                       fill: dict | None = None, marks: list | None = None):
+    accepted, pf, curve, skipped = _replay(trades, p, d0, d1, want_exposure, fill, marks)
     s = _summarize(accepted, p.initial_capital)
     s.update(pf)
     s["max_drawdown_pct"] = pf["max_equity_drawdown_pct"]

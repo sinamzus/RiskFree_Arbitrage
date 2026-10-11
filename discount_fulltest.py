@@ -1238,6 +1238,28 @@ def test_tse_dataset(R: Results, db_path: str):
             pass
 
 
+def test_window_marks(R: Results, db):
+    """Optimizer, "hold" mode: one continuous run read per block from daily liquidation-value marks. The blocks
+    must chain exactly into the whole period, and the whole period must equal the ordinary backtest."""
+    g = "بهینه‌سازی موازی"
+    hp = _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=50)
+    st = S.Study(db, None, None, None, None, hp, {"fill_switch_pct": [0.8]}, blocks=5, min_trades=1, workers=1)
+    st._open(db)
+    U = st._universe(hp)
+    acc, marks = st._run_once(hp, U)
+    whole = S._window(acc, marks, st.dates[0], st.dates[-1], hp)
+    chain = 1.0
+    for lo, hi in st.bounds:
+        chain *= 1 + S._window(acc, marks, lo, hi, hp)["portfolio_return_pct"] / 100
+    _a, ref, _c = D._portfolio_summary([], hp, st.dates[0], st.dates[-1], fill=st._fill_ctx(U, st.dates[0], st.dates[-1]))
+    ok = (abs(whole["portfolio_return_pct"] - ref["portfolio_return_pct"]) < 1e-3
+          and abs((chain - 1) * 100 - whole["portfolio_return_pct"]) < 1e-2 and len(marks) > 10
+          and whole["trade_count"] == ref["trade_count"])
+    R.add(g, "یک اجرای پیوسته: بلوک‌ها دقیقاً به کل دوره زنجیر می‌شوند و کل دوره = بک‌تست عادی", ok,
+          f"کل {whole['portfolio_return_pct']} / بک‌تست {ref['portfolio_return_pct']} / زنجیر بلوک‌ها {round((chain - 1) * 100, 3)}"
+          f" / معامله {whole['trade_count']} و {ref['trade_count']}")
+
+
 def test_parallel_study(R: Results, db):
     """The optimizer's parallel workers (separate processes) must find exactly what one process finds."""
     import sys as _sys
@@ -1697,7 +1719,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
-             ("بهینه‌سازی موازی", lambda: test_parallel_study(R, db)),
+             ("بهینه‌سازی موازی", lambda: (test_window_marks(R, db), test_parallel_study(R, db))),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: test_tse_dataset(R, path)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
