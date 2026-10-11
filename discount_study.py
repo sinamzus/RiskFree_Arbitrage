@@ -315,6 +315,7 @@ class Study:
         self.cats, self.symbols, self.start, self.end = cats, symbols, start, end
         self.base = base
         self.space = {k: [v for v in vs] for k, vs in space.items() if k in DIMS and vs}
+        self.tm = {"load_s": 0.0, "loads": 0, "eval_s": 0.0, "evals": 0}
         if self.base.dataset != "dump":
             self.space.pop("half_spread_pct", None)     # fills walk the real order book: no assumed spread to search
         self.n_samples = max(20, int(n_samples))
@@ -445,7 +446,10 @@ class Study:
             # when the market-fall filter is part of the study the series must exist even for configs whose
             # own threshold is 0 (they share the universe with the others)
             p_load = replace(p, crash_drop_pct=max(p.crash_drop_pct, 1e-6)) if self._crash_searched else p
+            t0 = time.time()
             U = V.load_universe(self.db_raw, self.cats, self.symbols, self.start, self.end, p_load)
+            self.tm["load_s"] += time.time() - t0
+            self.tm["loads"] += 1
             self.cache_u[k] = U
             self.cache_order.append(k)
             while len(self.cache_order) > 3:                 # keep memory bounded
@@ -497,7 +501,17 @@ class Study:
                 "train": _num(span(*self.train_rng), 2), "hold": _num(span(*self.hold_rng), 2)}
 
     def evaluate(self, cfg: dict, src: str = "random", base_override: D.DiscountParams | None = None):
-        """Simulate one configuration over the whole period; returns the record or None."""
+        """Simulate one configuration over the whole period; returns the record or None (timed)."""
+        t0 = time.time()
+        n0 = self.tm["load_s"]
+        try:
+            return self._evaluate(cfg, src, base_override)
+        finally:
+            dt_ = time.time() - t0
+            self.tm["evals"] += 1
+            self.tm["eval_s"] += dt_ - (self.tm["load_s"] - n0)      # simulation only (data loading counted apart)
+
+    def _evaluate(self, cfg: dict, src: str = "random", base_override: D.DiscountParams | None = None):
         base = base_override or self.base
         c = _normalize(cfg, base)
         key = _ckey(c)
@@ -1021,6 +1035,10 @@ class Study:
         scatter.append([_num(best["score"], 2), _num(hold_of(best), 2), 1])
         return {
             "verdict": {"overall": overall, "headline": headline, "lights": lights},
+            "timing": {"load_s": round(self.tm["load_s"], 1), "loads": self.tm["loads"],
+                       "eval_s": round(self.tm["eval_s"], 1), "evals": self.tm["evals"],
+                       "eval_avg_s": round(self.tm["eval_s"] / self.tm["evals"], 3) if self.tm["evals"] else None,
+                       "total_s": round(time.time() - self.t0, 1)},
             "setup": {"funds": len(D._universe(self.db_raw, self.cats, self.symbols)),
                       "dates": [self.dates[0], self.dates[-1]], "blocks": [list(b) for b in self.bounds],
                       "train_blocks": self.T, "hold_blocks": self.H,

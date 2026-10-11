@@ -344,6 +344,9 @@ def test_web_wiring(R: Results, db):
         R.add("سیم‌کشی وب", "درخواست بک‌تست با همهٔ پارامترها", False, f"HTTP {r.status_code}: {r.get_data(as_text=True)[:200]}")
         return
     got = r.get_json()["params"]
+    # the assumed spread only exists on the NAV-dump dataset (order-book datasets force it to 0): read it there
+    got["half_spread_pct"] = c.get(f"/api/disc/backtest?symbols=REVA&ds=dump&spread={WEB_MAP['spread'][1]}"
+                                   ).get_json()["params"]["half_spread_pct"]
     bad = []
     for k, (field, _v, exp) in WEB_MAP.items():
         g = got.get(field)
@@ -1164,6 +1167,22 @@ def test_tse_dataset(R: Results, db_path: str):
           "؛ ".join(bad[:3]) or f"{n} معامله")
     # order-book datasets: the assumed spread plays no part; every buy is inside the asks and every sale inside the
     # bids of the book at that very instant (also a switch sale, whose instant is the candidate's snapshot)
+    # the hybrid book is precomputed once and stored: a fresh process (memo cleared) reads it back identically,
+    # and the book at any collected fund's snapshot instant equals a replay of the raw event stream
+    with db._conn() as conn:
+        n_store = conn.execute("SELECT COUNT(*) FROM tse_hybrid").fetchone()[0]
+    TD._LOADS.clear()
+    rhy2 = _run(db, replace(base, dataset="hybrid"))
+    f0 = funds[0]["symbol_id"]
+    _r, bk0 = TD.load_hybrid(db, f0, None, None)
+    d0_ = sorted({k[0] for k in bk0.keys()})[3]
+    inst = TD._union_times(db, [d0_])[d0_]
+    ev = G.load_day(db, f0, d0_, "book")
+    rep_ = TD._book_states(ev, [TD._sec(t) for t in inst])
+    bad = [t for t, st in zip(inst, rep_) if [list(map(list, x)) for x in bk0.at(d0_, t)] != [list(map(list, x)) for x in st]]
+    R.add(g, "اردربوک ترکیبی یک بار ساخته و ذخیره می‌شود؛ خواندن دوباره همان نتیجه را می‌دهد و با بازپخش رویدادها یکی است",
+          n_store > 0 and _sig(rhy2) == _sig(rhy) and not bad and len(inst) > 0,
+          f"{n_store} روز-صندوق ذخیره؛ {len(inst)} لحظه؛ ناهمخوان: {bad[:3]}")
     ck = rhy["dataset"].get("clock") or {}
     R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است؛ هیچ معامله‌ای بیرون از ساعت بازار نیست",
           ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0
@@ -1177,6 +1196,7 @@ def test_tse_dataset(R: Results, db_path: str):
     def _late(sid, s=None, e=None):
         return [(r[0], _hms_add(r[1], 7200), *r[2:]) for r in _orig(sid, s, e)]
     db.get_nav_intraday = _late
+    _TD._CLOCK.clear()                        # (the NAV rows changed behind the database's back)
     try:
         ck2 = _TD.clock_check(db, [(f["symbol_id"], f["symbol"]) for f in funds], None, None, [])
     finally:

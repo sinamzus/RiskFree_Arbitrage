@@ -7001,6 +7001,7 @@ async function discBacktest() {
   if (cardsEl) cardsEl.insertAdjacentHTML('afterbegin', `<div class="dv-note" style="font-size:11px;color:var(--sub)" title="دادهٔ زیر این بک‌تست">دیتاست: <b>${dsi.name === 'hybrid' ? 'سیگنال از دادهٔ NAV، معامله با اردربوک واقعی TSE در همان لحظه' : dsi.name === 'tse'
     ? `TSE: تیک و اردربوک (شبکهٔ ${discLtr(Math.round((dsi.grid_sec || 0) / 60 * 10) / 10)} دقیقه؛ خرید و فروش با قیمت واقعی صف‌ها)` : 'دادهٔ لحظه‌ای NAV (قیمت آخرین معامله + اسپرد فرضی)'}</b> · ${discLtr(dsi.days || 0)} روز معاملاتی${dsi.first ? ` از ${gregIntToJalaliStr(dsi.first)} تا ${gregIntToJalaliStr(dsi.last)}` : ''}</div>`);
   if (cardsEl && dsi.clock) cardsEl.insertAdjacentHTML('afterbegin', discClockHtml(dsi.clock));
+  if (cardsEl && res.timing) cardsEl.insertAdjacentHTML('afterbegin', `<div class="dv-note" style="font-size:11px;color:var(--sub)" title="زمان صرف‌شده: خواندن و آماده‌سازی داده (اردربوک بار اول ساخته و ذخیره می‌شود) / شبیه‌سازی و تحلیل / بررسی ساعت">⏱ آماده‌سازی داده ${discLtr(res.timing.load_s)} ث · شبیه‌سازی ${discLtr(res.timing.sim_s)} ث · بررسی ساعت ${discLtr(res.timing.check_s)} ث · کل ${discLtr(res.timing.total_s)} ث</div>`);
   discTabSet(tab, `بک‌تست ${dsTxt} · ${sm.portfolio_return_pct != null ? (sm.portfolio_return_pct >= 0 ? '+' : '') + sm.portfolio_return_pct + '%' : ''} · ${sm.trade_count ?? 0} معامله`, false);
   window._discLastRes = res;
 }
@@ -8643,6 +8644,8 @@ function renderDiscStudy(res, p) {
   const cards = [
     ['صندوق در مطالعه', S.funds], ['ترکیب تصادفی / واجد شرایط', `${S.n_random} / ${S.n_qualified}`], ['ترکیب پالایشی', S.n_refine],
     ['داده‌سازی ساختاری', S.n_universes + ' بار'], ['زمان', S.seconds + ' ثانیه'],
+    ...(res.timing ? [['آماده‌سازی داده', `${res.timing.load_s} ث (${res.timing.loads} بار)`],
+                      ['شبیه‌سازی', `${res.timing.eval_s} ث · ${res.timing.evals} اجرا · هر اجرا ${res.timing.eval_avg_s} ث`]] : []),
     ['بلوک آموزش / آزمون', `${S.train_blocks} / ${S.hold_blocks}`]].map(([k, x]) => discCard(k, String(x))).join('');
   const bestRows = dims.filter(d => b.cfg[d] != null).map(d => `<tr><td style="text-align:start">${res.setup.labels[d]}</td><td>${dsVal(d, b.cfg[d])}</td>
       <td>${res.default && res.default.cfg[d] != null ? dsVal(d, res.default.cfg[d]) : '—'}</td></tr>`).join('');

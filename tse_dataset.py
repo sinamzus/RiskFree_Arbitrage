@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS tse_window (
     first    INTEGER,
     last     INTEGER
 );
+CREATE TABLE IF NOT EXISTS tse_hybrid (
+    symbol_id INTEGER NOT NULL,
+    date      INTEGER NOT NULL,
+    sig       TEXT    NOT NULL,
+    data      BLOB,
+    PRIMARY KEY (symbol_id, date)
+);
 CREATE TABLE IF NOT EXISTS tse_grid (
     symbol_id INTEGER NOT NULL,
     date      INTEGER NOT NULL,
@@ -128,16 +135,38 @@ def grid_day(db, symbol_id: int, date: int, grid_sec: int) -> list[list] | None:
     return rows
 
 
-def market_window(db, date: int) -> tuple[int, int] | None:
-    """(first, last) second of the day at which ANY collected fund traded on TSE — the market's continuous-trading
-    window. Outside it nothing can be bought or sold, whatever the order book shows. Cached in ``tse_window`` (and
-    rebuilt when more funds of that day are collected)."""
+_WINS: dict = {}            # db -> (tse_raw row count, {date: (first, last) | None})
+
+
+def _all_windows(db) -> dict:
+    """{date: (first, last)} for every collected day, read in bulk and kept per process (refreshed whenever the
+    collected data changes); days whose cached window is out of date are rebuilt from the tapes."""
+    k = _dbkey(db)
+    with db._conn() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM tse_raw").fetchone()[0]
+        hit = _WINS.get(k)
+        if hit is not None and hit[0] == n:
+            return hit[1]
+        cnt = {int(d): int(c) for d, c in conn.execute(
+            "SELECT date, COUNT(*) FROM tse_raw WHERE kind='trades' AND n>0 GROUP BY date")}
+        have = {int(d): (int(nf), lo, hi) for d, nf, lo, hi in conn.execute("SELECT date, n_funds, first, last FROM tse_window")}
+    out, rebuild = {}, []
+    for d, c in cnt.items():
+        h = have.get(d)
+        if h is not None and h[0] == c:
+            out[d] = (h[1], h[2]) if h[1] is not None else None
+        else:
+            rebuild.append(d)
+    for d in rebuild:
+        out[d] = _build_window(db, d)
+    _WINS[k] = (n, out)
+    return out
+
+
+def _build_window(db, date: int) -> tuple[int, int] | None:
     with db._conn() as conn:
         sids = [int(r[0]) for r in conn.execute(
             "SELECT symbol_id FROM tse_raw WHERE date=? AND kind='trades' AND n>0", (date,))]
-        r = conn.execute("SELECT n_funds, first, last FROM tse_window WHERE date=?", (date,)).fetchone()
-    if r is not None and r[0] == len(sids):
-        return (r[1], r[2]) if r[1] is not None else None
     lo = hi = None
     for sid in sids:
         for row in G.load_day(db, sid, date, "trades") or []:
@@ -149,6 +178,13 @@ def market_window(db, date: int) -> tuple[int, int] | None:
     with db._conn() as conn:
         conn.execute("INSERT OR REPLACE INTO tse_window VALUES (?,?,?,?)", (date, len(sids), lo, hi))
     return (lo, hi) if lo is not None else None
+
+
+def market_window(db, date: int) -> tuple[int, int] | None:
+    """(first, last) second of the day at which ANY collected fund traded on TSE — the market's continuous-trading
+    window. Outside it nothing can be bought or sold, whatever the order book shows. Stored in ``tse_window``
+    (rebuilt when more funds of that day are collected)."""
+    return _all_windows(db).get(date)
 
 
 def tse_days(db, symbol_id: int, start: int | None = None, end: int | None = None) -> list[int]:
@@ -241,28 +277,41 @@ def _load_raw(db, symbol_id: int, start: int | None, end: int | None, grid_sec: 
 
 class Book(dict):
     """{(date, time): (bids, asks)} at the dataset's own instants, plus ``at(date, time)``: the real book at ANY
-    instant (replayed from the collected event stream) — e.g. the instant a held fund is sold to fund a switch."""
+    instant — e.g. the instant a held fund is sold to fund a switch. Such an instant is another fund's snapshot, so
+    the hybrid dataset has the book of every fund precomputed at all of them (``tse_hybrid``); anything else is
+    replayed from the collected event stream."""
 
-    _DAYS_KEPT = 6                    # event streams kept in memory (the simulation walks forward in time)
+    _DAYS_KEPT = 8                    # days kept in memory (the simulation walks forward in time)
 
     def __init__(self, db, symbol_id: int):
         super().__init__()
         self.db, self.sid = db, symbol_id
         self._ev: dict[int, list] = {}
+        self._pre: dict[int, dict] = {}
         self._memo: dict[tuple[int, int], tuple[list, list]] = {}
+        self.hybrid = False
 
     def at(self, date: int, time: int) -> tuple[list, list]:
-        # memoised: the optimizer replays the same switch instants for config after config
         key = (date, time)
-        st = self._memo.get(key)
-        if st is None:
-            ev = self._ev.get(date)
-            if ev is None:
-                if len(self._ev) >= self._DAYS_KEPT:
-                    self._ev.pop(next(iter(self._ev)))
-                ev = self._ev[date] = sorted(G.load_day(self.db, self.sid, date, "book") or [],
-                                             key=lambda r: (r[0], r[2]))
-            st = self._memo[key] = _book_states(ev, [_sec(time)])[0]
+        st = dict.get(self, key) or self._memo.get(key)
+        if st is not None:
+            return st
+        if self.hybrid:
+            pre = self._pre.get(date)
+            if pre is None:
+                if len(self._pre) >= self._DAYS_KEPT:
+                    self._pre.pop(next(iter(self._pre)))
+                pre = self._pre[date] = _hybrid_day_states(self.db, self.sid, date) or {}
+            st = pre.get(time)
+            if st is not None:
+                return st
+        ev = self._ev.get(date)
+        if ev is None:
+            if len(self._ev) >= self._DAYS_KEPT:
+                self._ev.pop(next(iter(self._ev)))
+            ev = self._ev[date] = sorted(G.load_day(self.db, self.sid, date, "book") or [],
+                                         key=lambda r: (r[0], r[2]))
+        st = self._memo[key] = _book_states(ev, [_sec(time)])[0]
         return st
 
 
@@ -283,20 +332,93 @@ def _book_states(book: list[list], secs: list[int]) -> list[tuple[list, list]]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+#  Hybrid dataset: book states precomputed once and stored (tse_hybrid)         #
+# --------------------------------------------------------------------------- #
+
+HYBRID_VERSION = 1
+_UNION: dict = {}             # (db, date) -> sorted snapshot times (HHMMSS) of every collected fund that day
+_TSE_SIDS: dict = {}          # db -> (collected fund ids, row count of tse_raw when read)
+
+
+def _dbkey(db) -> str:
+    return str(getattr(db, "path", id(db)))
+
+
+def _tse_sids(db) -> list[int]:
+    with db._conn() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM tse_raw").fetchone()[0]
+        hit = _TSE_SIDS.get(_dbkey(db))
+        if hit is None or hit[1] != n:
+            sids = [int(r[0]) for r in conn.execute("SELECT DISTINCT symbol_id FROM tse_raw")]
+            hit = _TSE_SIDS[_dbkey(db)] = (sids, n)
+    return hit[0]
+
+
+def _union_times(db, dates: list[int]) -> dict[int, list[int]]:
+    """Snapshot instants of all collected funds on each day (one query for the missing days)."""
+    k = _dbkey(db)
+    sids = _tse_sids(db)
+    tag = len(sids)
+    miss = [d for d in dates if (k, d, tag) not in _UNION]
+    if miss and sids:
+        q = ",".join("?" * len(sids))
+        got: dict[int, set] = {d: set() for d in miss}
+        with db._conn() as conn:
+            for d, t in conn.execute(f"SELECT date, time FROM nav_intraday WHERE symbol_id IN ({q}) AND date>=? AND "
+                                     f"date<=?", (*sids, min(miss), max(miss))):
+                if d in got:
+                    got[d].add(int(t))
+        for d in miss:
+            _UNION[(k, d, tag)] = sorted(got[d])
+    return {d: _UNION.get((k, d, tag), []) for d in dates}
+
+
+def _hybrid_sig(instants: list[int], win, book_fetched: str) -> str:
+    h = zlib.crc32(",".join(map(str, instants)).encode())
+    return f"{HYBRID_VERSION}|{len(instants)}|{h}|{win}|{book_fetched}"
+
+
+def _hybrid_day_states(db, symbol_id: int, date: int) -> dict | None:
+    """{time: (bids, asks)} of one fund on one day from the stored table (None when not built yet)."""
+    with db._conn() as conn:
+        r = conn.execute("SELECT data FROM tse_hybrid WHERE symbol_id=? AND date=?", (symbol_id, date)).fetchone()
+    if r is None:
+        return None
+    d = _unpack(r[0])
+    return {t: (b, a) for t, b, a in d}
+
+
 def _load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tuple[list[tuple], dict]:
     """Signal from the NAV dump, execution against the TSE book: the dump's own rows (on the days that have TSE
-    data) and the real book as it stood at each dump snapshot instant. Snapshots with no two-sided book are dropped
-    (nothing could be executed there)."""
+    data, inside the market's trading window) and the real book as it stood at each dump snapshot instant.
+    Snapshots with no two-sided book are dropped (nothing could be executed there).
+
+    The book of the fund at EVERY collected fund's snapshot instant of the day is replayed once and stored in
+    ``tse_hybrid`` (rebuilt only when the day's book, the market window or the set of instants changes), so later
+    backtests — and every optimizer configuration — read small precomputed blobs instead of replaying events."""
     ensure_schema(db)
-    days = set(tse_days(db, symbol_id, start, end))
+    days = tse_days(db, symbol_id, start, end)
     if not days:
-        return [], {}
-    raw = [r for r in db.get_nav_intraday(symbol_id, start, end) if r[0] in days]
+        return [], Book(db, symbol_id)
+    dset = set(days)
+    raw = [r for r in db.get_nav_intraday(symbol_id, start, end) if r[0] in dset]
     by_day: dict[int, list] = {}
     for r in raw:
         by_day.setdefault(r[0], []).append(r)
+    dl = sorted(by_day)
+    unions = _union_times(db, dl)
+    with db._conn() as conn:
+        fetched = {int(d): f for d, f in conn.execute(
+            "SELECT date, fetched_at FROM tse_raw WHERE symbol_id=? AND kind='book' AND date>=? AND date<=?",
+            (symbol_id, dl[0] if dl else 0, dl[-1] if dl else 0))}
+        stored = {int(d): (sig, data) for d, sig, data in conn.execute(
+            "SELECT date, sig, data FROM tse_hybrid WHERE symbol_id=? AND date>=? AND date<=?",
+            (symbol_id, dl[0] if dl else 0, dl[-1] if dl else 0))}
     rows, book = [], Book(db, symbol_id)
-    for d in sorted(by_day):
+    book.hybrid = True
+    new = []
+    for d in dl:
         win = market_window(db, d)
         if win is None:
             continue
@@ -305,12 +427,26 @@ def _load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tupl
         rr = [r for r in by_day[d] if win[0] <= _sec(r[1]) <= win[1]]
         if not rr:
             continue
-        bk = G.load_day(db, symbol_id, d, "book") or []
-        states = _book_states(bk, [_sec(r[1]) for r in rr])
-        for r, (bids, asks) in zip(rr, states):
+        inst = sorted({t for t in unions.get(d, []) if win[0] <= _sec(t) <= win[1]} | {int(r[1]) for r in rr})
+        sig = _hybrid_sig(inst, win, fetched.get(d, ""))
+        st = stored.get(d)
+        if st is not None and st[0] == sig:
+            states = {t: (b, a) for t, b, a in _unpack(st[1])}
+        else:
+            bk = G.load_day(db, symbol_id, d, "book") or []
+            ss = _book_states(bk, [_sec(t) for t in inst])
+            states = {t: s2 for t, s2 in zip(inst, ss)}
+            new.append((symbol_id, d, sig, _pack([[t, b, a] for t, (b, a) in states.items()])))
+        if len(book._pre) < book._DAYS_KEPT:
+            book._pre[d] = states
+        for r in rr:
+            bids, asks = states.get(int(r[1]), ([], []))
             if bids and asks:
                 rows.append(r)
-                book[(r[0], r[1])] = (bids, asks)
+                dict.__setitem__(book, (r[0], r[1]), (bids, asks))
+    if new:
+        with db._conn() as conn:
+            conn.executemany("INSERT OR REPLACE INTO tse_hybrid VALUES (?,?,?,?)", new)
     return rows, book
 
 
@@ -358,6 +494,26 @@ def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | 
     could not trade (the hybrid dataset drops such snapshots, so it should report none)."""
     ensure_schema(db)
     cache: dict = {}
+    sids = tuple(sorted(sid for sid, _l in funds))
+    with db._conn() as conn:
+        n_raw = conn.execute("SELECT COUNT(*) FROM tse_raw").fetchone()[0]
+        try:
+            n_nav = tuple(conn.execute(f"SELECT COUNT(*), COALESCE(MAX(date), 0) FROM nav_intraday WHERE symbol_id IN "
+                                       f"({','.join('?' * len(sids))})", sids).fetchone()) if sids else ()
+        except Exception:
+            n_nav = ()
+    mkey = (_dbkey(db), sids, start, end, max_days, n_raw, n_nav)
+    hit = _CLOCK.get(mkey)
+    if hit is None:
+        hit = _CLOCK[mkey] = _clock_offsets(db, funds, start, end, max_days, cache)
+    devs, rows_in, rows_out = hit
+    return _clock_result(db, funds, trades, devs, rows_in, rows_out, cache)
+
+
+_CLOCK: dict = {}
+
+
+def _clock_offsets(db, funds, start, end, max_days, cache):
     devs: dict[int, list[float]] = {o: [] for o in CLOCK_OFFSETS_MIN}
     rows_in = rows_out = 0
     for sid, _label in funds:
@@ -383,6 +539,10 @@ def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | 
                 j = bisect.bisect_right(secs, s + o * 60) - 1
                 if j >= 0:
                     devs[o].append(abs(r[4] / tp[j][1] - 1.0) * 100)
+    return devs, rows_in, rows_out
+
+
+def _clock_result(db, funds, trades, devs, rows_in, rows_out, cache) -> dict:
     sid_of = {lab: sid for sid, lab in funds}
     t_out, t_n, ex = 0, 0, []
     for t in trades:

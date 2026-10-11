@@ -1854,6 +1854,8 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
                           start: int | None = None, end: int | None = None,
                           params: DiscountParams | None = None) -> dict:
     p = params or DiscountParams()
+    import time as _time
+    t_start = _time.time()
     funds = _universe(db, cats, symbols)
     use_index = p.entry_mode in ("index", "both")
     raw_trades: list[Trade] = []
@@ -1872,6 +1874,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         d["label"] = label
         loaded.append(d)
     tested = len(loaded)
+    t_loaded = _time.time()
     _compute_mr(db, loaded, p, start, end)
     crash_all = None
     crash_info = None
@@ -1941,6 +1944,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     from discount_explain import attribute_trades, explain_trades
     loss_causes = explain_trades(trade_dicts, loaded, p)        # adds "why" to every losing trade
     attribution = attribute_trades(trade_dicts, p, p.initial_capital)
+    t_sim = _time.time()
     clock = None
     if p.dataset in ("tse", "hybrid") and loaded:
         import tse_dataset as TD
@@ -1952,6 +1956,9 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "cats": cats or [],
         "dataset": {"name": p.dataset, "grid_sec": p.tse_grid_sec if p.dataset == "tse" else None,
                     "days": len(dates), "first": d0, "last": d1, "clock": clock},
+        # where the time went: reading / preparing the data vs simulating (+ explaining) vs the clock check
+        "timing": {"load_s": round(t_loaded - t_start, 2), "sim_s": round(t_sim - t_loaded, 2),
+                   "check_s": round(_time.time() - t_sim, 2), "total_s": round(_time.time() - t_start, 2)},
         "funds_tested": tested, "funds_skipped": skipped_funds,
         "params": asdict(p),
         "period": [d0, d1],
