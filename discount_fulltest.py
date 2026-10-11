@@ -1357,6 +1357,34 @@ def test_fast_replay(R: Results, db_path: str):
             pass
 
 
+def test_volume_study(R: Results, db):
+    """Capacity study: only the capital changes; buys stay within the visible depth, so a bigger capital fills a
+    smaller share of its intended size; the API runs it in the background."""
+    import discount_volume as VS
+    g = "مطالعهٔ حجم"
+    hp = _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=50, participation_pct=2.0)
+    res = VS.run_volume_study(db, None, None, None, None, hp, [1e8, 1e10, 1e12])
+    rows = res["rows"]
+    fills = [r["avg_size_ratio_pct"] for r in rows if r["avg_size_ratio_pct"] is not None]
+    ok = (len(rows) == 3 and [r["capital"] for r in rows] == [1e8, 1e10, 1e12]
+          and len(fills) >= 2 and all(a >= b - 1e-9 for a, b in zip(fills, fills[1:]))
+          and rows[-1]["trades"] <= rows[0]["trades"] and rows[0]["trades"] > 0)
+    R.add(g, "فقط سرمایه عوض می‌شود؛ با سرمایهٔ بزرگ‌تر سهم پرشدهٔ هر خرید کمتر است (و خرید زیر یک‌چهارم هدف انجام نمی‌شود)", ok,
+          " · ".join(f"{r['capital']:.0e}: {r['return_pct']}% پرشدن {r['avg_size_ratio_pct']}% محدود {r['limited_by_volume']}" for r in rows))
+    from web_server import create_app
+    cl = create_app(db).test_client()
+    r = cl.post("/api/disc/volume", json={"symbols": "REVA,GOLDX", "capitals": "0.5, 5", "fillmode": "hold", "fillmax": "2"})
+    st = None
+    for _ in range(300):
+        st = cl.get("/api/disc/volume/status").get_json()
+        if not st["running"] and st["result"] is not None:
+            break
+        time.sleep(0.1)
+    rr = (st or {}).get("result") or {}
+    R.add(g, "API مطالعهٔ حجم در پس‌زمینه اجرا و نتیجه برمی‌گرداند",
+          r.status_code == 200 and len(rr.get("rows") or []) == 2 and rr["rows"][0]["capital"] == 5e8, str(rr.get("error") or ""))
+
+
 def test_parallel_study(R: Results, db):
     """The optimizer's parallel workers (separate processes) must find exactly what one process finds."""
     import sys as _sys
@@ -1653,6 +1681,20 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             pg.fill("#disc-capital", "5000"); pg.fill("#disc-part", "0"); pg.fill("#disc-mintrades", "10")
             sel = pg.evaluate("discSelectedIds().length")
             R.add("مرورگر", "صندوق‌های فعال انتخاب شده‌اند", sel > 0, f"{sel} صندوق")
+            # a dropdown choice disables the fields it makes meaningless (and re-enables them)
+            rel = pg.evaluate("""() => {
+              const set = (id, v) => { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('change', {bubbles: true})); };
+              const dis = id => document.getElementById(id).disabled;
+              const o = {}; const fm0 = document.getElementById('disc-fillmode').value, mr0 = document.getElementById('disc-mrcenter').value;
+              set('disc-fillmode', 'hold'); o.hold = [dis('disc-entry'), dis('disc-stop'), !dis('disc-fillswitch')];
+              set('disc-fillmode', 'off'); set('disc-entrymode', 'fund');
+              o.off = [!dis('disc-entry'), dis('disc-fillswitch'), dis('disc-fillmax'), dis('disc-ientry')];
+              set('disc-mrcenter', 'off'); o.mr = [dis('disc-mrwin'), dis('disc-mrmin')];
+              set('disc-mrcenter', 'self'); o.mr2 = [!dis('disc-mrwin')];
+              set('disc-fillmode', fm0); set('disc-mrcenter', mr0);
+              return o; }""")
+            R.add("مرورگر", "انتخاب گزینهٔ کرکره‌ای، فیلدهای بی‌اثر همان حالت را خاموش و بقیه را روشن می‌کند",
+                  all(all(v) for v in rel.values()), str(rel))
             pg.click("#disc-run"); pg.wait_for_selector("#disc-cards .opt-mc", timeout=90000)
             R.add("مرورگر", "بک‌تست اجرا و نتیجه رسم می‌شود", True, "")
             R.add("مرورگر", "نمودار سرمایهٔ درگیر رسم می‌شود", pg.locator("#disc-exp-chart canvas").count() > 0, "")
@@ -1817,6 +1859,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
              ("بهینه‌سازی موازی", lambda: (test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
+             ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: test_tse_dataset(R, path)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),

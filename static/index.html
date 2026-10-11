@@ -2542,6 +2542,8 @@ td.disc-obc { cursor: help; }
       <button class="scan-btn" id="disc-stats-btn" onclick="discStats()" title="توزیع تخفیف و تازگی NAV هر صندوق — برای انتخاب آستانه‌ها">📊 آمار تخفیف</button>
       <div class="bbt-field" title="تعداد دنیاهای جایگشتی برای p-value (بیشتر = دقیق‌تر ولی کندتر؛ سقف زمان ۶۰ ثانیه)"><label>جایگشت‌ها</label>
         <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
+      <button class="scan-btn" id="disc-vol-btn" onclick="discVolume()" title="مطالعهٔ حجم: همین بک‌تست با چند اندازهٔ سرمایه (همهٔ پارامترهای دیگر همان فرم). نشان می‌دهد تا چه حجمی از سرمایه، عمق ۵ سطر اردربوک و سقف حجم اجازه می‌دهد بازده حفظ شود.">📏 مطالعهٔ حجم</button>
+      <span class="bbt-field" title="مقادیر سرمایه برای مطالعهٔ حجم، به میلیارد ریال، با کاما جدا"><input id="disc-volcaps" type="text" value="1, 5, 10, 20, 50, 100" style="width:150px;direction:ltr" placeholder="میلیارد ریال"></span>
       <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
       <button class="scan-btn" id="disc-ft-btn" onclick="discFullTest()" title="تست سراسری روی دنیای ساختگی: پارامتر مرده، سیم‌کشی فرم↔سرور↔موتور، پیش‌فرض‌ها، بهینه‌ساز، ناوردایی‌های حسابداری و آزمونِ خودِ آزمون‌ها (حدود ۲ دقیقه)">🧪 تست سراسری برنامه</button>
       <button class="scan-btn" id="disc-push-btn" onclick="discPushResults()" title="آخرین نتایج (بک‌تست، بهینه‌سازی، اعتبارسنجی، آمار) را در پوشهٔ analysis_results ذخیره می‌کند و روی شاخهٔ analysis-results در GitHub پوش می‌کند تا تحلیل و پیشنهاد بهبود بگیرید. فقط نتایج ارسال می‌شود، نه دادهٔ خام. پوشهٔ کاری و شاخهٔ فعلی شما دست نمی‌خورد.">📤 ارسال آخرین نتایج برای تحلیل</button>
@@ -6874,6 +6876,80 @@ async function discValidate() {
   poll();
 }
 
+let discVolTimer = null;
+async function discVolume() {
+  const p = discCheckSel(); if (!p) return;
+  const btn = document.getElementById('disc-vol-btn');
+  const body = Object.assign({}, p, { capitals: document.getElementById('disc-volcaps').value || '' });
+  const r = await fetch('/api/disc/volume', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  }).catch(() => null);
+  if (!r?.ok) { showError('مطالعهٔ حجم شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
+  btn.disabled = true; btn.textContent = '⏳ مطالعهٔ حجم ...';
+  const tab = discNewTab('volume', 'مطالعهٔ حجم');
+  discTabSet(tab, 'مطالعهٔ حجم', true);
+  const panel = document.getElementById('disc-val');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">⏳ شروع ...</div>';
+  if (discVolTimer) clearInterval(discVolTimer);
+  const poll = async () => {
+    const s = await fetch('/api/disc/volume/status').catch(() => null);
+    if (!s?.ok) return;
+    const j = await s.json();
+    const pr = j.progress || {};
+    if (j.running) {
+      if (discTabCur() && discTabCur().id === tab.id)
+        panel.innerHTML = `<div class="ob-p">⏳ ${pr.phase || ''} ${pr.total ? '— ' + (pr.done || 0) + '/' + pr.total : ''}</div>`;
+      return;
+    }
+    clearInterval(discVolTimer); discVolTimer = null;
+    btn.disabled = false; btn.textContent = '📏 مطالعهٔ حجم';
+    discTabSet(tab, 'مطالعهٔ حجم', false);
+    if (!discTabExists(tab.id)) return;
+    discTabActivate(tab.id);
+    if (!j.result || j.result.error) { panel.innerHTML = `<div class="dv-head bad">خطا: ${(j.result || {}).error || 'نامشخص'}</div>`; return; }
+    renderDiscVolume(j.result);
+  };
+  discVolTimer = setInterval(poll, 1500);
+  poll();
+}
+
+function renderDiscVolume(r) {
+  const panel = document.getElementById('disc-val');
+  panel.style.display = 'block';
+  const rows = r.rows || [];
+  const pc = v => v == null ? '—' : discLtr((v >= 0 ? '+' : '') + v + '%');
+  const pl = v => v == null ? '—' : discLtr(v + '%');
+  const bh = r.buyhold_pct;
+  const head = r.capacity_90pct
+    ? `بازده تا سرمایهٔ <b>${discLtr(r.capacity_90pct / 1e9)}</b> میلیارد ریال حداقل ۹۰٪ بازده کوچک‌ترین سرمایه را حفظ می‌کند`
+    : 'بازده با بزرگ‌تر شدن سرمایه سریع افت می‌کند';
+  const beat = r.max_capital_beating_buyhold
+    ? ` · تا <b>${discLtr(r.max_capital_beating_buyhold / 1e9)}</b> میلیارد ریال از خرید و نگه‌داری (${pc(bh)}) بهتر است`
+    : (bh != null ? ` · در هیچ اندازه‌ای از خرید و نگه‌داری (${pc(bh)}) بهتر نیست` : '');
+  panel.innerHTML = `<div class="dv-head ${r.capacity_90pct ? 'ok' : 'warn'}">📏 مطالعهٔ حجم — ${head}${beat}</div>
+    <div class="disc-tblwrap" style="max-height:none;margin-top:6px"><table class="disc-tbl"><thead><tr>
+      <th title="سرمایهٔ اولیه">سرمایه (میلیارد ﷼)</th><th>بازده کل</th><th title="نسبت به کوچک‌ترین سرمایه (نقطهٔ درصد)">در برابر کوچک‌ترین</th><th>بازده سالانه</th><th>حداکثر افت</th>
+      <th>معامله</th><th title="میانگین سرمایهٔ درگیر">درگیری</th>
+      <th title="به‌طور میانگین چه سهمی از اندازهٔ هدف هر خرید واقعاً پر شد (عمق ۵ سطر صف فروش + سقف حجم + نقد)">پرشدن خرید</th>
+      <th title="خریدهایی که به‌خاطر عمق صف/سقف حجم کوچک‌تر از هدف شدند">محدود به عمق/حجم</th>
+      <th title="جابه‌جایی‌هایی که چون کاندیدا عمق کافی نداشت انجام نشد">جابه‌جایی ردشده</th>
+      <th title="فروش‌هایی که از عمق ۵ سطر صف خرید بزرگ‌تر بودند؛ باقی‌مانده با قیمت بدترین سطر فرض شده (خوش‌بینانه)">فروش بیش از عمق</th>
+      <th title="هزینهٔ خوردن عمق صف: فاصلهٔ قیمت اجرا از میانهٔ اردربوک، به نسبت گردش">هزینهٔ عمق</th>
+      <th>کارمزد (م.ر)</th></tr></thead><tbody>
+      ${rows.map(x => `<tr><td><b>${discLtr(x.capital / 1e9)}</b></td><td class="${discCls(x.return_pct)}">${pc(x.return_pct)}</td>
+        <td class="${discCls(x.vs_smallest_pct)}">${pc(x.vs_smallest_pct)}</td><td>${pc(x.cagr_pct)}</td><td>${pl(x.max_dd_pct)}</td>
+        <td>${x.trades}</td><td>${pl(x.exposure_pct)}</td><td>${pl(x.avg_size_ratio_pct)}</td><td>${x.limited_by_volume ?? '—'}</td>
+        <td>${x.switch_blocked_by_volume ?? '—'}</td>
+        <td>${x.book_sales ? `${x.sales_over_depth} از ${x.book_sales} (${pl(x.sale_value_over_depth_pct)} ارزش)` : '—'}</td>
+        <td>${pl(x.depth_cost_pct)}</td><td>${discLtr(discM(x.fees || 0))}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="dv-note">همهٔ پارامترها همان فرم است و فقط سرمایهٔ اولیه عوض می‌شود. خرید هرگز از عمق ۵ سطر صف فروش و سقف حجم بیشتر نمی‌شود؛
+      خریدی که کمتر از یک‌چهارم اندازهٔ هدفش پر شود انجام نمی‌شود (برای همین با سرمایهٔ خیلی بزرگ ممکن است معامله‌ای نماند).
+      فروشی که از عمق ۵ سطر صف خرید بزرگ‌تر باشد فعلاً با قیمت بدترین سطر دیده‌شده فرض می‌شود (ستون «فروش بیش از عمق» اندازهٔ این خوش‌بینی را نشان می‌دهد).
+      دیتاست: ${(rows[0] || {}).dataset || '—'} · حالت: ${(r.params || {}).fill_mode || '—'} · سهم هر موقعیت ${(r.params || {}).position_pct}% · سقف حجم ${(r.params || {}).participation_pct}%</div>`;
+}
+
 function dvHeat(sf) {
   if (!sf || !sf.grid || !sf.grid.length) return '';
   const vals = sf.grid.flat().filter(c => c && c.trades > 0).map(c => c.ret);
@@ -6991,6 +7067,7 @@ function renderDiscValidation(r, p) {
 }
 
 async function discBacktest() {
+  discRelevance();                                 // values may have been set programmatically (applied optimizer result)
   const p = discCheckSel(); if (!p) return;
   const btn = document.getElementById('disc-run');
   btn.disabled = true; btn.textContent = '⏳ در حال اجرا ...';
@@ -8485,6 +8562,50 @@ function discClockHtml(c) {
     معاملهٔ بیرون از ساعت معامله: <b>${c.trade_legs_outside_window}</b> از ${c.trade_legs_checked} (${c.trade_legs_outside_pct}%)
     ${ex ? `<details><summary>نمونه‌ها</summary>${ex}</details>` : ''}</div>`;
 }
+// Fields that a dropdown / switch makes meaningless are disabled (same rules as the optimizer's ``_active``):
+// e.g. «همیشه سرمایه‌گذاری» has no entry/exit thresholds, a switched-off mean-reversion filter has no window, ...
+const DISC_REL_IDS = ['disc-entrymode', 'disc-entry', 'disc-exit', 'disc-ientry', 'disc-iexit', 'disc-imin', 'disc-hold',
+  'disc-stop', 'disc-stopmode', 'disc-fillexit', 'disc-fillswitch', 'disc-fillminhold', 'disc-fillage', 'disc-fillmax',
+  'disc-mrwin', 'disc-mrhor', 'disc-mrmin', 'disc-mrlag', 'disc-crashwin', 'disc-crashcool', 'disc-crashscope',
+  'disc-sstart', 'disc-send', 'disc-partbasis'];
+function discRelevance() {
+  const g = id => document.getElementById(id);
+  if (!g('disc-fillmode')) return;
+  const val = id => (g(id) || {}).value;
+  const fill = val('disc-fillmode'), hold = fill === 'hold', mode = val('disc-entrymode') || 'fund';
+  const off = {};
+  const why = (ids, txt) => ids.forEach(id => { if (!off[id]) off[id] = txt; });
+  if (hold) why(['disc-entrymode', 'disc-entry', 'disc-exit', 'disc-ientry', 'disc-iexit', 'disc-imin', 'disc-hold', 'disc-stop',
+                 'disc-stopmode', 'disc-fillexit'], 'در حالت «همیشه سرمایه‌گذاری» بی‌اثر است (فقط برای جابه‌جایی فروخته می‌شود)');
+  if (!['fund', 'both'].includes(mode)) why(['disc-entry', 'disc-exit'], 'در حالت ورود «فقط شاخص» بی‌اثر است');
+  if (!['index', 'both'].includes(mode)) why(['disc-ientry', 'disc-imin'], 'فقط برای حالت ورود «شاخص» یا «هر دو»');
+  if (mode !== 'index') why(['disc-iexit'], 'فقط برای حالت ورود «شاخص»');
+  if (!(+val('disc-stop') > 0)) why(['disc-stopmode'], 'حد ضرر صفر (خاموش) است');
+  if (!hold) why(['disc-fillswitch', 'disc-fillminhold'], 'فقط برای «همیشه سرمایه‌گذاری»');
+  if (!['best', 'hold'].includes(fill)) why(['disc-fillage', 'disc-fillmax'], 'پر کردن سرمایهٔ بیکار خاموش است');
+  if (fill !== 'best') why(['disc-fillexit'], 'فقط برای «پر کردن با بهترین صندوق»');
+  if (val('disc-mrcenter') === 'off') why(['disc-mrwin', 'disc-mrhor', 'disc-mrmin', 'disc-mrlag'], 'فیلتر بازگشت به میانگین خاموش است');
+  if (!(+val('disc-crashdrop') > 0)) why(['disc-crashwin', 'disc-crashcool', 'disc-crashscope'], 'فیلتر ریزش خاموش است (آستانه ۰)');
+  if (val('disc-smode') !== 'fixed') why(['disc-sstart', 'disc-send'], 'ساعت جلسه خودکار است');
+  if (!(+val('disc-part') > 0)) why(['disc-partbasis'], 'سقف حجم نامحدود (۰) است');
+  DISC_REL_IDS.forEach(id => {
+    const el = g(id); if (!el) return;
+    const dis = !!off[id];
+    el.disabled = dis;
+    const f = el.closest('.bbt-field');
+    if (f) {
+      f.style.opacity = dis ? '0.45' : '';
+      if (dis) f.dataset.offWhy = off[id]; else delete f.dataset.offWhy;
+      const lab = f.querySelector('label');
+      if (lab) lab.title = dis ? '⛔ ' + off[id] : '';
+    }
+  });
+}
+document.addEventListener('change', e => { if (e.target && e.target.id && e.target.id.startsWith('disc-')) discRelevance(); });
+document.addEventListener('input', e => { if (e.target && e.target.id && /^disc-(stop|crashdrop|part)$/.test(e.target.id)) discRelevance(); });
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(discRelevance, 0));
+else setTimeout(discRelevance, 0);
+
 function discDatasetChanged() {
   const ds = (document.getElementById('disc-dataset') || {}).value || 'dump';
   const g = document.getElementById('disc-gridf');

@@ -1233,7 +1233,10 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
                       **({"switch_blocked_by_volume": parker.sz["skip_cap"],
                           "switch_sales": parker.sz["sales"], "switch_sales_over_cap": parker.sz["sales_over_cap"],
                           "switch_sale_value_over_cap_pct": round(parker.sz["sale_value_over_cap"] / parker.sz["sale_value"] * 100, 1)
-                          if parker.sz["sale_value"] > 0 else 0.0} if parker is not None else {})},
+                          if parker.sz["sale_value"] > 0 else 0.0,
+                          "book_sales": parker.sz["book_sales"], "sales_over_depth": parker.sz["sales_over_depth"],
+                          "sale_value_over_depth_pct": round(parker.sz["sale_value_over_depth"] / parker.sz["book_sale_value"] * 100, 2)
+                          if parker.sz["book_sale_value"] > 0 else 0.0} if parker is not None else {})},
         "accepted_positions": len(factor),
         "period_days": span_days,
     }
@@ -1340,7 +1343,9 @@ class _Parker:
         self.max_age_s = max(1, int(p.fill_quote_age_min)) * 60
         # sizing / liquidity diagnostics of the parker's own trades (merged into the replay's size_info)
         self.sz = {"n": 0, "ratio_sum": 0.0, "small": 0, "liq": 0, "cash": 0, "skip_cap": 0,
-                   "sales": 0, "sales_over_cap": 0, "sale_value": 0.0, "sale_value_over_cap": 0.0}
+                   "sales": 0, "sales_over_cap": 0, "sale_value": 0.0, "sale_value_over_cap": 0.0,
+                   # sales larger than the visible bids (the rest is assumed sold at the worst visible bid)
+                   "book_sales": 0, "sales_over_depth": 0, "book_sale_value": 0.0, "sale_value_over_depth": 0.0}
         self.real_open: dict[str, int] = {}           # set by _replay: fund label -> open chunks of a NORMAL trade
         self.max_rel = p.fill_max_rel_pct / 100.0
         self.exit_rel = p.fill_exit_rel_pct / 100.0
@@ -1400,6 +1405,14 @@ class _Parker:
                 bk = {(d, t): st}
         _u, px = _sell_exec(bk, d, t, units, last, hs)      # the quote's own book (before re-dating)
         mid = _book_mid(bk, d, t, last)
+        bids = _book_side(bk, d, t, 0)
+        if bids:
+            depth = sum(v for _p, v in bids)
+            self.sz["book_sales"] += 1
+            self.sz["book_sale_value"] += units * px
+            if units > depth + 1e-9:
+                self.sz["sales_over_depth"] += 1
+                self.sz["sale_value_over_depth"] += (units - depth) * px
         if at_ts is not None:
             d, t = _ts_to_dt(at_ts)
             o = _ord(d)

@@ -1850,6 +1850,52 @@ def create_app(db, scan_callback=None):
 
     _val_state = {"running": False, "progress": {}, "result": None}
     _val_lock = threading.Lock()
+    _vol_state = {"running": False, "progress": {}, "result": None}
+    _vol_lock = threading.Lock()
+
+    @app.route("/api/disc/volume", methods=["GET", "POST"])
+    def api_disc_volume():
+        """Capacity study: the backtest repeated with several capitals (everything else as in the form)."""
+        from discount_volume import run_volume_study
+        body = request.get_json(silent=True) or {}
+
+        def _get(name, default=None):
+            return body[name] if name in body else request.args.get(name, default)
+
+        cats, syms, start, end = _disc_sel(_get)
+        base = _disc_params_from(_get)
+        try:
+            caps = [float(x) * 1e9 for x in str(_get("capitals", "") or "").replace("،", ",").split(",") if x.strip()]
+        except ValueError:
+            return jsonify({"error": "مقادیر سرمایه باید عدد (میلیارد ریال) باشند."}), 400
+        if _vol_state["running"]:
+            return jsonify({"status": "already running", "progress": _vol_state["progress"]}), 409
+
+        def _run():
+            with _vol_lock:
+                _vol_state["running"] = True
+                _vol_state["progress"] = {"phase": "شروع", "done": 0, "total": 0}
+                _vol_state["result"] = None
+            try:
+                _vol_state["result"] = run_volume_study(db, cats, syms, start, end, base, caps or None,
+                                                        _vol_state["progress"])
+            except ValueError as e:
+                _vol_state["result"] = {"error": str(e)}
+            except Exception:
+                logger.exception("volume study failed")
+                _vol_state["result"] = {"error": "volume study failed"}
+            finally:
+                with _vol_lock:
+                    _vol_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="disc-volume").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/disc/volume/status")
+    def api_disc_volume_status():
+        return jsonify({"running": _vol_state["running"], "progress": _vol_state["progress"],
+                        "result": _vol_state["result"]})
+
 
     @app.route("/api/disc/validate", methods=["GET", "POST"])
     def api_disc_validate():
