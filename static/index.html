@@ -7010,7 +7010,7 @@ const discM = n => ((+n || 0) / 1e6).toLocaleString('en-US', {maximumFractionDig
 
 const discDay = d => Date.UTC(Math.floor(d / 10000), Math.floor(d % 10000 / 100) - 1, d % 100) / 86400000;
 
-function discCompareChart(strat, index, initial) {
+function discCompareChart(strat, index, initial, label) {
   const sets = [[strat || [], 'var(--green)'], [index || [], '#4fa3ff']].filter(x => x[0].length > 1);
   if (!sets.length) return '';
   const W = 760, H = 150, L = 6, R = 6, T = 8, B = 8;
@@ -7027,7 +7027,7 @@ function discCompareChart(strat, index, initial) {
   const lastOf = c => c && c.length ? c[c.length - 1][1] : null;
   return `<div style="font-size:11px;color:var(--sub);display:flex;gap:16px;flex-wrap:wrap;margin-bottom:4px">
       <span><span style="color:var(--green)">━</span> استراتژی: <b>${discLtr(discM(lastOf(strat)))}</b> م.ر</span>
-      <span><span style="color:#4fa3ff">━</span> پسیو با تعادل روزانه (با کارمزد): <b>${discLtr(discM(lastOf(index)))}</b> م.ر</span>
+      <span><span style="color:#4fa3ff">━</span> ${label || 'پسیو با تعادل روزانه (با کارمزد)'}: <b>${discLtr(discM(lastOf(index)))}</b> م.ر</span>
       <span style="color:var(--muted)">┈ سرمایهٔ اولیه ${discLtr(discM(initial))}</span></div>
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;background:var(--surf);border:1px solid var(--brd);border-radius:6px;direction:ltr">
     <line x1="${L}" x2="${W - R}" y1="${sy(initial).toFixed(1)}" y2="${sy(initial).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1"/>
@@ -7063,8 +7063,10 @@ function discCompareHtml(res) {
       ${row('💠 فقط بازده NAV همین صندوق‌ها (بدون اثر حباب/تخفیف؛ فقط مرجع)', navFinal, nv.total_return_pct, nv.cagr_pct, nv.max_dd_pct, nv.vol_pct, false, true)}
     </tbody></table></div>
     ${edgeTxt}
-    <div class="disc-h" style="margin-top:8px">رشد سرمایه: استراتژی در برابر پسیو با تعادل روزانه و کارمزد (هر دو از سرمایهٔ اولیهٔ یکسان)</div>
-    ${discCompareChart(res.equity_curve, bm.curve, init)}
+    <div class="disc-h" style="margin-top:8px">رشد سرمایه: استراتژی در برابر ${bm.curve_buyhold && bm.curve_buyhold.length > 1 ? 'خرید و نگه‌داری هم‌وزن (با کارمزد)' : 'پسیو با تعادل روزانه و کارمزد'} (هر دو از سرمایهٔ اولیهٔ یکسان)</div>
+    ${bm.curve_buyhold && bm.curve_buyhold.length > 1
+      ? discCompareChart(res.equity_curve, bm.curve_buyhold, init, `خرید و نگه‌داری هم‌وزن (${bm.buyhold && bm.buyhold.funds || 0} صندوق، با کارمزد)`)
+      : discCompareChart(res.equity_curve, bm.curve, init)}
     <div style="margin-top:4px;font-size:10px;color:var(--muted);line-height:1.7">
       پسیو = وزن برابر روی همهٔ صندوق‌های انتخاب‌شده؛ در «تعادل روزانه» هر روز برنده‌ها کمی فروخته و بازنده‌ها کمی خریده می‌شوند تا وزن‌ها برابر بماند، و برای هر خرید و فروش کارمزد پرداخت می‌شود
       (روز اول کارمزد خرید، روز آخر کارمزد فروش).
@@ -7174,7 +7176,7 @@ const DISC_TIP_RULES = [
   [/^خرید و نگه‌داری/, 'روز اول به‌صورت هم‌وزن خرید و تا پایان نگه می‌داریم؛ فقط یک بار کارمزد خرید و یک بار فروش.'],
   [/^فقط بازده NAV/, 'رشد خودِ NAV صندوق‌ها بدون اثر حباب/تخفیف و بدون هزینه؛ مرجعِ «ارزش ذاتی» نه یک سبد قابل‌معامله.'],
   [/^برتری استراتژی/, 'اختلاف بازده کل استراتژی با پسیو (نقطهٔ درصد). مثبت = ایده چیزی بیشتر از حضور در بازار آورده.'],
-  [/^رشد سرمایه/, 'منحنی سرمایه: استراتژی (سبز) در برابر پسیو (آبی) با سرمایهٔ اولیهٔ یکسان.'],
+  [/^رشد سرمایه/, 'منحنی سرمایه: استراتژی (سبز) در برابر خرید و نگه‌داری هم‌وزن همین صندوق‌ها (آبی): روز اول با وزن برابر خریده و تا آخر نگه داشته می‌شود (ارزش هر روز = اگر همان روز فروخته شود، بعد از کارمزد). سرمایهٔ اولیهٔ یکسان.'],
   // --- bubble index & mean reversion ------------------------------------------
   [/^شاخص حباب \(میانگین ساده/, 'میانگین ساده حباب (قیمت/NAV − ۱) صندوق‌های فعال. وقتی کل گروه ارزان باشد شاخص منفی می‌شود؛ خطوط افقی آستانهٔ ورود و خروج‌اند.'],
   [/^فیلتر بازگشت به میانگین/, 'فقط صندوق‌هایی معامله می‌شوند که حبابشان در ۲۰ روز اخیر رفتار «برگشت‌پذیر» داشته باشد (امتیاز ۰ تا ۱۰۰). صندوقِ زیر حداقل امتیاز تا وقتی دوباره بالا بیاید کنار می‌رود.'],

@@ -889,9 +889,9 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                     diag["crash"] = diag.get("crash", 0) + 1
                 continue                      # the group is falling fast (or just did): no new entry
             ix = idx[i] if idx is not None else None
-            if book and rel is None:                   # judged at the price we would pay (best ask)
+            if book and rel is None:                   # confirmed at the price we would pay (best ask)
                 a = _best(book, d, t, 1, 0.0)
-                r_in = r + (a - last) / nav if a > 0 and nav > 0 else r
+                r_in = r + max(0.0, (a - last) / nav) if a > 0 and nav > 0 else r
             else:
                 r_in = r
             fund_ok = r_in <= ent_thr
@@ -936,7 +936,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             e_mr = mr[i] if mr_on else None
         else:
             bid = _best(book, d, t, 0, last * (1 - hs))
-            r_out = r - (last - bid) / nav if book and rel is None and nav > 0 else r   # at the price we can sell at
+            r_out = r - max(0.0, (last - bid) / nav) if book and rel is None and nav > 0 else r   # confirmed at the bid
             reason = None
             if p.max_hold_days > 0 and o - e_ord >= p.max_hold_days:
                 reason = "time"
@@ -1289,7 +1289,9 @@ class _Parker:
             else:
                 groups.append((ts, [(k, i)]))
         # executable-price corrections of the bubble (real book only): (ask − last)/fair to buy, (last − bid)/fair
-        # to sell — fixed by the data, so computed once instead of at every step of every replay
+        # to sell — fixed by the data, so computed once instead of at every step of every replay. Never negative:
+        # a signal must hold on the last price AND be confirmed at the head of the opposite queue (best ask to
+        # buy, best bid to sell); the book can only make it harder, never easier
         xb, xs = [], []
         for l, rr in zip(loaded, rows):
             bk = l.get("book")
@@ -1301,8 +1303,8 @@ class _Parker:
             for r in rr:
                 f, last = r[3], r[4]
                 a, b = _best(bk, r[1], r[2], 1, 0.0), _best(bk, r[1], r[2], 0, 0.0)
-                b_.append((a - last) / f if a > 0 and f > 0 else 0.0)
-                s_.append((last - b) / f if b > 0 and f > 0 else 0.0)
+                b_.append(max(0.0, (a - last) / f) if a > 0 and f > 0 else 0.0)
+                s_.append(max(0.0, (last - b) / f) if b > 0 and f > 0 else 0.0)
             xb.append(b_)
             xs.append(s_)
         return {"rows": rows, "rel": rel, "groups": groups, "xb": xb, "xs": xs}
@@ -1824,7 +1826,8 @@ def _buy_and_hold(series: list[dict], initial: float, bf: float, sf: float) -> d
     return {"funds": len(start), "final_capital": round(final, 0),
             "return_pct": round(ret * 100, 3),
             "cagr_pct": round(cagr, 2) if cagr is not None else None,
-            "max_dd_pct": round(dd * 100, 3)}
+            "max_dd_pct": round(dd * 100, 3),
+            "curve": [[d, round(v * (1 - sf), 0)] for d, v in curve]}   # value if sold that day (sell fee)
 
 
 def build_benchmark(price_series: list[dict], nav_series: list[dict],
@@ -1847,11 +1850,17 @@ def build_benchmark(price_series: list[dict], nav_series: list[dict],
     if len(curve) > 400:
         step = len(curve) / 400.0
         curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
+    bh = _buy_and_hold(price_series, init, p.buy_fee, p.sell_fee)
+    bh_curve = bh.pop("curve", None) or []
+    if len(bh_curve) > 400:
+        step = len(bh_curve) / 400.0
+        bh_curve = [bh_curve[int(i * step)] for i in range(400)] + [bh_curve[-1]]
     return {
         "first": levels[0][0], "last": levels[-1][0],
         "funds": sum(1 for s in price_series if len(s) >= 2),
         "rebalanced": reb.get("stats", {}),                    # daily rebalance WITH fees
-        "buyhold": _buy_and_hold(price_series, init, p.buy_fee, p.sell_fee),
+        "buyhold": bh,
+        "curve_buyhold": bh_curve,                             # the chart's passive line (buy once, hold)
         "nav_index": nav_st,
         "curve": curve,                                        # = the fee-paying account
     }

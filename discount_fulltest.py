@@ -1183,6 +1183,29 @@ def test_tse_dataset(R: Results, db_path: str):
     R.add(g, "اردربوک ترکیبی یک بار ساخته و ذخیره می‌شود؛ خواندن دوباره همان نتیجه را می‌دهد و با بازپخش رویدادها یکی است",
           n_store > 0 and _sig(rhy2) == _sig(rhy) and not bad and len(inst) > 0,
           f"{n_store} روز-صندوق ذخیره؛ {len(inst)} لحظه؛ ناهمخوان: {bad[:3]}")
+    # double confirmation: the signal holds on the last price AND at the head of the opposite queue
+    hpc = _base(fill_mode="hold", fill_max_rel_pct=0.0, position_pct=25, dataset="hybrid")
+    rc = _run(db, hpc)
+    rowmap = {}
+    for f in funds:
+        L = D._load_ex(db, f["symbol_id"], None, None, hpc)
+        for r in L["rows"]:
+            rowmap[(f["symbol"], r[1], r[2])] = r
+            bk = L["book"]
+    bad, n = [], 0
+    for t in rc["trades"]:
+        r = rowmap.get((t["symbol"], t["entry_date"], t["entry_time"]))
+        if r is None:
+            continue
+        n += 1
+        bks = D._load_ex(db, next(f["symbol_id"] for f in funds if f["symbol"] == t["symbol"]), None, None, hpc)["book"]
+        a1 = D._best(bks, r[1], r[2], 1, 0.0)
+        if r[4] / r[3] - 1 > 1e-12 or (a1 > 0 and a1 / r[3] - 1 > 1e-12):
+            bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: آخرین {r[4] / r[3] - 1:.4%} / سر صف فروش {a1 / r[3] - 1:.4%}")
+    pre = D._Parker.prepare([dict(L, label="x")])
+    neg = sum(1 for arr in (pre["xb"][0] or []) + (pre["xs"][0] or []) if arr < 0)
+    R.add(g, "سیگنال دوتأییدی: هر ورود هم با آخرین قیمت و هم با سر صف فروش شرط را دارد؛ اردربوک هرگز سیگنال را آسان‌تر نمی‌کند",
+          not bad and n > 0 and neg == 0, "؛ ".join(bad[:3]) or f"{n} ورود، اصلاح منفی: {neg}")
     ck = rhy["dataset"].get("clock") or {}
     R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است؛ هیچ معامله‌ای بیرون از ساعت بازار نیست",
           ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0
