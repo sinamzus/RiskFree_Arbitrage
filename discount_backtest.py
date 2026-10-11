@@ -1253,7 +1253,24 @@ class _Parker:
                 groups[-1][1].append((k, i))
             else:
                 groups.append((ts, [(k, i)]))
-        return {"rows": rows, "rel": rel, "groups": groups}
+        # executable-price corrections of the bubble (real book only): (ask − last)/fair to buy, (last − bid)/fair
+        # to sell — fixed by the data, so computed once instead of at every step of every replay
+        xb, xs = [], []
+        for l, rr in zip(loaded, rows):
+            bk = l.get("book")
+            if not bk:
+                xb.append(None)
+                xs.append(None)
+                continue
+            b_, s_ = [], []
+            for r in rr:
+                f, last = r[3], r[4]
+                a, b = _best(bk, r[1], r[2], 1, 0.0), _best(bk, r[1], r[2], 0, 0.0)
+                b_.append((a - last) / f if a > 0 and f > 0 else 0.0)
+                s_.append((last - b) / f if b > 0 and f > 0 else 0.0)
+            xb.append(b_)
+            xs.append(s_)
+        return {"rows": rows, "rel": rel, "groups": groups, "xb": xb, "xs": xs}
 
     def __init__(self, loaded: list[dict], p: DiscountParams, crash_all: list | None, pre: dict | None = None):
         self.p = p
@@ -1268,6 +1285,8 @@ class _Parker:
         # what candidates are RANKED by (best = lowest; switching compares it too). Normally the bubble itself;
         # the validation placebo passes independent surrogate series here while eligibility stays on the real bubble.
         self.rank = pre.get("rank") or self.rel
+        self.xb = pre.get("xb") or [None] * self.n
+        self.xs = pre.get("xs") or [None] * self.n
         self.crash = crash_all
         self.mr = [l.get("mr") for l in loaded]
         self.groups = pre["groups"]
@@ -1294,14 +1313,8 @@ class _Parker:
         """Executable-price correction of the bubble at row ``i`` of fund ``k`` (real book only, else 0): buying
         pays the best ask, selling gets the best bid, so the bubble that can actually be traded is
         rel + (ask − last)/fair for a buy and rel − (last − bid)/fair for a sale."""
-        bk = self.book[k]
-        if not bk:
-            return 0.0
-        _o, d, t, fair, last, _f, _n = self.rows[k][i]
-        px = _best(bk, d, t, side, 0.0)
-        if px <= 0 or fair <= 0:
-            return 0.0
-        return (px - last) / fair if side == 1 else (last - px) / fair
+        arr = self.xb[k] if side == 1 else self.xs[k]
+        return arr[i] if arr is not None else 0.0
 
     # ---- driver interface -------------------------------------------------------
     def peek_ts(self):

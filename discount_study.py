@@ -311,11 +311,17 @@ def _eta2(groups: dict) -> float | None:
 class Study:
     def __init__(self, db, cats, symbols, start, end, base: D.DiscountParams, space: dict,
                  n_samples=400, blocks=6, holdout_frac=0.3, objective="robust", min_trades=30,
-                 max_seconds=300, max_universes=20, seed=7, progress=None, lock=None):
+                 max_seconds=300, max_universes=20, seed=7, progress=None, lock=None, workers=None):
         self.cats, self.symbols, self.start, self.end = cats, symbols, start, end
         self.base = base
         self.space = {k: [v for v in vs] for k, vs in space.items() if k in DIMS and vs}
         self.tm = {"load_s": 0.0, "loads": 0, "eval_s": 0.0, "evals": 0}
+        self.workers = _auto_workers() if workers is None else max(1, int(workers))
+        self.parallel = False
+        # what a worker process needs to rebuild an identical study (see _w_init)
+        self._args = dict(cats=cats, symbols=symbols, start=start, end=end, base=base, space=space,
+                          n_samples=n_samples, blocks=blocks, holdout_frac=holdout_frac, objective=objective,
+                          min_trades=min_trades, max_seconds=max_seconds, max_universes=max_universes, seed=seed)
         if self.base.dataset != "dump":
             self.space.pop("half_spread_pct", None)     # fills walk the real order book: no assumed spread to search
         self.n_samples = max(20, int(n_samples))
@@ -675,14 +681,60 @@ class Study:
         return out
 
     # ---- run ---------------------------------------------------------------------------
-    def run(self, db) -> dict:
+    def _open(self, db) -> None:
         warm_p = replace(self.base, baseline_days=max([self.base.baseline_days] + self.space.get("baseline_days", [])),
                          mr_window_days=max([self.base.mr_window_days] + self.space.get("mr_window_days", [])),
                          mr_center="self" if "self" in self.space.get("mr_center", []) or self.base.mr_center == "self"
                          else self.base.mr_center)
         self.db_raw = _RawCache(db, D._warmup_start(self.start, warm_p) if self.start else None)
-        self._prog(phase="setup", done=0, total=1)
         self._setup()
+
+    def _start_pool(self, db):
+        """Worker processes that evaluate configurations in parallel (each with its own copy of the data).
+        None when parallelism is off, impossible (no database file) or not worth it (a very short run)."""
+        path = getattr(db, "path", None)
+        if self.workers <= 1 or path is None or self.max_seconds < 45:
+            return None
+        try:
+            import multiprocessing as mp
+            from concurrent.futures import ProcessPoolExecutor
+            return ProcessPoolExecutor(max_workers=self.workers, mp_context=mp.get_context("spawn"),
+                                       initializer=_w_init, initargs=(str(path), self._args))
+        except Exception:
+            return None
+
+    def _eval_many(self, pool, cfgs: list, src: str, until: float) -> int:
+        """Evaluate ``cfgs`` in parallel waves until ``until`` (or the global budget); returns how many ran."""
+        todo, seen = [], set()
+        for cfg in cfgs:
+            k = _ckey(_normalize(cfg, self.base))
+            if k not in self.by_key and k not in seen:
+                seen.add(k)
+                todo.append(cfg)
+        n, wave = 0, max(2, 2 * self.workers)
+        for a in range(0, len(todo), wave):
+            if (time.time() > until and a > 0) or not self._time_left():
+                self.truncated = self.truncated or not self._time_left()
+                break
+            t0 = time.time()
+            for rec, tm in pool.map(_w_eval, [(c, src) for c in todo[a:a + wave]]):
+                self.tm["load_s"] += tm["load_s"]
+                self.tm["loads"] += tm["loads"]
+                self.tm["evals"] += 1
+                if rec is None:
+                    continue
+                key = _ckey(rec["cfg"])
+                if key not in self.by_key:
+                    self.by_key[key] = rec
+                    self.records.append(rec)
+                n += 1
+            self.tm["eval_s"] += time.time() - t0            # wall time of the wave (the work runs in parallel)
+            self._prog(done=len(self.records))
+        return n
+
+    def run(self, db) -> dict:
+        self._prog(phase="setup", done=0, total=1)
+        self._open(db)
 
         combos = self._slow_combos()
         fast_dims = [d for d in FAST_ORDER if d in self.space]
@@ -704,7 +756,35 @@ class Study:
             {"blocks": [], "train": None, "hold": None}
         done = 0
         search_end = self.t0 + self.max_seconds * 0.8        # keep 20% for refinement + analysis
-        for ci, slow in enumerate(combos):
+        pool = self._start_pool(db)
+        self.parallel = pool is not None
+        try:
+            for ci, slow in enumerate(combos):
+                slice_end = time.time() + max(2.0, (search_end - time.time()) / max(1, len(combos) - ci))
+                if pool is None:
+                    break
+                if exhaustive:
+                    cfgs = []
+                    for vals in itertools.product(*(self.space[d] for d in fast_dims)):
+                        cfg = self._fill(slow)
+                        cfg.update(dict(zip(fast_dims, vals)))
+                        if _valid(cfg):
+                            cfgs.append(cfg)
+                else:
+                    cfgs = self._sample_fast(slow, per)
+                try:
+                    done += self._eval_many(pool, cfgs, "random", float("inf") if exhaustive else slice_end)
+                except Exception as e:            # a broken worker: carry on in this process
+                    self.parallel_error = str(e)
+                    pool.shutdown(cancel_futures=True)
+                    pool = None
+                    break
+                if self.truncated:
+                    break
+        finally:
+            if pool is not None:
+                pool.shutdown()
+        for ci, slow in enumerate(combos if not self.parallel or getattr(self, "parallel_error", None) else []):
             # every structural combination gets an equal share of the time budget
             slice_end = time.time() + max(2.0, (search_end - time.time()) / max(1, len(combos) - ci))
             if exhaustive:
@@ -1035,7 +1115,9 @@ class Study:
         scatter.append([_num(best["score"], 2), _num(hold_of(best), 2), 1])
         return {
             "verdict": {"overall": overall, "headline": headline, "lights": lights},
-            "timing": {"load_s": round(self.tm["load_s"], 1), "loads": self.tm["loads"],
+            "timing": {"workers": self.workers if self.parallel and not getattr(self, "parallel_error", None) else 1,
+                       "parallel_error": getattr(self, "parallel_error", None),
+                       "load_s": round(self.tm["load_s"], 1), "loads": self.tm["loads"],
                        "eval_s": round(self.tm["eval_s"], 1), "evals": self.tm["evals"],
                        "eval_avg_s": round(self.tm["eval_s"] / self.tm["evals"], 3) if self.tm["evals"] else None,
                        "total_s": round(time.time() - self.t0, 1)},
@@ -1065,13 +1147,44 @@ class Study:
         }
 
 
+def _auto_workers() -> int:
+    """Parallel worker processes by default: all cores but one (the server / UI), at most 6 (memory: each worker
+    holds its own copy of the data)."""
+    import os
+    return max(1, min(6, (os.cpu_count() or 1) - 1))
+
+
+_W = None                      # the study replica of a worker process
+
+
+def _w_init(path: str, args: dict) -> None:
+    global _W
+    from pathlib import Path
+    from database import Database
+    db = Database(Path(path))
+    st = Study(db, **args, workers=1)
+    st._open(db)
+    _W = st
+
+
+def _w_eval(job):
+    cfg, src = job
+    l0, n0 = _W.tm["load_s"], _W.tm["loads"]
+    try:
+        rec = _W._evaluate(cfg, src)
+    except Exception:
+        rec = None
+    return rec, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0}
+
+
 def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.DiscountParams | None = None,
               space: dict | None = None, n_samples=400, blocks=6, test_frac=0.3, objective="robust",
-              min_trades=30, max_seconds=300, max_universes=20, seed=7, progress=None, progress_lock=None) -> dict:
+              min_trades=30, max_seconds=300, max_universes=20, seed=7, progress=None, progress_lock=None,
+              workers=None) -> dict:
     base = base or D.DiscountParams()
     st = Study(db, cats, symbols, start, end, base, space or default_space(), n_samples=n_samples, blocks=blocks,
                holdout_frac=test_frac, objective=objective, min_trades=min_trades, max_seconds=max_seconds,
-               max_universes=max_universes, seed=seed, progress=progress, lock=progress_lock)
+               max_universes=max_universes, seed=seed, progress=progress, lock=progress_lock, workers=workers)
     out = st.run(db)
     out["base_params"] = asdict(base)
     return out

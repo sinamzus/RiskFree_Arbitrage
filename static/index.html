@@ -8242,6 +8242,8 @@ async function discStudyBuild() {
         <input id="ds-sec" type="number" min="20" max="3600" step="30" value="${o.max_seconds}" style="width:80px" onchange="discStudyCollect()"></div>
       <div class="bbt-field" title="پارامترهای ساختاری (تعدیل حباب، فیلتر بازگشت، حالت ورود، سن NAV) هر ترکیبشان داده را از نو می‌سازد؛ حداکثر این‌قدر ترکیبِ ساختاری نمونه‌گیری می‌شود."><label>حداکثر ترکیب ساختاری</label>
         <input id="ds-univ" type="number" min="1" max="200" value="${o.max_universes}" style="width:64px" onchange="discStudyCollect()"></div>
+      <div class="bbt-field" title="چند ترکیب هم‌زمان روی چند هستهٔ پردازنده آزمایش شوند. ۰ = خودکار (همهٔ هسته‌ها به‌جز یکی، حداکثر ۶). ۱ = بدون موازی‌سازی. هر هسته یک نسخه از داده را در حافظه نگه می‌دارد؛ اگر حافظه کم است عدد کمتری بدهید. برای اجراهای کوتاه‌تر از ۴۵ ثانیه موازی‌سازی خاموش است."><label>هستهٔ موازی (۰=خودکار)</label>
+        <input id="ds-workers" type="number" min="0" max="64" value="${o.workers ?? 0}" style="width:64px" onchange="discStudyCollect()"></div>
     </div>
     <div class="dv-note">پارامترهایی که تیک نخورده‌اند روی «مقدار ثابت» همان سطر می‌مانند؛ اگر آن را خالی بگذارید، مقدار فعلیِ فرم (خاکستری در همان ستون) استفاده می‌شود. فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) عمداً جستجو نمی‌شوند؛ حساسیتِ برنده به آن‌ها جداگانه گزارش می‌شود.</div>`;
 }
@@ -8276,7 +8278,7 @@ function discStudyCollect() {
   document.querySelectorAll('#ds-dims [data-vals]').forEach(c => { st.vals[c.dataset.vals] = c.value; });
   const g = id => { const e = document.getElementById(id); return e ? e.value : null; };
   st.opts = {objective: g('ds-objective') || 'robust', n_samples: +g('ds-n') || 400, blocks: +g('ds-blocks') || 6,
-    max_seconds: +g('ds-sec') || 300, max_universes: +g('ds-univ') || 20};
+    max_seconds: +g('ds-sec') || 300, max_universes: +g('ds-univ') || 20, workers: +g('ds-workers') || 0};
   discStudySave(st);
   return st;
 }
@@ -8531,7 +8533,7 @@ async function discOptimizeRun() {
   window._dsFixedUsed = pl.fixedDims || {};
   const body = Object.assign({}, p, pl.fixed || {}, {
     mode: 'study', space: pl.space, objective: o.objective || 'robust', n_samples: o.n_samples || 400, blocks: o.blocks || 6,
-    max_seconds: o.max_seconds || 300, max_universes: o.max_universes || 20,
+    max_seconds: o.max_seconds || 300, max_universes: o.max_universes || 20, workers: o.workers || 0,
     opt_metric: document.getElementById('disc-optmetric').value,
     min_trades: document.getElementById('disc-mintrades').value,
     test_frac: document.getElementById('disc-testfrac').value,
@@ -8645,7 +8647,8 @@ function renderDiscStudy(res, p) {
     ['صندوق در مطالعه', S.funds], ['ترکیب تصادفی / واجد شرایط', `${S.n_random} / ${S.n_qualified}`], ['ترکیب پالایشی', S.n_refine],
     ['داده‌سازی ساختاری', S.n_universes + ' بار'], ['زمان', S.seconds + ' ثانیه'],
     ...(res.timing ? [['آماده‌سازی داده', `${res.timing.load_s} ث (${res.timing.loads} بار)`],
-                      ['شبیه‌سازی', `${res.timing.eval_s} ث · ${res.timing.evals} اجرا · هر اجرا ${res.timing.eval_avg_s} ث`]] : []),
+                      ['شبیه‌سازی', `${res.timing.eval_s} ث · ${res.timing.evals} اجرا · هر اجرا ${res.timing.eval_avg_s} ث`],
+                      ['هستهٔ موازی', res.timing.parallel_error ? `۱ (خطا: ${res.timing.parallel_error})` : res.timing.workers]] : []),
     ['بلوک آموزش / آزمون', `${S.train_blocks} / ${S.hold_blocks}`]].map(([k, x]) => discCard(k, String(x))).join('');
   const bestRows = dims.filter(d => b.cfg[d] != null).map(d => `<tr><td style="text-align:start">${res.setup.labels[d]}</td><td>${dsVal(d, b.cfg[d])}</td>
       <td>${res.default && res.default.cfg[d] != null ? dsVal(d, res.default.cfg[d]) : '—'}</td></tr>`).join('');

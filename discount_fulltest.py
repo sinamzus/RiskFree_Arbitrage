@@ -1236,6 +1236,26 @@ def test_tse_dataset(R: Results, db_path: str):
             pass
 
 
+def test_parallel_study(R: Results, db):
+    """The optimizer's parallel workers (separate processes) must find exactly what one process finds."""
+    import sys as _sys
+    main = getattr(_sys.modules.get("__main__"), "__file__", None)
+    if not main or not os.path.exists(main):
+        R.add("بهینه‌سازی موازی", "نتیجهٔ موازی = نتیجهٔ تک‌هسته‌ای", None, "اجرا از stdin: پردازه‌های جدا ساخته نمی‌شوند")
+        return
+    hp = _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=50)
+    space = {"fill_switch_pct": [0.3, 0.8, 1.5], "position_pct": [25, 50], "fill_min_hold_min": [0, 60]}
+    out = {}
+    for w in (1, 2):
+        out[w] = S.run_study(db, None, None, None, None, base=hp, space=space, n_samples=24, blocks=4, test_frac=0.3,
+                             max_seconds=60, min_trades=1, workers=w)
+    top = {w: {tuple(sorted(r["cfg"].items())): r["score"] for r in out[w]["top"]} for w in out}
+    tm = out[2].get("timing") or {}
+    R.add("بهینه‌سازی موازی", "نتیجهٔ موازی (۲ هسته) دقیقاً همان نتیجهٔ تک‌هسته‌ای است",
+          top[1] == top[2] and tm.get("workers") == 2 and not tm.get("parallel_error"),
+          f"{len(top[1])} ترکیب برتر؛ timing={tm}")
+
+
 def test_validation_hold(R: Results, db):
     """Validation of the always-invested mode: the placebo (rank by ANOTHER fund's bubble) must be calibrated —
     rarely 'significant' where bubbles carry no information, always where they mean-revert."""
@@ -1675,6 +1695,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
+             ("بهینه‌سازی موازی", lambda: test_parallel_study(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: test_tse_dataset(R, path)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
