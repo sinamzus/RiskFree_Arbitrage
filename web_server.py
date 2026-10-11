@@ -2131,7 +2131,7 @@ def create_app(db, scan_callback=None):
         max_universes = _num("max_universes", 20, 1, 200, int)
         objective = str(_get("objective", "robust"))
         seed = _num("seed", 7, 0, 10**6, int)
-        workers = _num("workers", 0, 0, 64, int) or None      # 0 = automatic (all cores but one, at most 6)
+        workers = _num("workers", 0, 0, 64, int) or None      # 0 = automatic (every core)
 
         with _disc_opt_lock:                       # set BEFORE the thread starts so the first poll cannot miss it
             _disc_opt_state["running"] = True

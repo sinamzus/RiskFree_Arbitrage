@@ -1153,10 +1153,11 @@ class Study:
 
 
 def _auto_workers() -> int:
-    """Parallel worker processes by default: all cores but one (the server / UI), at most 6 (memory: each worker
-    holds its own copy of the data)."""
+    """Parallel worker processes by default: every core of the machine (the parent process only waits for the
+    workers while they run). Each worker holds its own copy of the data — give a smaller number when memory is
+    short."""
     import os
-    return max(1, min(6, (os.cpu_count() or 1) - 1))
+    return max(1, os.cpu_count() or 1)
 
 
 _W = None                      # the study replica of a worker process
