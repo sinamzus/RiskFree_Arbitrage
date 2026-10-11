@@ -917,6 +917,16 @@ def _hold_run(ctx: dict, p: DiscountParams, d0: int, d1: int, rank: list | None 
     if not ctx["loaded"]:
         return {"portfolio_return_pct": 0.0, "final_capital": p.initial_capital, "trade_count": 0, "win_rate": 0}
     fill = ctx if rank is None else dict(ctx, pre=dict(ctx["pre"], rank=rank))
+    if rank is not None:
+        # placebo: only the return is read — the compiled replay gives exactly the same final capital
+        try:
+            import discount_fast as X
+            fin = X.final_capital(fill, p, d0, d1)
+        except Exception:
+            fin = None
+        if fin is not None:
+            return {"portfolio_return_pct": round((fin / p.initial_capital - 1) * 100, 3) if p.initial_capital else 0,
+                    "final_capital": round(fin, 0)}
     acc, pf, _curve, _sk = D._replay([], p, d0, d1, False, fill)
     n = len(acc)
     pf["trade_count"] = n

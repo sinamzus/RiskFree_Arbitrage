@@ -317,6 +317,11 @@ class Study:
         self.space = {k: [v for v in vs] for k, vs in space.items() if k in DIMS and vs}
         self.tm = {"load_s": 0.0, "loads": 0, "eval_s": 0.0, "evals": 0}
         self.workers = _auto_workers() if workers is None else max(1, int(workers))
+        try:                                   # compiled replay of the "hold" strategy (numba), if installed
+            import discount_fast as _X
+            self.fast = _X.available()
+        except Exception:
+            self.fast = False
         self.parallel = False
         # what a worker process needs to rebuild an identical study (see _w_init)
         self._args = dict(cats=cats, symbols=symbols, start=start, end=end, base=base, space=space,
@@ -496,8 +501,16 @@ class Study:
 
     def _run_once(self, p, U):
         d0, d1 = self.dates[0], self.dates[-1]
-        marks: list = []
-        acc, _s, _c = D._portfolio_summary([], p, d0, d1, fill=self._fill_ctx(U, d0, d1), marks=marks)
+        ctx = self._fill_ctx(U, d0, d1)
+        if self.fast:
+            import discount_fast as X
+            marks: list = []
+            acc = X.run_hold(ctx, p, d0, d1, marks=marks, lite=True)    # compiled replay (identical results)
+            if acc is not None:
+                self.tm["fast"] = self.tm.get("fast", 0) + 1
+                return acc, marks
+        marks = []
+        acc, _s, _c = D._portfolio_summary([], p, d0, d1, fill=ctx, marks=marks)
         return acc, marks
 
     def _passive(self, U) -> dict:
@@ -1138,6 +1151,7 @@ class Study:
         return {
             "verdict": {"overall": overall, "headline": headline, "lights": lights},
             "timing": {"workers": self.workers if self.parallel and not getattr(self, "parallel_error", None) else 1,
+                       "compiled": bool(self.fast and self.tm.get("fast")),
                        "parallel_error": getattr(self, "parallel_error", None),
                        "load_s": round(self.tm["load_s"], 1), "loads": self.tm["loads"],
                        "eval_s": round(self.tm["eval_s"], 1), "evals": self.tm["evals"],

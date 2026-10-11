@@ -1260,6 +1260,54 @@ def test_window_marks(R: Results, db):
           f" / معامله {whole['trade_count']} و {ref['trade_count']}")
 
 
+def test_fast_replay(R: Results, db_path: str):
+    """The compiled (numba) replay of the "hold" strategy must give EXACTLY the Python replay: every trade field
+    and every daily mark, on both datasets, with delays, volume caps, filters and placebo ranks."""
+    import shutil as _sh
+    import discount_fast as X
+    g = "بهینه‌سازی موازی"
+    if not X.available():
+        R.add(g, "شبیه‌سازی کامپایل‌شده = شبیه‌سازی پایتون", None, "numba نصب نیست (مسیر پایتون استفاده می‌شود)")
+        return
+    p2 = db_path + ".fast.db"
+    _sh.copyfile(db_path, p2)
+    db = _db(p2)
+    _fake_tse_from_dump(db, n_days=80)
+    cfgs = [{}, {"fill_switch_pct": 0.3, "fill_min_hold_min": 60}, {"exec_delay_snaps": 1},
+            {"participation_pct": 5.0, "participation_basis": "sofar", "position_pct": 100},
+            {"crash_drop_pct": 0.5, "fill_quote_age_min": 15}, {"require_fresh": False, "mr_center": "off"}]
+    bad, n, ntr = [], 0, 0
+    for ds in ("dump", "hybrid"):
+        for c in cfgs:
+            p = replace(_base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=50, dataset=ds), **c)
+            st = S.Study(db, None, None, None, None, p, {"fill_switch_pct": [0.8]}, blocks=4, min_trades=1, workers=1)
+            st._open(db)
+            U = st._universe(p)
+            d0, d1 = st.dates[0], st.dates[-1]
+            ctx = st._fill_ctx(U, d0, d1)
+            rng = random.Random(5)
+            rk = [[rng.gauss(0, 0.01) for _ in rr] for rr in ctx["pre"]["rows"]]
+            for fctx in (ctx, dict(ctx, pre=dict(ctx["pre"], rank=rk))):
+                m1, m2 = [], []
+                a1, s1, _c = D._portfolio_summary([], p, d0, d1, fill=fctx, marks=m1)
+                a2 = X.run_hold(fctx, p, d0, d1, marks=m2)
+                fin = X.final_capital(fctx, p, d0, d1)
+                lite = X.run_hold(fctx, p, d0, d1, lite=True)
+                n += 1
+                ntr += len(a1)
+                if a2 is None or [asdict(x) for x in a1] != [asdict(x) for x in a2] or m1 != m2 \
+                        or round(fin, 0) != s1["final_capital"] \
+                        or [(t.entry_date, t.net_pnl, t.net_pct) for t in a1] != [(t.entry_date, t.net_pnl, t.net_pct) for t in lite]:
+                    bad.append(f"{ds} {c} rank={'placebo' if fctx is not ctx else 'real'}")
+    R.add(g, "شبیه‌سازی کامپایل‌شده (numba) دقیقاً همان معامله‌ها و ارزش‌های روزانهٔ شبیه‌سازی پایتون را می‌دهد",
+          not bad and ntr > 0, "؛ ".join(bad[:3]) or f"{n} حالت، {ntr} معامله، همه یکسان")
+    for ext in ("", "-wal", "-shm"):
+        try:
+            os.remove(p2 + ext)
+        except OSError:
+            pass
+
+
 def test_parallel_study(R: Results, db):
     """The optimizer's parallel workers (separate processes) must find exactly what one process finds."""
     import sys as _sys
@@ -1719,7 +1767,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
-             ("بهینه‌سازی موازی", lambda: (test_window_marks(R, db), test_parallel_study(R, db))),
+             ("بهینه‌سازی موازی", lambda: (test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: test_tse_dataset(R, path)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),

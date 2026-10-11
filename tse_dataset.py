@@ -353,6 +353,7 @@ class Book(dict):
                 pre = self._pre[date] = _hybrid_day_states(self.db, self.sid, date) or {}
             st = pre.get(time)
             if st is not None:
+                self._memo[key] = st          # (the optimizer replays the same switch instants run after run)
                 return st
         ev = self._ev.get(date)
         if ev is None:

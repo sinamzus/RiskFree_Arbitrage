@@ -5,3 +5,6 @@ jdatetime>=4.1.0
 flask>=3.0.0
 tzdata>=2024.1
 zstandard>=0.22.0
+# optional: compiled (much faster) optimizer / validation for the "always invested" strategy; without it the
+# pure-Python replay is used (identical results)
+numba>=0.60

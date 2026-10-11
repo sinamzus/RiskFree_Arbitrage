@@ -8648,7 +8648,8 @@ function renderDiscStudy(res, p) {
     ['داده‌سازی ساختاری', S.n_universes + ' بار'], ['زمان', S.seconds + ' ثانیه'],
     ...(res.timing ? [['آماده‌سازی داده', `${res.timing.load_s} ث (${res.timing.loads} بار)`],
                       ['شبیه‌سازی', `${res.timing.eval_s} ث · ${res.timing.evals} اجرا · هر اجرا ${res.timing.eval_avg_s} ث`],
-                      ['هستهٔ موازی', res.timing.parallel_error ? `۱ (خطا: ${res.timing.parallel_error})` : res.timing.workers]] : []),
+                      ['هستهٔ موازی', res.timing.parallel_error ? `۱ (خطا: ${res.timing.parallel_error})` : res.timing.workers],
+                      ['شبیه‌سازی کامپایل‌شده', res.timing.compiled ? 'فعال (numba)' : 'غیرفعال — pip install numba']] : []),
     ['بلوک آموزش / آزمون', `${S.train_blocks} / ${S.hold_blocks}`]].map(([k, x]) => discCard(k, String(x))).join('');
   const bestRows = dims.filter(d => b.cfg[d] != null).map(d => `<tr><td style="text-align:start">${res.setup.labels[d]}</td><td>${dsVal(d, b.cfg[d])}</td>
       <td>${res.default && res.default.cfg[d] != null ? dsVal(d, res.default.cfg[d]) : '—'}</td></tr>`).join('');
