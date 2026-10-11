@@ -252,12 +252,24 @@ def _warmup_start(start: int | None, p: DiscountParams) -> int | None:
 
 def _raw_for(db, sid: int, start: int | None, end: int | None, p: "DiscountParams"):
     """(raw rows shaped like Database.get_nav_intraday, order book or None) for the chosen dataset."""
-    if p.dataset == "tse":
+    if p.dataset in ("tse", "hybrid"):
+        # the fund's WHOLE history is prepared once (and cached in memory and on disk) and then sliced: the start
+        # date varies with the warm-up the parameters need, and a cache keyed on it would rebuild the data for every
+        # structural combination of the optimizer. Always read through the real database (not a study's row cache,
+        # which may hold only part of the history).
+        import bisect as _bs
         import tse_dataset as TD
-        return TD.load_raw(db, sid, start, end, p.tse_grid_sec)
-    if p.dataset == "hybrid":
-        import tse_dataset as TD
-        return TD.load_hybrid(db, sid, start, end)
+        real = getattr(db, "_db", db)
+        if p.dataset == "tse":
+            raw, book = TD.load_raw(real, sid, None, None, p.tse_grid_sec)
+        else:
+            raw, book = TD.load_hybrid(real, sid, None, None)
+        if start or end:
+            ds = [r[0] for r in raw]
+            a = _bs.bisect_left(ds, start) if start else 0
+            b = _bs.bisect_right(ds, end) if end else len(raw)
+            raw = raw[a:b]
+        return raw, book
     return db.get_nav_intraday(sid, start, end), None
 
 
