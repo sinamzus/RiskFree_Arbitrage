@@ -1919,6 +1919,11 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     import time as _time
     t_start = _time.time()
     _LOAD_T["raw"] = _LOAD_T["prep"] = 0.0
+    try:
+        import tse_dataset as _TD
+        cs0 = dict(_TD.CACHE_STATS)
+    except Exception:
+        _TD, cs0 = None, None
     funds = _universe(db, cats, symbols)
     use_index = p.entry_mode in ("index", "both")
     raw_trades: list[Trade] = []
@@ -2022,7 +2027,9 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         # where the time went: reading / preparing the data vs simulating (+ explaining) vs the clock check
         "timing": {"load_s": round(t_loaded - t_start, 2), "read_s": round(_LOAD_T["raw"], 2),
                    "prep_s": round(_LOAD_T["prep"], 2), "sim_s": round(t_sim - t_loaded, 2),
-                   "check_s": round(_time.time() - t_sim, 2), "total_s": round(_time.time() - t_start, 2)},
+                   "check_s": round(_time.time() - t_sim, 2), "total_s": round(_time.time() - t_start, 2),
+                   "cache": ({k: (round(v - cs0[k], 2) if isinstance(v, float) else v - cs0[k])
+                              for k, v in _TD.CACHE_STATS.items()} if cs0 is not None else None)},
         "funds_tested": tested, "funds_skipped": skipped_funds,
         "params": asdict(p),
         "period": [d0, d1],

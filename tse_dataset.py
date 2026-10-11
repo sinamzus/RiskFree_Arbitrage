@@ -215,6 +215,8 @@ def tse_dates(db, symbol_ids: list[int], start: int | None = None, end: int | No
 
 
 _LOADS: dict = {}           # (db, kind, fund, start, end, grid, collected-version) -> (rows, book)
+# where each load came from (diagnostics shown with the timing): memory / disk cache / built from the raw data
+CACHE_STATS = {"mem": 0, "disk": 0, "build": 0, "disk_s": 0.0, "build_s": 0.0, "put_fail": 0}
 _LOADS_MAX = 256
 
 
@@ -244,14 +246,15 @@ def _pc_get(db, name: str, ver: str):
         return None
 
 
-def _pc_put(db, name: str, ver: str, obj) -> None:
+def _pc_put(db, name: str, ver: str, obj) -> bool:
     import pickle
     try:
         blob = zlib.compress(pickle.dumps(obj, protocol=4), 3)
         with db._conn() as conn:
             conn.execute("INSERT OR REPLACE INTO tse_cache VALUES (?,?,?)", (name, ver, blob))
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _global_version(db) -> tuple:
@@ -269,6 +272,8 @@ def _memo_load(db, kind: str, symbol_id: int, start, end, grid: int, fn):
     key = (str(getattr(db, "path", id(db))), kind, symbol_id, start, end, grid, cv)
     hit = _LOADS.get(key)
     if hit is None:
+        import time as _t
+        t0 = _t.time()
         name = f"load|{kind}|{symbol_id}|{start}|{end}|{grid}"
         ver = f"{HYBRID_VERSION}|{GRID_VERSION}|{cv}|{_global_version(db)}"
         got = _pc_get(db, name, ver)
@@ -278,12 +283,19 @@ def _memo_load(db, kind: str, symbol_id: int, start, end, grid: int, fn):
             book.hybrid = kind == "hybrid"
             dict.update(book, items)
             hit = (rows, book)
+            CACHE_STATS["disk"] += 1
+            CACHE_STATS["disk_s"] += _t.time() - t0
         else:
             hit = fn()
-            _pc_put(db, name, ver, (hit[0], dict(hit[1])))
+            if not _pc_put(db, name, ver, (hit[0], dict(hit[1]))):
+                CACHE_STATS["put_fail"] += 1
+            CACHE_STATS["build"] += 1
+            CACHE_STATS["build_s"] += _t.time() - t0
         if len(_LOADS) >= _LOADS_MAX:
             _LOADS.pop(next(iter(_LOADS)))
         _LOADS[key] = hit
+    else:
+        CACHE_STATS["mem"] += 1
     rows, book = hit
     return list(rows), book
 

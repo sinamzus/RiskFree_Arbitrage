@@ -738,6 +738,44 @@ class Study:
         except Exception:
             return None
 
+    def _cache_summary(self) -> dict | None:
+        """Where the data loads came from, this process and the workers together (memory / disk cache / built)."""
+        c = dict(self.tm.get("cache") or {})
+        c1, c0 = _cache_stats(), getattr(self, "_c0", {}) or {}
+        for k, v in c1.items():
+            c[k] = c.get(k, 0) + v - c0.get(k, 0)
+        return {k: (round(v, 1) if isinstance(v, float) else v) for k, v in c.items()} or None
+
+    def _merge_tm(self, tm: dict) -> None:
+        self.tm["load_s"] += tm["load_s"]
+        self.tm["loads"] += tm["loads"]
+        c = self.tm.setdefault("cache", {})
+        for k, v in (tm.get("cache") or {}).items():
+            c[k] = c.get(k, 0) + v
+
+    def _keep(self, rec) -> None:
+        self.tm["evals"] += 1
+        if rec is None:
+            return
+        key = _ckey(rec["cfg"])
+        if key not in self.by_key:
+            self.by_key[key] = rec
+            self.records.append(rec)
+
+    def _eval_combos(self, pool, jobs: list, until: float) -> None:
+        """Structural combinations spread over the workers, one combination per worker at a time."""
+        t0 = time.time()
+        done = 0
+        for recs, tm in pool.map(_w_eval_combo, [(cfgs, "random", until) for cfgs in jobs]):
+            self._merge_tm(tm)
+            for rec in recs:
+                self._keep(rec)
+            done += 1
+            self._prog(done=len(self.records))
+        self.tm["eval_s"] += time.time() - t0
+        if time.time() > until:
+            self.truncated = True
+
     def _eval_many(self, pool, cfgs: list, src: str, until: float) -> int:
         """Evaluate ``cfgs`` in parallel waves until ``until`` (or the global budget); returns how many ran."""
         todo, seen = [], set()
@@ -753,21 +791,16 @@ class Study:
                 break
             t0 = time.time()
             for rec, tm in pool.map(_w_eval, [(c, src) for c in todo[a:a + wave]]):
-                self.tm["load_s"] += tm["load_s"]
-                self.tm["loads"] += tm["loads"]
-                self.tm["evals"] += 1
-                if rec is None:
-                    continue
-                key = _ckey(rec["cfg"])
-                if key not in self.by_key:
-                    self.by_key[key] = rec
-                    self.records.append(rec)
-                n += 1
+                self._merge_tm(tm)
+                self._keep(rec)
+                if rec is not None:
+                    n += 1
             self.tm["eval_s"] += time.time() - t0            # wall time of the wave (the work runs in parallel)
             self._prog(done=len(self.records))
         return n
 
     def run(self, db) -> dict:
+        self._c0 = _cache_stats()
         self._prog(phase="setup", done=0, total=1)
         self._open(db)
 
@@ -794,7 +827,32 @@ class Study:
         pool = self._start_pool(db)
         self.parallel = pool is not None
         try:
-            for ci, slow in enumerate(combos):
+            if pool is not None and len(combos) >= 2:
+                # several structural combinations: each worker takes whole combinations (its universe is built ONCE
+                # in that worker) instead of every worker building every universe
+                jobs = []
+                for slow in combos:
+                    if exhaustive:
+                        cfgs = []
+                        for vals in itertools.product(*(self.space[d] for d in fast_dims)):
+                            cfg = self._fill(slow)
+                            cfg.update(dict(zip(fast_dims, vals)))
+                            if _valid(cfg):
+                                cfgs.append(cfg)
+                    else:
+                        cfgs = self._sample_fast(slow, per)
+                    jobs.append([c for c in cfgs if _ckey(_normalize(c, self.base)) not in self.by_key])
+                try:
+                    self._eval_combos(pool, jobs, search_end)
+                    combos_done = True
+                except Exception as e:
+                    self.parallel_error = str(e)
+                    pool.shutdown(cancel_futures=True)
+                    pool = None
+                    combos_done = False
+            else:
+                combos_done = False
+            for ci, slow in enumerate(combos if not combos_done else []):
                 slice_end = time.time() + max(2.0, (search_end - time.time()) / max(1, len(combos) - ci))
                 if pool is None:
                     break
@@ -1154,6 +1212,7 @@ class Study:
                        "compiled": bool(self.fast and self.tm.get("fast")),
                        "parallel_error": getattr(self, "parallel_error", None),
                        "load_s": round(self.tm["load_s"], 1), "loads": self.tm["loads"],
+                       "cache": self._cache_summary(),
                        "eval_s": round(self.tm["eval_s"], 1), "evals": self.tm["evals"],
                        "eval_avg_s": round(self.tm["eval_s"] / self.tm["evals"], 3) if self.tm["evals"] else None,
                        "total_s": round(time.time() - self.t0, 1)},
@@ -1244,14 +1303,43 @@ def _w_init(path: str, args: dict) -> None:
     _W = st
 
 
+def _cache_stats() -> dict:
+    try:
+        import tse_dataset as TD
+        return dict(TD.CACHE_STATS)
+    except Exception:
+        return {}
+
+
 def _w_eval(job):
     cfg, src = job
     l0, n0 = _W.tm["load_s"], _W.tm["loads"]
+    c0 = _cache_stats()
     try:
         rec = _W._evaluate(cfg, src)
     except Exception:
         rec = None
-    return rec, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0}
+    c1 = _cache_stats()
+    return rec, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0,
+                 "cache": {k: c1[k] - c0.get(k, 0) for k in c1}}
+
+
+def _w_eval_combo(job):
+    """One structural combination per worker (ONE universe load for all its configurations), until ``until``."""
+    cfgs, src, until = job
+    l0, n0 = _W.tm["load_s"], _W.tm["loads"]
+    c0 = _cache_stats()
+    recs = []
+    for cfg in cfgs:
+        if time.time() > until:
+            break
+        try:
+            recs.append(_W._evaluate(cfg, src))
+        except Exception:
+            recs.append(None)
+    c1 = _cache_stats()
+    return recs, {"load_s": _W.tm["load_s"] - l0, "loads": _W.tm["loads"] - n0,
+                  "cache": {k: c1[k] - c0.get(k, 0) for k in c1}}
 
 
 def run_study(db, cats=None, symbols=None, start=None, end=None, base: D.DiscountParams | None = None,
