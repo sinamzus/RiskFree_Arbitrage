@@ -6933,6 +6933,7 @@ function renderDiscVolume(r) {
       <th>معامله</th><th title="میانگین سرمایهٔ درگیر">درگیری</th>
       <th title="به‌طور میانگین چه سهمی از اندازهٔ هدف هر خرید واقعاً پر شد (عمق ۵ سطر صف فروش + سقف حجم + نقد)">پرشدن خرید</th>
       <th title="خریدهایی که به‌خاطر عمق صف/سقف حجم کوچک‌تر از هدف شدند">محدود به عمق/حجم</th>
+      <th title="خریدهایی که چون میانگین قیمتِ کل سفارش از حد ورود بیشتر می‌شد، فقط تا جایی که میانگین در حد بماند انجام شدند">محدود به قیمت</th>
       <th title="جابه‌جایی‌هایی که چون کاندیدا عمق کافی نداشت انجام نشد">جابه‌جایی ردشده</th>
       <th title="فروش‌هایی که از عمق ۵ سطر صف خرید بزرگ‌تر بودند؛ باقی‌مانده با قیمت بدترین سطر فرض شده (خوش‌بینانه)">فروش بیش از عمق</th>
       <th title="هزینهٔ خوردن عمق صف: فاصلهٔ قیمت اجرا از میانهٔ اردربوک، به نسبت گردش">هزینهٔ عمق</th>
@@ -6940,7 +6941,7 @@ function renderDiscVolume(r) {
       ${rows.map(x => `<tr><td><b>${discLtr(x.capital / 1e9)}</b></td><td class="${discCls(x.return_pct)}">${pc(x.return_pct)}</td>
         <td class="${discCls(x.vs_smallest_pct)}">${pc(x.vs_smallest_pct)}</td><td>${pc(x.cagr_pct)}</td><td>${pl(x.max_dd_pct)}</td>
         <td>${x.trades}</td><td>${pl(x.exposure_pct)}</td><td>${pl(x.avg_size_ratio_pct)}</td><td>${x.limited_by_volume ?? '—'}</td>
-        <td>${x.switch_blocked_by_volume ?? '—'}</td>
+        <td>${x.limited_by_price ?? '—'}</td><td>${x.switch_blocked_by_volume ?? '—'}</td>
         <td>${x.book_sales ? `${x.sales_over_depth} از ${x.book_sales} (${pl(x.sale_value_over_depth_pct)} ارزش)` : '—'}</td>
         <td>${pl(x.depth_cost_pct)}</td><td>${discLtr(discM(x.fees || 0))}</td></tr>`).join('')}
     </tbody></table></div>
@@ -7826,7 +7827,8 @@ function discIdleHtml(res) {
       <div class="dv-note" style="font-size:11px;color:var(--sub)">${ii.avg_gap_to_threshold_pct != null ? `در لحظه‌هایی که سیگنال نبود، تخفیف به‌طور میانگین ${discLtr(ii.avg_gap_to_threshold_pct + '%')} بالاتر از آستانهٔ ورود (${discLtr('−' + ii.entry_threshold_pct + '%')}) بود. ` : ''}
         پوزیشن‌های اجراشده به‌طور میانگین ${discLtr((sz.avg_size_ratio_pct == null ? '—' : sz.avg_size_ratio_pct + '%'))} اندازهٔ هدف بودند (${discLtr((sz.small_positions_pct == null ? '—' : sz.small_positions_pct + '%'))} از آن‌ها کمتر از نصف هدف)؛
         اندازهٔ کمتر از هدف: ${discLtr(sz.limited_by_volume || 0)} بار به‌خاطر سقف حجم روز و ${discLtr(sz.limited_by_cash || 0)} بار به‌خاطر کمبود نقد؛ ${discLtr(sz.skipped_no_cash || 0)} سیگنال به‌خاطر نبودن نقد کافی ردّ شد.${sz.switch_sales != null ? `
-        <br>جابه‌جایی‌ها: ${discLtr(sz.switch_sales)} فروش برای جابه‌جایی؛ در ${discLtr(sz.switch_sales_over_cap)} مورد حجم فروش از سقف «سهم از حجم روز» بیشتر بود (${discLtr(sz.switch_sale_value_over_cap_pct + '%')} از ارزش فروش‌ها بیش از سقف؛ در بک‌تست کامل فروخته می‌شود ولی در عمل ممکن است چند جلسه طول بکشد)، و ${discLtr(sz.switch_blocked_by_volume)} جابه‌جایی به‌خاطر ناکافی بودن سقف حجم برای خریدِ کاندیدا انجام نشد.` : ''}</div>`;
+        <br>جابه‌جایی‌ها: ${discLtr(sz.switch_sales)} فروش برای جابه‌جایی؛ در ${discLtr(sz.switch_sales_over_cap)} مورد حجم فروش از سقف «سهم از حجم روز» بیشتر بود (${discLtr(sz.switch_sale_value_over_cap_pct + '%')} از ارزش فروش‌ها بیش از سقف؛ در بک‌تست کامل فروخته می‌شود ولی در عمل ممکن است چند جلسه طول بکشد)، و ${discLtr(sz.switch_blocked_by_volume)} جابه‌جایی به‌خاطر ناکافی بودن سقف حجم برای خریدِ کاندیدا انجام نشد.${sz.limited_by_price != null ? `
+        <br>خرید جزئی: ${discLtr(sz.limited_by_price)} خرید فقط تا جایی انجام شد که میانگین قیمتِ صف فروش در حد مجاز ورود بماند؛ ${discLtr(sz.switch_partial_sales || 0)} فروشِ جابه‌جایی فقط به اندازهٔ پولِ لازم برای خرید بود (بقیهٔ صندوق نگه داشته شد).` : ''}` : ''}</div>`;
   }
   if (fi && res.params && res.params.fill_mode === 'hold') {
     h += `<div class="disc-h" style="margin-top:8px">حالت «همیشه سرمایه‌گذاری» — فروش فقط با کاندیدای بهتر</div>

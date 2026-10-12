@@ -39,6 +39,7 @@ def run_volume_study(db, cats, symbols, start, end, base, capitals: list[float] 
             "exposure_pct": s.get("avg_exposure_pct"),
             "avg_size_ratio_pct": si.get("avg_size_ratio_pct"), "small_positions_pct": si.get("small_positions_pct"),
             "limited_by_volume": si.get("limited_by_volume"), "switch_blocked_by_volume": si.get("switch_blocked_by_volume"),
+            "limited_by_price": si.get("limited_by_price"), "switch_partial_sales": si.get("switch_partial_sales"),
             "sales_over_depth": si.get("sales_over_depth"), "book_sales": si.get("book_sales"),
             "sale_value_over_depth_pct": si.get("sale_value_over_depth_pct"),
             "depth_cost_pct": round(att["spread"] / (buy_n + sell_n) * 100, 4) if att.get("spread") is not None and buy_n + sell_n else None,

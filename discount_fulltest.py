@@ -1246,6 +1246,61 @@ def test_tse_dataset(R: Results, db_path: str):
                 bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {t['rel_entry_pct']}% > {mx}%")
     R.add(g, "سیگنال خرید با میانگین قیمت کل سفارش (همهٔ سطرهای صف فروش) تأیید می‌شود: قیمت واقعی هر خرید در حد مجاز ورود است",
           not bad and n > 0 and deep > 0, "؛ ".join(bad[:3]) or f"{n} خرید، {deep} خرید از سطرهای بعدی")
+    # partial entry: when the whole order would pay too much on average, only the part whose AVERAGE price stays
+    # within the limit is bought (checked independently by bisection over the real asks) — and the switch sells
+    # only as much of the held fund as that buy needs
+    import tse_dataset as _TD0
+    bad, n_lim, n_part, ent_ok = [], 0, 0, 0
+    sid_of = {f["symbol"]: f["symbol_id"] for f in funds}
+    for mx, pos_ in ((0.0, 100), (-0.1, 50)):
+        hpl = _base(fill_mode="hold", fill_max_rel_pct=mx, position_pct=pos_, dataset="hybrid", participation_pct=0.0)
+        rl = _run(db, hpl)
+        si = rl["summary"].get("size_info") or {}
+        n_lim += si.get("limited_by_price") or 0
+        n_part += si.get("switch_partial_sales") or 0
+        books = {s: D._load_ex(db, sid_of[s], None, None, hpl) for s in {t["symbol"] for t in rl["trades"]}}
+        legs = {}
+        for t in rl["trades"]:
+            legs.setdefault((t["symbol"], t["entry_date"], t["entry_time"]), []).append(t)
+        for (sym, d_, t_), ts in legs.items():
+            L = books[sym]
+            r = next((x for x in L["rows"] if x[1] == d_ and x[2] == t_), None)
+            asks = D._book_side(L["book"], d_, t_, 1) if r else None
+            if not asks or abs(ts[0]["rel_entry_pct"] - mx) > 1e-3 or asks[-1][0] <= r[3] * (1 + mx / 100):
+                continue
+            lo, hi = 0.0, float(sum(v for _p, v in asks))     # most units whose average price is within the limit
+            for _ in range(80):
+                mid = (lo + hi) / 2
+                g_, a_, _w = _TD0.fill(asks, mid)
+                lo, hi = (mid, hi) if a_ <= r[3] * (1 + mx / 100) * (1 + 1e-12) else (lo, mid)
+            vol = sum(x["volume"] for x in ts)
+            ent_ok += 1
+            if not (lo - len(ts) - 1 <= vol <= lo + 1):
+                bad.append(f"{sym} {d_} {t_}: {vol} ≠ {lo:.1f}")
+        for t in rl["trades"]:
+            if t["rel_entry_pct"] > mx + 1e-6:
+                bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {t['rel_entry_pct']}% > {mx}%")
+        # a partial switch sale raises no more than the buy at the same instant costs
+        for (sym, d_, t_), ts in legs.items():
+            for x in ts:
+                if x["exit_reason"] != "rotate" or x is ts[-1]:
+                    continue                                   # only the legs that left a remnant
+                buy = [b for b in rl["trades"] if b["entry_date"] == x["exit_date"] and b["entry_time"] == x["exit_time"]]
+                cost = sum(b["buy_notional"] for b in buy) * (1 + hpl.buy_fee)
+                net = x["sell_notional"] * (1 - hpl.sell_fee)
+                if not buy or net > cost * 1.005:
+                    bad.append(f"{sym}: فروش {net:,.0f} > خرید {cost:,.0f}")
+    R.add(g, "خرید جزئی: اگر میانگین کل سفارش از حد بیشتر باشد، فقط بخشی که میانگینش در حد است خریده می‌شود؛ "
+             "در جابه‌جایی فقط به اندازهٔ لازم از صندوق قبلی فروخته می‌شود",
+          not bad and n_lim > 0 and n_part > 0 and ent_ok > 0,
+          "؛ ".join(bad[:3]) or f"{n_lim} خرید محدود به قیمت، {ent_ok} بررسی مستقل، {n_part} فروش جزئی")
+    # the normal strategy takes the same partial entry
+    hpo = _base(dataset="hybrid", position_pct=100, entry_discount_pct=0.0, participation_pct=0.0)
+    ro = _run(db, hpo)
+    bad = [f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {t['rel_entry_pct']}%" for t in ro["trades"]
+           if t["rel_entry_pct"] > 1e-6]
+    R.add(g, "استراتژی معمولی هم فقط تا جایی می‌خرد که میانگین قیمت خرید در حد آستانهٔ ورود باشد",
+          not bad and len(ro["trades"]) > 0, "؛ ".join(bad[:3]) or f"{len(ro['trades'])} معامله")
     ck = rhy["dataset"].get("clock") or {}
     R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است؛ هیچ معامله‌ای بیرون از ساعت بازار نیست",
           ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0
@@ -1340,7 +1395,11 @@ def test_fast_replay(R: Results, db_path: str):
     _fake_tse_from_dump(db, n_days=80)
     cfgs = [{}, {"fill_switch_pct": 0.3, "fill_min_hold_min": 60}, {"exec_delay_snaps": 1},
             {"participation_pct": 5.0, "participation_basis": "sofar", "position_pct": 100},
-            {"crash_drop_pct": 0.5, "fill_quote_age_min": 15}, {"require_fresh": False, "mr_center": "off"}]
+            {"crash_drop_pct": 0.5, "fill_quote_age_min": 15}, {"require_fresh": False, "mr_center": "off"},
+            # tight entry limits: partial buys (average price at the limit) and partial switch sales
+            {"fill_max_rel_pct": 0.0, "position_pct": 100, "participation_pct": 0.0},
+            {"fill_max_rel_pct": 0.0, "participation_pct": 0.0, "exec_delay_snaps": 1},
+            {"fill_max_rel_pct": -0.1, "position_pct": 50, "participation_pct": 0.0}]
     bad, n, ntr = [], 0, 0
     for ds in ("dump", "hybrid"):
         for c in cfgs:

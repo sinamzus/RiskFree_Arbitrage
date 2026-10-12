@@ -324,6 +324,54 @@ def _fill_lv(levels, units: float) -> tuple[float, float, float]:
     return got, (cost / got if got > 0 else 0.0), worst
 
 
+_INF = float("inf")
+
+
+def _lim_units(levels, lim_px: float) -> float:
+    """Most units that can be bought walking ``levels`` (asks, best first) with an AVERAGE price at or below
+    ``lim_px`` — every level at or below the limit in full, then as much of the next dearer ones as the room left
+    under the limit pays for. Never beyond the visible depth."""
+    cost, got = 0.0, 0.0
+    for px, v in levels:
+        if px <= lim_px:
+            cost += v * px
+            got += v
+            continue
+        room = lim_px * got - cost
+        if room <= 0:
+            break
+        q = room / (px - lim_px)
+        if q >= v:
+            cost += v * px
+            got += v
+            continue
+        got += q
+        break
+    return got
+
+
+def _units_for_cash(levels, need: float, sf: float, total: float) -> float:
+    """Units to sell walking ``levels`` (bids, best first) line by line so the proceeds net of the sell fee reach
+    ``need``; beyond the visible depth at the worst bid (the convention of every sale). At most ``total``."""
+    left, got, worst = need, 0.0, 0.0
+    for px, v in levels:
+        if left <= 0 or got >= total:
+            break
+        per = px * (1 - sf)
+        q = left / per
+        if q > v:
+            q = v
+        if q > total - got:
+            q = total - got
+        got += q
+        left -= q * per
+        worst = px
+    if left > 0 and got < total and worst > 0:
+        q = left / (worst * (1 - sf))
+        got = got + q if q < total - got else total
+    return got
+
+
 def _book_mid(book, d: int, t: int, default: float) -> float:
     """Mid of the real book at (d, t) — the reference the paid spread is measured against; ``default`` without one."""
     b, a = _best(book, d, t, 0, 0.0), _best(book, d, t, 1, 0.0)
@@ -911,6 +959,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 continue                      # the group is falling fast (or just did): no new entry
             ix = idx[i] if idx is not None else None
             r_in = r
+            lim_n = _INF                      # units that keep the average buy price within the entry threshold
             if book and rel is None and nav > 0:
                 # confirmed at the AVERAGE price of the order it would place (walking the ask levels), never easier
                 asks = _book_side(book, d, t, 1)
@@ -922,6 +971,17 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                         want = cp_
                     got_, avg_, _w = _fill_lv(asks, want)
                     r_in = r + max(0.0, ((avg_ if got_ > 0 else a1) - last) / nav)
+                    if r_in > ent_thr and r <= ent_thr and mode in ("fund", "both"):
+                        # the whole order costs too much on average, the first levels do not: buy only the part
+                        # whose average price stays within the threshold — if it is worth a quarter of a position
+                        lu = _lim_units(asks, nav * (1 + ent_thr))
+                        if lu > 0:
+                            g2, a2, _w = _fill_lv(asks, lu)
+                            if g2 * a2 >= 0.25 * p.position_pct / 100.0 * p.initial_capital:
+                                r_in = r + max(0.0, (a2 - last) / nav)
+                                lim_n = lu
+                                if r_in > ent_thr:          # (rounding: the average sits exactly on the limit)
+                                    r_in = ent_thr
             fund_ok = r_in <= ent_thr
             idx_ok = ix is not None and ix <= ix_entry
             if not ((mode == "fund" and fund_ok) or (mode == "index" and idx_ok)
@@ -944,7 +1004,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 # real order book: buy against the asks; the order is sized as the replay will roughly size it
                 # (position_pct of the initial capital) so the average price reflects the depth actually eaten
                 a1 = _best(book, d, t, 1, ask)
-                want = min(p.position_pct / 100.0 * p.initial_capital / a1, _cap(d, t))
+                want = min(p.position_pct / 100.0 * p.initial_capital / a1, _cap(d, t), lim_n)
                 got, ask = _buy_exec(book, d, t, want, last, hs)
                 units = int(got)
             else:
@@ -1267,6 +1327,7 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
                       "limited_by_volume": sz["liq"], "limited_by_cash": sz["cash"],
                       "skipped_no_cash": sz["skip_cash"], "skipped_tiny": sz["skip_tiny"],
                       **({"switch_blocked_by_volume": parker.sz["skip_cap"],
+                          "limited_by_price": parker.sz["price"], "switch_partial_sales": parker.sz["partial_sales"],
                           "switch_sales": parker.sz["sales"], "switch_sales_over_cap": parker.sz["sales_over_cap"],
                           "switch_sale_value_over_cap_pct": round(parker.sz["sale_value_over_cap"] / parker.sz["sale_value"] * 100, 1)
                           if parker.sz["sale_value"] > 0 else 0.0,
@@ -1308,7 +1369,10 @@ class _Parker:
         mean-reversion and market-fall gates respected, not held by a normal trade, and the fund trades at or
         below its own norm + ``fill_max_rel_pct`` (a fund at a premium is never bought);
       * "best" = the lowest bubble versus its own norm among candidates seen in the last 90 minutes;
-      * size = ``position_pct`` of book capital, limited by idle cash and by the volume cap;
+      * size = ``position_pct`` of book capital, limited by idle cash and by the volume cap — and, with a real
+        book, by what keeps the AVERAGE price of the asks walked within the entry limit (a partial buy, if that
+        part is still worth a quarter of a position); a "hold" switch sells only as much of the held fund as the
+        buy needs (all of it when the rest would be smaller than a quarter of a position);
       * exit = time limit / stop-loss (same rules as normal trades), the fund trading ``fill_exit_rel_pct`` above
         its norm, rotation (a normal entry needs the cash — or the same fund), or the end of the data.
     Parked trades are ``Trade`` objects with ``origin == "fill"``.
@@ -1379,6 +1443,7 @@ class _Parker:
         self.out: list[Trade] = []
         self.blocked_day: dict[int, int] = {}
         self.cand: dict[int, tuple | None] = {}
+        self.cand_lim: dict[int, float] = {}          # units that keep the average buy price within the entry limit
         self.cur_i = [-1] * self.n
         self.cur_ts = [0] * self.n                    # instant of the latest snapshot of each fund
         self.hold = p.fill_mode == "hold"
@@ -1386,7 +1451,8 @@ class _Parker:
         self.min_hold_s = max(0, int(p.fill_min_hold_min)) * 60
         self.max_age_s = max(1, int(p.fill_quote_age_min)) * 60
         # sizing / liquidity diagnostics of the parker's own trades (merged into the replay's size_info)
-        self.sz = {"n": 0, "ratio_sum": 0.0, "small": 0, "liq": 0, "cash": 0, "skip_cap": 0,
+        self.sz = {"n": 0, "ratio_sum": 0.0, "small": 0, "liq": 0, "cash": 0, "skip_cap": 0, "price": 0,
+                   "partial_sales": 0,
                    "sales": 0, "sales_over_cap": 0, "sale_value": 0.0, "sale_value_over_cap": 0.0,
                    # sales larger than the visible bids (the rest is assumed sold at the worst visible bid)
                    "book_sales": 0, "sales_over_depth": 0, "book_sale_value": 0.0, "sale_value_over_depth": 0.0}
@@ -1408,25 +1474,43 @@ class _Parker:
         x = bisect.bisect_right(lst, T) - 1
         return x >= 0 and lst[x] > self.cur_ts[j]
 
-    def _buy_adj(self, k: int, i: int, slot: float) -> float:
+    def _buy_adj(self, k: int, i: int, slot: float) -> tuple[float, float, bool]:
         """Bubble correction for BUYING fund ``k`` at row ``i`` an intended position of ``slot`` rial (incl. fee):
         (average price of walking the ask levels for that size, capped by the volume cap − last) / fair, never
-        negative — the book can only make a buy signal harder. 0 without a book."""
+        negative — the book can only make a buy signal harder. 0 without a book.
+
+        Returns (correction, unit limit, price ok). When the whole order would pay too much on average but the
+        first levels are cheap enough, only the part that keeps the AVERAGE price at or below the entry limit is
+        bought (the unit limit) — provided it is still worth at least a quarter of the position; the correction is
+        then that of the smaller order. Unit limit = inf when the whole order is fine."""
+        r = self.rel[k][i]
         bk = self.book[k]
         if not bk:
-            return 0.0
+            return 0.0, _INF, r <= self.max_rel
         _o, d, t, fair, last, _f, _n = self.rows[k][i]
         asks = _book_side(bk, d, t, 1)
         if not asks or fair <= 0:
-            return 0.0
+            return 0.0, _INF, r <= self.max_rel
         a1 = asks[0][0]
-        want = slot / (a1 * (1 + self.p.buy_fee))
+        bf = self.p.buy_fee
+        want = slot / (a1 * (1 + bf))
         cp = self._cap(k, d, t)
         if cp < want:
             want = cp
         got, avg, _w = _fill_lv(asks, want)
         px = avg if got > 0 else a1
-        return max(0.0, (px - last) / fair)
+        x = (px - last) / fair
+        x = x if x > 0.0 else 0.0
+        if r + x <= self.max_rel or r > self.max_rel:
+            return x, _INF, r + x <= self.max_rel
+        lim = _lim_units(asks, fair * (1 + self.max_rel))
+        if lim <= 0:
+            return x, _INF, False
+        g2, a2, _w = _fill_lv(asks, lim)
+        if g2 * a2 * (1 + bf) < 0.25 * slot:
+            return x, _INF, False             # what fits under the limit is too small to be worth an order
+        x2 = (a2 - last) / fair
+        return (x2 if x2 > 0.0 else 0.0), lim, True
 
     def _sell_adj(self, j: int, i: int, units: float) -> float:
         """Bubble correction for SELLING ``units`` of fund ``j`` at row ``i``: (last − average price of walking the
@@ -1607,8 +1691,10 @@ class _Parker:
             if p.require_fresh and not self.rows[k][i][5]:
                 continue
             d = self.rows[k][i][1]
-            xa = self._buy_adj(k, i, slot_c)          # at the average price of the order we would place
-            ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and self.rel[k][i] + xa <= self.max_rel
+            # at the average price of the order we would place (or of the part of it the entry limit allows)
+            xa, lim, okp = self._buy_adj(k, i, slot_c)
+            self.cand_lim[k] = lim
+            ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and okp
                   and not (mr_on and (self.mr[k] is None or self.mr[k][i] is None or self.mr[k][i] < p.mr_min_score))
                   and not (self.crash is not None and p.crash_drop_pct > 0 and self.crash[k][i] is not None
                            and self.crash[k][i] <= crash_thr))
@@ -1629,19 +1715,30 @@ class _Parker:
             if better:
                 continue
             o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
+            lim = self.cand_lim.get(k, _INF)
             slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
             amount = min(slot, cash)
             self._sale_ts = None
             if self.hold and slot > 0 and amount < 0.25 * slot:
                 # no cash: sell the least attractive holding, but only if this candidate is clearly better —
-                # and only if the candidate can then actually be bought (volume cap), or we would sell for nothing
-                cap_pre = self._cap(k, d, t)
+                # and only if the candidate can then actually be bought (volume cap, depth, entry limit), or we
+                # would sell for nothing
+                cap_pre = min(self._cap(k, d, t), lim)
                 if self.book[k] is not None:
                     cap_pre = min(cap_pre, sum(v for _p, v in (_book_side(self.book[k], d, t, 1) or [])))
                 if cap_pre * _best(self.book[k], d, t, 1, last * (1 + hs)) * (1 + bf) < 0.25 * slot:
                     self.sz["skip_cap"] += 1
                     continue
-                cash, invested = self._switch_out(k, i, T, cash, invested)
+                # the cash the buy needs: the intended order (volume cap, depth and entry limit) at its average price
+                asks = _book_side(self.book[k], d, t, 1)
+                if asks:
+                    want = min(slot / (asks[0][0] * (1 + bf)), self._cap(k, d, t), lim)
+                    g_, a_, _w = _fill_lv(asks, want)
+                    need = g_ * a_ * (1 + bf)
+                else:
+                    ask0 = last * (1 + hs)
+                    need = min(slot / (ask0 * (1 + bf)), self._cap(k, d, t)) * ask0 * (1 + bf)
+                cash, invested = self._switch_out(k, i, T, cash, invested, need - cash)
                 slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
                 amount = min(slot, cash)
             if slot <= 0 or amount < 0.25 * slot:
@@ -1655,10 +1752,15 @@ class _Parker:
             ask = last * (1 + hs)
             cap_u = self._cap(k, d, t)
             units = min(amount / (ask * (1 + bf)), cap_u)
+            lim_hit = False
             if self.book[k] is not None:
-                # real book: walk the asks (never beyond the visible depth); keep the cost within the cash
+                # real book: walk the asks (never beyond the visible depth, nor beyond what keeps the average price
+                # within the entry limit); keep the cost within the cash
                 a1 = _best(self.book[k], d, t, 1, ask)
-                units, ask = _buy_exec(self.book[k], d, t, min(amount / (a1 * (1 + bf)), cap_u), last, hs)
+                want = min(amount / (a1 * (1 + bf)), cap_u)
+                if lim < want:
+                    want, lim_hit = lim, True
+                units, ask = _buy_exec(self.book[k], d, t, want, last, hs)
                 if units > 0 and units * ask * (1 + bf) > amount:
                     units, ask = _buy_exec(self.book[k], d, t, amount / (ask * (1 + bf)), last, hs)
                 asks = _book_side(self.book[k], d, t, 1) or []
@@ -1670,8 +1772,11 @@ class _Parker:
             self.sz["ratio_sum"] += ratio
             if ratio < 0.5:
                 self.sz["small"] += 1
-            if ratio < 0.999:                 # what limited the size: the volume cap or the cash at hand?
-                self.sz["liq" if cap_u * ask * (1 + bf) < amount * 0.999 else "cash"] += 1
+            if ratio < 0.999:                 # what limited the size: the entry limit, the volume cap or the cash?
+                if lim_hit and units >= lim * (1 - 1e-9):
+                    self.sz["price"] += 1
+                else:
+                    self.sz["liq" if cap_u * ask * (1 + bf) < amount * 0.999 else "cash"] += 1
             mr_score = round(self.mr[k][i], 1) if mr_on and self.mr[k] and self.mr[k][i] is not None else None
             self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": t_in,
                               "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score,
@@ -1680,9 +1785,31 @@ class _Parker:
             invested += units * ask
         return cash, invested
 
-    def _switch_out(self, k: int, i: int, T: int, cash: float, invested: float) -> tuple[float, float]:
+    def _units_to_sell(self, j: int, i: int, need: float, slot: float, bids) -> float:
+        """Units of held fund ``j`` to sell (quote of row ``i``, bid levels ``bids`` or None) so the proceeds net of
+        fees cover ``need`` rial — walked line by line over the bids. The whole holding when what would be left is
+        smaller than a minimum position (a quarter of ``slot``): no crumbs are kept."""
+        p = self.p
+        total = self.parked[j]["units"]
+        last = self.rows[j][i][4]
+        if bids:
+            u = _units_for_cash(bids, need, p.sell_fee, total)
+        else:
+            per = last * (1 - p.half_spread_pct / 100.0) * (1 - p.sell_fee)
+            u = min(total, need / per) if per > 0 else total
+        if (total - u) * last < 0.25 * slot:
+            u = total
+        return u
+
+    def _switch_out(self, k: int, i: int, T: int, cash: float, invested: float,
+                    need: float) -> tuple[float, float]:
         """"hold": sell the held fund with the HIGHEST current bubble — provided candidate ``k`` is at least
-        ``fill_switch_pct`` points below it (and the held fund's latest quote is recent enough to be sold at)."""
+        ``fill_switch_pct`` points below it (and the held fund's latest quote is recent enough to be sold at).
+        Only as much of it is sold as the buy of ``k`` needs (``need`` rial beyond the cash at hand)."""
+        if need <= 0:
+            return cash, invested
+        p = self.p
+        slot = p.position_pct / 100.0 * (cash + invested) * (1 + p.buy_fee)
         worst, w_rel = None, None
         for j in self.parked:
             if j == k or self.cur_i[j] < 0 or T - self.cur_ts[j] > self.max_age_s:
@@ -1691,8 +1818,11 @@ class _Parker:
                 continue                      # bought too recently to be switched out
             if self._stale_now(j, T):
                 continue                      # its NAV is stale right now: not sold
-            # at the average price of selling the whole holding (walking the bids of its latest snapshot)
-            r = self.rank[j][self.cur_i[j]] - self._sell_adj(j, self.cur_i[j], self.parked[j]["units"])
+            # at the average price of selling what the switch needs (walking the bids of its latest snapshot)
+            ci = self.cur_i[j]
+            rj = self.rows[j][ci]
+            u = self._units_to_sell(j, ci, need, slot, _book_side(self.book[j], rj[1], rj[2], 0))
+            r = self.rank[j][ci] - self._sell_adj(j, ci, u)
             if w_rel is None or r > w_rel:
                 worst, w_rel = j, r
         # the candidate's value as judged this instant (average price of buying the intended position)
@@ -1715,19 +1845,29 @@ class _Parker:
         rs = self.rows[worst][sale_i]
         # the sale must free enough cash for the new position (a buy below a quarter of its target is not placed):
         # never sell for nothing
-        p = self.p
-        slot = p.position_pct / 100.0 * (cash + invested) * (1 + p.buy_fee)
         if cash + pw["units"] * rs[4] * (1 - p.half_spread_pct / 100.0) * (1 - p.sell_fee) < 0.25 * slot:
             self._sale_ts = None
             return cash, invested
+        # how much to sell, line by line over the bids the sale will actually meet (same book as ``_close``)
+        bk = self.book[worst]
+        sbids = None
+        if at_ts is not None and bk is not None and hasattr(bk, "at"):
+            st = bk.at(*_ts_to_dt(at_ts))
+            if st[0] and st[1]:
+                sbids = st[0]
+        if sbids is None:
+            sbids = _book_side(bk, rs[1], rs[2], 0)
+        units = self._units_to_sell(worst, sale_i, need, slot, sbids)
+        if units < pw["units"]:
+            self.sz["partial_sales"] += 1
         cap_u = self._cap(worst, rs[1], rs[2])
-        val = pw["units"] * rs[4]
+        val = units * rs[4]
         self.sz["sales"] += 1
         self.sz["sale_value"] += val
-        if pw["units"] > cap_u:               # more than the volume cap would let us sell at once (still sold in full)
+        if units > cap_u:                     # more than the volume cap would let us sell at once (still sold)
             self.sz["sales_over_cap"] += 1
-            self.sz["sale_value_over_cap"] += val * (1 - cap_u / pw["units"])
-        dc, di = self._close(worst, pw["units"], sale_i, "rotate", at_ts)
+            self.sz["sale_value_over_cap"] += val * (1 - cap_u / units)
+        dc, di = self._close(worst, units, sale_i, "rotate", at_ts)
         return cash + dc, invested + di
 
     def flush(self, cash: float, invested: float) -> tuple[float, float]:
