@@ -110,6 +110,8 @@ SETTLED = {
     "mr_window_days": "فیلتر بازگشت خاموش است", "mr_horizon_days": "فیلتر بازگشت خاموش است",
     "mr_lag": "فیلتر بازگشت خاموش است", "mr_min_score": "فیلتر بازگشت خاموش است",
     "crash_scope": "دستهٔ صندوق در همهٔ ترکیب‌های برتر",
+    "max_nav_age_days": "فقط با NAV به‌روز معامله می‌شود (نه خرید، نه فروش) — بهینه‌سازی نمی‌شود",
+    "max_nav_age_min": "فقط با NAV به‌روز معامله می‌شود (نه خرید، نه فروش) — بهینه‌سازی نمی‌شود",
     "entry_mode": "در حالت hold بی‌اثر", "index_min_share": "در حالت hold بی‌اثر",
     "entry_discount_pct": "در حالت hold بی‌اثر", "exit_discount_pct": "در حالت hold بی‌اثر",
     "index_entry_pct": "در حالت hold بی‌اثر", "index_exit_pct": "در حالت hold بی‌اثر",

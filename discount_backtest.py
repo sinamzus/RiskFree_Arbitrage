@@ -141,7 +141,7 @@ class DiscountParams:
     exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
     max_nav_age_days: int = 2           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
-    max_nav_age_min: int = 60           # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
+    max_nav_age_min: int = 5            # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
     session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
     session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
     session_end: int = 123000
@@ -528,6 +528,7 @@ class _DayVol(dict):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self.cum: dict = {}
+        self.stale: list = []         # instants (ordinal·86400 + seconds) of in-session snapshots whose NAV was stale
 
 
 def _vol_cap(day_vol, p: "DiscountParams", d: int, t: int | None) -> float:
@@ -608,12 +609,14 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
         if nav_d and p.max_nav_age_days >= 0 and o - _ord(nav_d) > p.max_nav_age_days:
             if counted:
                 stats["stale_days"] = stats.get("stale_days", 0) + 1
+            day_vol.stale.append(o * 86400 + _sec(t))
             continue                                  # the NAV is from an older DAY: not a candidate
         if nav_age_s > 0 and nav_d and nav_t:
             age = (o * 86400 + _sec(t)) - (_ord(nav_d) * 86400 + _sec(nav_t))
             if age > nav_age_s:
                 if counted:
                     stats["stale_min"] = stats.get("stale_min", 0) + 1
+                day_vol.stale.append(o * 86400 + _sec(t))
                 continue                              # the NAV was computed too long ago (minutes): not a candidate
         base_rows.append((o, d, t, nav, last, fresh))
 
@@ -1327,6 +1330,8 @@ class _Parker:
         self.rank = pre.get("rank") or self.rel
         self.xb = pre.get("xb") or [None] * self.n
         self.xs = pre.get("xs") or [None] * self.n
+        # a fund whose latest snapshot carries a stale NAV is not traded at all — neither bought nor sold
+        self.stale = [sorted(getattr(l.get("day_vol"), "stale", None) or []) for l in loaded]
         self.crash = crash_all
         self.mr = [l.get("mr") for l in loaded]
         self.groups = pre["groups"]
@@ -1350,6 +1355,15 @@ class _Parker:
         self.max_rel = p.fill_max_rel_pct / 100.0
         self.exit_rel = p.fill_exit_rel_pct / 100.0
         self.big = float(1 << 60)
+
+    def _stale_now(self, j: int, T: int) -> bool:
+        """Is fund ``j``'s NAV stale at instant ``T``: a snapshot dropped for its stale NAV came after the fund's
+        latest valid snapshot (so its price can no longer be compared with a current NAV)?"""
+        lst = self.stale[j]
+        if not lst:
+            return False
+        x = bisect.bisect_right(lst, T) - 1
+        return x >= 0 and lst[x] > self.cur_ts[j]
 
     def _xadj(self, k: int, i: int, side: int) -> float:
         """Executable-price correction of the bubble at row ``i`` of fund ``k`` (real book only, else 0): buying
@@ -1460,11 +1474,15 @@ class _Parker:
         """A normal entry on ``symbol`` needs ``need_cash`` at instant ``ts``: hand back the same fund, then the
         biggest others (sold at the latest known bid)."""
         k = self.k_of.get(symbol)
+        # the same fund is always handed back: the normal entry itself happens on a snapshot with a current NAV
         if k is not None and k in self.parked and self.cur_i[k] >= 0:
             dc, di = self._close(k, self.parked[k]["units"], self.cur_i[k], "rotate", ts)
             cash, invested = cash + dc, invested + di
         while cash < need_cash and self.parked:
-            j = max(self.parked, key=lambda x: self.parked[x]["cost"])
+            ok = [x for x in self.parked if not self._stale_now(x, ts)]   # a stale-NAV holding is not sold
+            if not ok:
+                break
+            j = max(ok, key=lambda x: self.parked[x]["cost"])
             if self.cur_i[j] < 0:
                 break
             dc, di = self._close(j, self.parked[j]["units"], self.cur_i[j], "rotate", ts)
@@ -1532,7 +1550,7 @@ class _Parker:
             better = False
             for k2, c2 in self.cand.items():
                 if k2 == k or c2 is None or T - c2[0] > self.max_age_s or k2 in self.parked \
-                        or self.real_open.get(self.labels[k2], 0) > 0:
+                        or self.real_open.get(self.labels[k2], 0) > 0 or self._stale_now(k2, T):
                     continue
                 if c2[1] < c[1] - 1e-12:
                     better = True
@@ -1600,6 +1618,8 @@ class _Parker:
                 continue
             if self.min_hold_s and T - self.parked[j]["ts"] < self.min_hold_s:
                 continue                      # bought too recently to be switched out
+            if self._stale_now(j, T):
+                continue                      # its NAV is stale right now: not sold
             r = self.rank[j][self.cur_i[j]] - self._xadj(j, self.cur_i[j], 0)    # at the price we can sell at (bid)
             if w_rel is None or r > w_rel:
                 worst, w_rel = j, r

@@ -1357,6 +1357,69 @@ def test_fast_replay(R: Results, db_path: str):
             pass
 
 
+def test_stale_nav_no_trade(R: Results, db):
+    """A fund whose latest snapshot carries a stale NAV is neither bought nor sold (not even to fund a switch)."""
+    import bisect as _bs
+    g = "NAV به‌روز"
+    import shutil as _sh
+    p2 = db.path.parent / (db.path.name + ".stale.db")
+    _sh.copyfile(db.path, p2)
+    db = _db(str(p2))
+    # a quarter of the snapshots get a NAV computed 20 minutes earlier (stale for a 5-minute limit)
+    rng = random.Random(9)
+    with db._conn() as conn:
+        rows = conn.execute("SELECT rowid, date, time FROM nav_intraday").fetchall()
+        upd = []
+        for rid, d, t in rows:
+            sec = (t // 10000) * 3600 + (t // 100 % 100) * 60 + t % 100
+            if sec >= 3600 and rng.random() < 0.25:
+                s2 = sec - 1200
+                upd.append((d, (s2 // 3600) * 10000 + (s2 // 60 % 60) * 100 + s2 % 60, rid))
+            else:
+                upd.append((d, t, rid))
+        conn.executemany("UPDATE nav_intraday SET nav_date=?, nav_time=? WHERE rowid=?", upd)
+    hp = _base(fill_mode="hold", fill_max_rel_pct=2.0, position_pct=50, max_nav_age_min=5, max_nav_age_days=1)
+    res = _run(db, hp)
+    info = {}
+    for sid, lab in D._universe(db, None, None):
+        L = D._load_ex(db, sid, None, None, hp)
+        valid = [r[0] * 86400 + D._sec(r[2]) for r in L["rows"]]
+        info[lab] = (valid, sorted(L["day_vol"].stale))
+    n_st = sum(len(v[1]) for v in info.values())
+    bad, n = [], 0
+    for t in res["trades"]:
+        for d, tm, side in ((t["entry_date"], t["entry_time"], "خرید"), (t["exit_date"], t["exit_time"], "فروش")):
+            if side == "فروش" and t["exit_reason"] == "end":
+                continue
+            valid, stale = info[t["symbol"]]
+            T = D._ord(d) * 86400 + D._sec(tm)
+            lv = valid[_bs.bisect_right(valid, T) - 1] if _bs.bisect_right(valid, T) else -1
+            ls = stale[_bs.bisect_right(stale, T) - 1] if _bs.bisect_right(stale, T) else -1
+            n += 1
+            if ls > lv:
+                bad.append(f"{t['symbol']} {side} {d} {tm}")
+    R.add(g, "صندوقی که آخرین اسنپ‌شاتش NAV کهنه دارد نه خریده می‌شود نه فروخته (حتی برای جابه‌جایی)",
+          not bad and n > 0 and n_st > 0, "؛ ".join(bad[:3]) or f"{n} خرید/فروش، {n_st} اسنپ‌شات NAV کهنه")
+    import discount_fast as X
+    if X.available():
+        st = S.Study(db, None, None, None, None, hp, {"fill_switch_pct": [0.8]}, blocks=4, min_trades=1, workers=1)
+        st._open(db)
+        U = st._universe(hp)
+        d0, d1 = st.dates[0], st.dates[-1]
+        ctx = st._fill_ctx(U, d0, d1)
+        m1, m2 = [], []
+        a1, _s1, _c1 = D._portfolio_summary([], hp, d0, d1, fill=ctx, marks=m1)
+        a2 = X.run_hold(ctx, hp, d0, d1, marks=m2)
+        R.add(g, "با NAV کهنه هم شبیه‌سازی کامپایل‌شده دقیقاً همان نتیجهٔ پایتون را می‌دهد",
+              a2 is not None and [asdict(x) for x in a1] == [asdict(x) for x in a2] and m1 == m2 and len(a1) > 0,
+              f"{len(a1)} معامله")
+    from discount_study import space_info
+    info2 = {d["key"]: d for d in space_info()["dims"]}
+    R.add(g, "سن NAV از جستجوی بهینه‌سازی خارج است (مسجل) و پیش‌فرض ۵ دقیقه است",
+          info2["max_nav_age_min"]["settled"] and info2["max_nav_age_days"]["settled"]
+          and D.DiscountParams().max_nav_age_min == 5, "")
+
+
 def test_volume_study(R: Results, db):
     """Capacity study: only the capital changes; buys stay within the visible depth, so a bigger capital fills a
     smaller share of its intended size; the API runs it in the background."""
@@ -1860,6 +1923,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
              ("بهینه‌سازی موازی", lambda: (test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),
+             ("NAV به‌روز", lambda: test_stale_nav_no_trade(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: test_tse_dataset(R, path)),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),

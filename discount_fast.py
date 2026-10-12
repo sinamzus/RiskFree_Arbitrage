@@ -120,7 +120,12 @@ def pack(loaded: list[dict], pre: dict) -> dict:
             pos += 1
     g_ptr[G] = pos
     # a row has more than 5 visible levels? (the kernel keeps 5 — the TSE book has exactly 5)
-    nb = {"K": K, "R": R, "nrows": nrows, "base": base, "o": o, "d": d, "t": t, "sec": sec, "fair": fair,
+    st_lists = [sorted(getattr(l.get("day_vol"), "stale", None) or []) for l in loaded]
+    st_ptr = np.zeros(K + 1, np.int64)
+    for k, lst in enumerate(st_lists):
+        st_ptr[k + 1] = st_ptr[k] + len(lst)
+    st_ts = np.array([x for lst in st_lists for x in lst], dtype=np.int64) if st_ptr[K] else np.zeros(0, np.int64)
+    nb = {"st_ptr": st_ptr, "st_ts": st_ts, "K": K, "R": R, "nrows": nrows, "base": base, "o": o, "d": d, "t": t, "sec": sec, "fair": fair,
           "last": last, "fresh": fresh, "navr": navr, "rel": rel, "xb": xb, "xs": xs, "na": na, "nbid": nbid,
           "ap": ap, "av": av, "bp": bp, "bv": bv, "has_bk": has_bk, "has_at": has_at,
           "g_T": g_T, "g_ptr": g_ptr, "m_k": m_k, "m_i": m_i, "_per": {}}
@@ -229,6 +234,23 @@ if _HAVE:
         return got, avg, worst
 
     @njit(cache=True)
+    def _stale(j, T, cur_ts, st_ptr, st_ts):
+        """Fund j's NAV is stale at T: its latest snapshot at or before T was dropped for a stale NAV."""
+        lo = st_ptr[j]
+        hi = st_ptr[j + 1]
+        if lo == hi:
+            return False
+        a, b = lo, hi                      # last index with st_ts <= T
+        while a < b:
+            m = (a + b) // 2
+            if st_ts[m] <= T:
+                a = m + 1
+            else:
+                b = m
+        x = a - 1
+        return x >= lo and st_ts[x] > cur_ts[j]
+
+    @njit(cache=True)
     def _xi(k, i, not_before, dl, req_fresh, base, nrows, d, fresh, o, sec):
         if dl <= 0:
             return i
@@ -248,7 +270,7 @@ if _HAVE:
 
     @njit(cache=True)
     def _kernel(K, nrows, base, o, d, t, sec, fair, last, fresh, navr, rank, xb, xs, na, nbid, ap, av, bp, bv,
-                has_bk, has_at, g_T, g_ptr, m_k, m_i, okst, cap,
+                has_bk, has_at, g_T, g_ptr, m_k, m_i, okst, cap, st_ptr, st_ts,
                 req_fresh, hs, bf, sf, position_pct, switch, min_hold_s, max_age_s, dl, cash0, start_ts, end_ts,
                 tr_i, tr_f, mk_i, mk_f):
         # trade records: tr_i[n] = (k, sig_row, entry_row, exit_row, at_ts, reason, seq) ; tr_f[n] = (units, cost_part,
@@ -408,6 +430,8 @@ if _HAVE:
                 for k2 in range(K):
                     if k2 == k or cand_T[k2] == -1 or T - cand_T[k2] > max_age_s or parked[k2]:
                         continue
+                    if _stale(k2, T, cur_ts, st_ptr, st_ts):
+                        continue
                     if cand_v[k2] < cv - 1e-12:
                         better = True
                         break
@@ -448,6 +472,8 @@ if _HAVE:
                         if j == k or cur_i[j] < 0 or T - cur_ts[j] > max_age_s:
                             continue
                         if min_hold_s != 0 and T - p_ts[j] < min_hold_s:
+                            continue
+                        if _stale(j, T, cur_ts, st_ptr, st_ts):
                             continue
                         rr = base[j] + cur_i[j]
                         rv = rank[rr] - xs[rr]
@@ -675,6 +701,7 @@ def run_hold(fill: dict, p, d0: int, d1: int, marks: list | None = None, lite: b
             nb["K"], nb["nrows"], nb["base"], nb["o"], nb["d"], nb["t"], nb["sec"], nb["fair"], nb["last"],
             nb["fresh"], nb["navr"], rank, nb["xb"], nb["xs"], nb["na"], nb["nbid"], nb["ap"], nb["av"], nb["bp"],
             nb["bv"], nb["has_bk"], nb["has_at"], nb["g_T"], nb["g_ptr"], nb["m_k"], nb["m_i"], okst, cap,
+            nb["st_ptr"], nb["st_ts"],
             bool(p.require_fresh), p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee, float(p.position_pct),
             p.fill_switch_pct / 100.0, max(0, int(p.fill_min_hold_min)) * 60, max(1, int(p.fill_quote_age_min)) * 60,
             max(0, int(p.exec_delay_snaps)), float(p.initial_capital), start_ts, end_ts, tr_i, tr_f, mk_i, mk_f)

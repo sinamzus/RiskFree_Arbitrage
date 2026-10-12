@@ -2495,8 +2495,8 @@ td.disc-obc { cursor: help; }
         <input id="disc-sellfee" type="number" step="0.005" value="0.125" style="width:70px"></div>
       <div class="bbt-field" title="NAVهای کهنه‌تر از این‌قدر روز نادیده گرفته می‌شود (برای طلا/سهام مهم است)"><label>حداکثر سن NAV (روز)</label>
         <input id="disc-navage" type="number" step="1" value="2" style="width:70px"></div>
-      <div class="bbt-field" title="اگر NAV آخرین بار بیش از این‌قدر دقیقه پیش از لحظهٔ اسنپ‌شات محاسبه شده باشد، آن اسنپ‌شات «NAV کهنه» است و کاملاً حذف می‌شود: صندوق در آن لحظه کاندید ورود، پرکردن سرمایه بیکار یا سیگنال خروج نیست. ۰ = غیرفعال. اگر ساعت NAV در داده نباشد اسنپ‌شات نگه داشته می‌شود."><label>حداکثر سن NAV (دقیقه)</label>
-        <input id="disc-navmin" type="number" step="1" min="0" value="60" style="width:70px"></div>
+      <div class="bbt-field" title="اگر NAV آخرین بار بیش از این‌قدر دقیقه پیش از لحظهٔ اسنپ‌شات محاسبه شده باشد، آن اسنپ‌شات «NAV کهنه» است و کاملاً حذف می‌شود: صندوق تا رسیدن NAV به‌روز نه خریده می‌شود و نه فروخته (حتی برای جابه‌جایی). NAV صندوق‌ها معمولاً هر ۲ دقیقه به‌روز می‌شود؛ پیش‌فرض ۵ دقیقه. ۰ = غیرفعال. اگر ساعت NAV در داده نباشد اسنپ‌شات نگه داشته می‌شود."><label>حداکثر سن NAV (دقیقه)</label>
+        <input id="disc-navmin" type="number" step="1" min="0" value="5" style="width:70px"></div>
       <div class="bbt-field" title="«خودکار از حجم»: برای هر صندوق و هر روز، بازهٔ معامله از اولین تا آخرین لحظه‌ای است که حجم تجمعی بالا رفته. قبل از آن پیش‌گشایش است (سفارش اجرا نمی‌شود) و بعد از آن قیمت کهنه. برای صندوق‌هایی که ساعت معاملهٔ هر روزشان فرق می‌کند (مثلاً طلا ۱۱ تا ۱۵ یا ۱۲ تا ۱۸) این حالت درست است. «ساعت ثابت»: فقط بازهٔ ساعتی دستی."><label>ساعت جلسه</label>
         <select id="disc-smode" style="width:190px" onchange="document.getElementById('disc-sfix').style.display = this.value === 'fixed' ? '' : 'none'">
           <option value="auto">خودکار از حجم (هر صندوق، هر روز)</option>
