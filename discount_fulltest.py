@@ -1250,7 +1250,7 @@ def test_tse_dataset(R: Results, db_path: str):
     # within the limit is bought (checked independently by bisection over the real asks) — and the switch sells
     # only as much of the held fund as that buy needs
     import tse_dataset as _TD0
-    bad, n_lim, n_part, ent_ok = [], 0, 0, 0
+    bad, n_lim, n_part, ent_ok, n_top = [], 0, 0, 0, 0
     sid_of = {f["symbol"]: f["symbol_id"] for f in funds}
     for mx, pos_ in ((0.0, 100), (-0.1, 50)):
         hpl = _base(fill_mode="hold", fill_max_rel_pct=mx, position_pct=pos_, dataset="hybrid", participation_pct=0.0)
@@ -1258,6 +1258,7 @@ def test_tse_dataset(R: Results, db_path: str):
         si = rl["summary"].get("size_info") or {}
         n_lim += si.get("limited_by_price") or 0
         n_part += si.get("switch_partial_sales") or 0
+        n_top += si.get("topups") or 0
         books = {s: D._load_ex(db, sid_of[s], None, None, hpl) for s in {t["symbol"] for t in rl["trades"]}}
         legs = {}
         for t in rl["trades"]:
@@ -1292,8 +1293,8 @@ def test_tse_dataset(R: Results, db_path: str):
                     bad.append(f"{sym}: فروش {net:,.0f} > خرید {cost:,.0f}")
     R.add(g, "خرید جزئی: اگر میانگین کل سفارش از حد بیشتر باشد، فقط بخشی که میانگینش در حد است خریده می‌شود؛ "
              "در جابه‌جایی فقط به اندازهٔ لازم از صندوق قبلی فروخته می‌شود",
-          not bad and n_lim > 0 and n_part > 0 and ent_ok > 0,
-          "؛ ".join(bad[:3]) or f"{n_lim} خرید محدود به قیمت، {ent_ok} بررسی مستقل، {n_part} فروش جزئی")
+          not bad and n_lim > 0 and n_part > 0 and ent_ok > 0 and n_top > 0,
+          "؛ ".join(bad[:3]) or f"{n_lim} خرید محدود به قیمت، {ent_ok} بررسی مستقل، {n_part} فروش جزئی، {n_top} تکمیل موقعیت")
     # the normal strategy takes the same partial entry
     hpo = _base(dataset="hybrid", position_pct=100, entry_discount_pct=0.0, participation_pct=0.0)
     ro = _run(db, hpo)
@@ -1513,7 +1514,7 @@ def test_volume_study(R: Results, db):
     ok = (len(rows) == 3 and [r["capital"] for r in rows] == [1e8, 1e10, 1e12]
           and len(fills) >= 2 and all(a >= b - 1e-9 for a, b in zip(fills, fills[1:]))
           and rows[-1]["trades"] <= rows[0]["trades"] and rows[0]["trades"] > 0)
-    R.add(g, "فقط سرمایه عوض می‌شود؛ با سرمایهٔ بزرگ‌تر سهم پرشدهٔ هر خرید کمتر است (و خرید زیر یک‌چهارم هدف انجام نمی‌شود)", ok,
+    R.add(g, "فقط سرمایه عوض می‌شود؛ با سرمایهٔ بزرگ‌تر سهم پرشدهٔ هر خرید کمتر است (و خرید زیر یک‌بیستم هدف انجام نمی‌شود)", ok,
           " · ".join(f"{r['capital']:.0e}: {r['return_pct']}% پرشدن {r['avg_size_ratio_pct']}% محدود {r['limited_by_volume']}" for r in rows))
     from web_server import create_app
     cl = create_app(db).test_client()
@@ -1745,14 +1746,19 @@ def test_fill(R: Results, db):
         for sym, lst in by.items():
             lst.sort()
             hi = None
-            # a fund is never held twice at once: intervals of one ENTRY (partial chunks share an entry) may touch
+            # a fund is never held twice at once: intervals of one ENTRY (partial chunks share an entry) may touch;
+            # lots of one parked position (its first buy and top-ups) overlap by design — never a parked position
+            # and a normal trade, nor two normal trades
             ents = {}
             for a, b, o in lst:
                 ents[(a, o)] = max(ents.get((a, o), 0), b)
-            seq = sorted((a, b) for (a, o), b in ents.items())
-            for (a1, b1), (a2, b2) in zip(seq, seq[1:]):
-                if a2 < b1:
-                    bad_overlap.append(f"#{it} {sym}")
+            seq = sorted((a, b, o) for (a, o), b in ents.items())
+            for x, (a1, b1, o1) in enumerate(seq):
+                for a2, b2, o2 in seq[x + 1:]:
+                    if a2 >= b1:
+                        break
+                    if not (o1 == "fill" and o2 == "fill"):
+                        bad_overlap.append(f"#{it} {sym}")
         for t in res["trades"]:
             if t["origin"] != "fill":
                 continue

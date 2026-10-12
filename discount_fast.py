@@ -289,7 +289,7 @@ if _HAVE:
         return got
 
     @njit(cache=True)
-    def _units_to_sell(rr, total, need, slot, use_buf, buf, nbuf, has_bk_j, bp, bv, nbid, last, hs, sf):
+    def _units_to_sell(rr, total, need, slot, use_buf, buf, nbuf, has_bk_j, bp, bv, nbid, last, hs, sf, min_frac):
         """Same as _Parker._units_to_sell (``use_buf``: the bids of the book at the sale instant, in buf)."""
         if use_buf:
             u = _units_for_cash(buf[0:5], buf[5:10], nbuf, need, sf, total)
@@ -303,19 +303,19 @@ if _HAVE:
                     u = total
             else:
                 u = total
-        if (total - u) * last[rr] < 0.25 * slot:
+        if (total - u) * last[rr] < min_frac * slot:
             u = total
         return u
 
     @njit(cache=True)
-    def _buy_adj(r, slot, bf, has_bk_k, ap, av, na, cap, last, fair, rel, max_rel):
+    def _buy_adj(r, size, slot, bf, has_bk_k, ap, av, na, cap, last, fair, rel, max_rel, min_frac):
         """Same as _Parker._buy_adj: (correction, unit limit, price ok) — the average price of buying the intended
         position, never below last; or, when that is too dear, of the part that keeps the average within the limit."""
         rv = rel[r]
         if not has_bk_k or na[r] <= 0 or fair[r] <= 0:
             return 0.0, np.inf, rv <= max_rel
         a1 = ap[r, 0]
-        want = slot / (a1 * (1 + bf))
+        want = size / (a1 * (1 + bf))
         if cap[r] < want:
             want = cap[r]
         got, avg, _w = _fill(ap[r], av[r], na[r], want)
@@ -328,7 +328,7 @@ if _HAVE:
         if lim <= 0:
             return x, np.inf, False
         g2, a2, _w = _fill(ap[r], av[r], na[r], lim)
-        if g2 * a2 * (1 + bf) < 0.25 * slot:
+        if g2 * a2 * (1 + bf) < min_frac * slot:
             return x, np.inf, False
         x2 = (a2 - last[r]) / fair[r]
         return (x2 if x2 > 0.0 else 0.0), lim, True
@@ -343,6 +343,49 @@ if _HAVE:
             avg = (avg * got + worst * (units - got)) / units
         x = (last[r] - avg) / fair[r]
         return x if x > 0.0 else 0.0
+
+    @njit(cache=True)
+    def _close_lots(k, units, rx, at_ts, reason, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask,
+                    l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr):
+        """Same as _Parker._close: sell ``units`` of fund k first-in-first-out over its lots, one record per lot."""
+        full = units >= p_units[k] * (1 - 1e-12)
+        left = units
+        dcash = 0.0
+        dinv = 0.0
+        while head[k] >= 0:
+            if not full and left <= 1e-9:
+                break
+            L = head[k]
+            lu = l_units[L]
+            q = lu if (full or left >= lu) else left
+            cost_part = l_cost[L] * (q / lu)
+            sell_n = q * px
+            tr_i[n_tr, 0] = k
+            tr_i[n_tr, 1] = l_sig[L]
+            tr_i[n_tr, 2] = l_ent[L]
+            tr_i[n_tr, 3] = rx
+            tr_i[n_tr, 4] = at_ts
+            tr_i[n_tr, 5] = reason
+            tr_f[n_tr, 0] = q
+            tr_f[n_tr, 1] = cost_part
+            tr_f[n_tr, 2] = l_ask[L]
+            tr_f[n_tr, 3] = px
+            tr_f[n_tr, 4] = l_mid[L]
+            tr_f[n_tr, 5] = mid
+            n_tr += 1
+            l_units[L] -= q
+            l_cost[L] -= cost_part
+            if l_units[L] <= 1e-9:
+                head[k] = l_next[L]
+            left -= q
+            dcash += sell_n * (1 - sf)
+            dinv -= cost_part
+        p_units[k] -= units
+        p_cost[k] += dinv
+        if p_units[k] <= 1e-9:
+            parked[k] = False
+            head[k] = -1
+        return dcash, dinv, n_tr
 
     @njit(cache=True)
     def _stale(j, T, cur_ts, st_ptr, st_ts, cur_i, base, navts, max_nav_s):
@@ -387,7 +430,7 @@ if _HAVE:
     def _kernel(K, nrows, base, o, d, t, sec, fair, last, fresh, navr, rank, rel, xs, na, nbid, ap, av, bp, bv,
                 has_bk, has_at, g_T, g_ptr, m_k, m_i, okst, cap, st_ptr, st_ts, navts, max_nav_s,
                 req_fresh, hs, bf, sf, position_pct, switch, max_rel, min_hold_s, max_age_s, dl, cash0, start_ts, end_ts,
-                tr_i, tr_f, mk_i, mk_f):
+                tr_i, tr_f, mk_i, mk_f, min_frac):
         # trade records: tr_i[n] = (k, sig_row, entry_row, exit_row, at_ts, reason, seq) ; tr_f[n] = (units, cost_part,
         # ask, px, mid_in, mid_out)    marks: mk_i[n] = (date, elapsed) ; mk_f[n] = (equity, exp_area)
         cash = cash0
@@ -397,11 +440,19 @@ if _HAVE:
         parked = np.zeros(K, np.bool_)
         p_units = np.zeros(K)
         p_cost = np.zeros(K)
-        p_ask = np.zeros(K)
         p_ts = np.zeros(K, np.int64)
-        p_mid = np.zeros(K)
-        p_sig = np.zeros(K, np.int64)
-        p_ent = np.zeros(K, np.int64)
+        # lots (first buy + top-ups) of each position, first-in-first-out linked lists over a pool
+        NL = nrows.sum() + 1
+        l_units = np.zeros(NL)
+        l_cost = np.zeros(NL)
+        l_ask = np.zeros(NL)
+        l_mid = np.zeros(NL)
+        l_sig = np.zeros(NL, np.int64)
+        l_ent = np.zeros(NL, np.int64)
+        l_next = np.full(NL, -1, np.int64)
+        head = np.full(K, -1, np.int64)
+        tail = np.full(K, -1, np.int64)
+        n_lot = 0
         p_seq = np.zeros(K, np.int64)
         seq = 0
         cur_i = np.full(K, -1, np.int64)
@@ -485,27 +536,8 @@ if _HAVE:
                     b_ = bp[r, 0] if (has_bk[k] and nbid[r] > 0) else 0.0
                     a_ = ap[r, 0] if (has_bk[k] and na[r] > 0) else 0.0
                     mid = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[r]
-                    frac = units / p_units[k]
-                    cost_part = p_cost[k] * frac
-                    sell_n = units * px
-                    tr_i[n_tr, 0] = k
-                    tr_i[n_tr, 1] = p_sig[k]
-                    tr_i[n_tr, 2] = p_ent[k]
-                    tr_i[n_tr, 3] = r
-                    tr_i[n_tr, 4] = -1
-                    tr_i[n_tr, 5] = 0
-                    tr_f[n_tr, 0] = units
-                    tr_f[n_tr, 1] = cost_part
-                    tr_f[n_tr, 2] = p_ask[k]
-                    tr_f[n_tr, 3] = px
-                    tr_f[n_tr, 4] = p_mid[k]
-                    tr_f[n_tr, 5] = mid
-                    n_tr += 1
-                    p_units[k] -= units
-                    p_cost[k] -= cost_part
-                    if p_units[k] <= 1e-9:
-                        parked[k] = False
-                    cash, invested = cash + sell_n * (1 - sf), invested + (-cost_part)
+                    dc, di, n_tr = _close_lots(k, units, r, -1, 0, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr)
+                    cash, invested = cash + dc, invested + di
             # which funds are candidates right now — at the average price of buying the intended position
             slot_c = position_pct / 100.0 * (cash + invested) * (1 + bf)
             for a in range(a0, a1):
@@ -513,7 +545,12 @@ if _HAVE:
                 r = base[k] + m_i[a]
                 if req_fresh and not fresh[r]:
                     continue
-                xa, lim_, okp = _buy_adj(r, slot_c, bf, has_bk[k], ap, av, na, cap, last, fair, rel, max_rel)
+                size = slot_c
+                if parked[k]:
+                    room = slot_c - p_cost[k] * (1 + bf)
+                    if room >= min_frac * slot_c:
+                        size = room
+                xa, lim_, okp = _buy_adj(r, size, slot_c, bf, has_bk[k], ap, av, na, cap, last, fair, rel, max_rel, min_frac)
                 cand_lim[k] = lim_
                 if okst[r] and okp:
                     cand_T[k] = T
@@ -542,7 +579,10 @@ if _HAVE:
                 a = ent[x]
                 k = m_k[a]
                 i = m_i[a]
-                if cand_T[k] == -1 or cand_T[k] != T or parked[k]:
+                if cand_T[k] == -1 or cand_T[k] != T:
+                    continue
+                if parked[k] and position_pct / 100.0 * (cash + invested) * (1 + bf) - p_cost[k] * (1 + bf) \
+                        < min_frac * position_pct / 100.0 * (cash + invested) * (1 + bf):
                     continue
                 cv = cand_v[k]
                 better = False
@@ -559,9 +599,10 @@ if _HAVE:
                 r = base[k] + i
                 lim = cand_lim[k]
                 slot = position_pct / 100.0 * (cash + invested) * (1 + bf)
-                amount = slot if slot < cash else cash
+                target = slot - p_cost[k] * (1 + bf) if parked[k] else slot
+                amount = target if target < cash else cash
                 sale_ts = -1
-                if slot > 0 and amount < 0.25 * slot:
+                if slot > 0 and amount < min_frac * slot:
                     cap_pre = cap[r]
                     if lim < cap_pre:
                         cap_pre = lim
@@ -572,11 +613,11 @@ if _HAVE:
                         if sv < cap_pre:
                             cap_pre = sv
                     a1p = ap[r, 0] if (has_bk[k] and na[r] > 0) else last[r] * (1 + hs)
-                    if cap_pre * a1p * (1 + bf) < 0.25 * slot:
+                    if cap_pre * a1p * (1 + bf) < min_frac * slot:
                         continue
                     # the cash the buy needs: the intended order at its average price
                     if has_bk[k] and na[r] > 0:
-                        want = slot / (ap[r, 0] * (1 + bf))
+                        want = target / (ap[r, 0] * (1 + bf))
                         if cap[r] < want:
                             want = cap[r]
                         if lim < want:
@@ -585,7 +626,7 @@ if _HAVE:
                         need = g_ * a_n * (1 + bf)
                     else:
                         ask0 = last[r] * (1 + hs)
-                        want = slot / (ask0 * (1 + bf))
+                        want = target / (ask0 * (1 + bf))
                         if cap[r] < want:
                             want = cap[r]
                         need = want * ask0 * (1 + bf)
@@ -615,7 +656,7 @@ if _HAVE:
                             continue
                         rr = base[j] + cur_i[j]
                         u_ = _units_to_sell(rr, p_units[j], need, slot, False, buf, 0, has_bk[j], bp, bv, nbid,
-                                            last, hs, sf)
+                                            last, hs, sf, min_frac)
                         rv = rank[rr] - _sell_adj(rr, u_, has_bk[j], bp, bv, nbid, last, fair)
                         if worst < 0 or rv > w_rel:
                             worst = j
@@ -642,7 +683,7 @@ if _HAVE:
                     if do_sale:
                         # the sale must free enough cash for the new position (never sell for nothing)
                         rs0 = base[worst] + sale_i
-                        if cash + p_units[worst] * last[rs0] * (1 - hs) * (1 - sf) < 0.25 * slot:
+                        if cash + p_units[worst] * last[rs0] * (1 - hs) * (1 - sf) < min_frac * slot:
                             do_sale = False
                             sale_ts = -1
                     if do_sale:
@@ -656,7 +697,7 @@ if _HAVE:
                                 use_st = nlev
                         # only as much as the buy needs, line by line over the bids the sale meets
                         units = _units_to_sell(rs, p_units[worst], need, slot, use_st > 0, buf, use_st, has_bk[worst],
-                                               bp, bv, nbid, last, hs, sf)
+                                               bp, bv, nbid, last, hs, sf, min_frac)
                         if use_st > 0:
                             got, px, wpx = _fill(buf[0:5], buf[5:10], use_st, units)
                             if got < units:
@@ -673,30 +714,12 @@ if _HAVE:
                             b_ = bp[rs, 0] if (has_bk[worst] and nbid[rs] > 0) else 0.0
                             a_ = ap[rs, 0] if (has_bk[worst] and na[rs] > 0) else 0.0
                         mid = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[rs]
-                        frac = units / p_units[worst]
-                        cost_part = p_cost[worst] * frac
-                        sell_n = units * px
-                        tr_i[n_tr, 0] = worst
-                        tr_i[n_tr, 1] = p_sig[worst]
-                        tr_i[n_tr, 2] = p_ent[worst]
-                        tr_i[n_tr, 3] = rs
-                        tr_i[n_tr, 4] = at_ts
-                        tr_i[n_tr, 5] = 1
-                        tr_f[n_tr, 0] = units
-                        tr_f[n_tr, 1] = cost_part
-                        tr_f[n_tr, 2] = p_ask[worst]
-                        tr_f[n_tr, 3] = px
-                        tr_f[n_tr, 4] = p_mid[worst]
-                        tr_f[n_tr, 5] = mid
-                        n_tr += 1
-                        p_units[worst] -= units
-                        p_cost[worst] -= cost_part
-                        if p_units[worst] <= 1e-9:
-                            parked[worst] = False
-                        cash, invested = cash + sell_n * (1 - sf), invested + (-cost_part)
+                        dc, di, n_tr = _close_lots(worst, units, rs, at_ts, 1, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr)
+                        cash, invested = cash + dc, invested + di
                     slot = position_pct / 100.0 * (cash + invested) * (1 + bf)
-                    amount = slot if slot < cash else cash
-                if slot <= 0 or amount < 0.25 * slot:
+                    target = slot - p_cost[k] * (1 + bf) if parked[k] else slot
+                    amount = target if target < cash else cash
+                if slot <= 0 or amount < min_frac * slot:
                     continue
                 jb = _xi(k, i, sale_ts, dl, req_fresh, base, nrows, d, fresh, o, sec)
                 if jb < 0:
@@ -725,20 +748,35 @@ if _HAVE:
                             units, ask, _w = _fill(ap[rb], av[rb], na[rb], want)
                         else:
                             units, ask = want, last[rb] * (1 + hs)
-                if units <= 0 or units * ask * (1 + bf) < 0.25 * slot:
+                if units <= 0 or units * ask * (1 + bf) < min_frac * slot:
                     continue
                 b_ = bp[rb, 0] if (has_bk[k] and nbid[rb] > 0) else 0.0
                 a_ = ap[rb, 0] if (has_bk[k] and na[rb] > 0) else 0.0
-                parked[k] = True
-                p_units[k] = units
-                p_cost[k] = units * ask
-                p_ask[k] = ask
-                p_ts[k] = t_in
-                p_mid[k] = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[rb]
-                p_sig[k] = r
-                p_ent[k] = rb
-                seq += 1
-                p_seq[k] = seq
+                L = n_lot
+                n_lot += 1
+                l_units[L] = units
+                l_cost[L] = units * ask
+                l_ask[L] = ask
+                l_mid[L] = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[rb]
+                l_sig[L] = r
+                l_ent[L] = rb
+                l_next[L] = -1
+                if parked[k]:
+                    # top-up: a new lot of the same position (same as _Parker.step)
+                    l_next[tail[k]] = L
+                    tail[k] = L
+                    p_ts[k] = t_in
+                    p_units[k] += units
+                    p_cost[k] += units * ask
+                else:
+                    head[k] = L
+                    tail[k] = L
+                    parked[k] = True
+                    p_units[k] = units
+                    p_cost[k] = units * ask
+                    p_ts[k] = t_in
+                    seq += 1
+                    p_seq[k] = seq
                 cash -= units * ask * (1 + bf)
                 invested += units * ask
         # ---- flush (insertion order) ----
@@ -769,27 +807,8 @@ if _HAVE:
             b_ = bp[r, 0] if (has_bk[k] and nbid[r] > 0) else 0.0
             a_ = ap[r, 0] if (has_bk[k] and na[r] > 0) else 0.0
             mid = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[r]
-            frac = units / p_units[k]
-            cost_part = p_cost[k] * frac
-            sell_n = units * px
-            tr_i[n_tr, 0] = k
-            tr_i[n_tr, 1] = p_sig[k]
-            tr_i[n_tr, 2] = p_ent[k]
-            tr_i[n_tr, 3] = r
-            tr_i[n_tr, 4] = -1
-            tr_i[n_tr, 5] = 0
-            tr_f[n_tr, 0] = units
-            tr_f[n_tr, 1] = cost_part
-            tr_f[n_tr, 2] = p_ask[k]
-            tr_f[n_tr, 3] = px
-            tr_f[n_tr, 4] = p_mid[k]
-            tr_f[n_tr, 5] = mid
-            n_tr += 1
-            p_units[k] -= units
-            p_cost[k] -= cost_part
-            if p_units[k] <= 1e-9:
-                parked[k] = False
-            cash, invested = cash + sell_n * (1 - sf), invested + (-cost_part)
+            dc, di, n_tr = _close_lots(k, units, r, -1, 0, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr)
+            cash, invested = cash + dc, invested + di
         final = cash + invested
         if end_ts > last_ts:
             eq_ = cash + invested
@@ -839,8 +858,9 @@ def run_hold(fill: dict, p, d0: int, d1: int, marks: list | None = None, lite: b
         okst, cap = _per_params(nb, loaded, fill.get("crash"), p)
         rank = nb["rel"] if pre.get("rank") is None else _flat(pre["rank"], nb, 0.0)
         R = nb["R"]
-        tr_i = np.zeros((R + 8, 6), np.int64)
-        tr_f = np.zeros((R + 8, 6))
+        NT = 2 * R + nb["K"] + 8                 # one record per lot sold out, plus one per partial sale
+        tr_i = np.zeros((NT, 6), np.int64)
+        tr_f = np.zeros((NT, 6))
         G = len(pre["groups"])
         mk_i = np.zeros((G + 2, 2), np.int64)
         mk_f = np.zeros((G + 2, 2))
@@ -854,7 +874,8 @@ def run_hold(fill: dict, p, d0: int, d1: int, marks: list | None = None, lite: b
             nb["st_ptr"], nb["st_ts"], nb["navts"], max(0, int(p.max_nav_age_min)) * 60,
             bool(p.require_fresh), p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee, float(p.position_pct),
             p.fill_switch_pct / 100.0, p.fill_max_rel_pct / 100.0, max(0, int(p.fill_min_hold_min)) * 60, max(1, int(p.fill_quote_age_min)) * 60,
-            max(0, int(p.exec_delay_snaps)), float(p.initial_capital), start_ts, end_ts, tr_i, tr_f, mk_i, mk_f)
+            max(0, int(p.exec_delay_snaps)), float(p.initial_capital), start_ts, end_ts, tr_i, tr_f, mk_i, mk_f,
+            D.MIN_ORDER_FRAC)
     except Exception as e:                # never fail a study because of the fast path: fall back to Python
         _BROKEN.append(repr(e))
         return None

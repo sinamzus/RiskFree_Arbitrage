@@ -71,7 +71,7 @@ One shared capital pool: every fund is simulated at its maximum liquidity, then 
 trades are replayed in time order against a single account that starts with
 ``initial_capital`` and sizes each new position at ``position_pct`` % of the capital
 at that moment (compounding).  If cash is short the position is scaled down (or
-skipped when less than a quarter of the intended size is affordable).
+skipped when less than MIN_ORDER_FRAC (1/20) of the intended size is affordable).
 """
 
 from __future__ import annotations
@@ -325,6 +325,9 @@ def _fill_lv(levels, units: float) -> tuple[float, float, float]:
 
 
 _INF = float("inf")
+# smallest order worth placing, as a share of the intended position (a buy, the part of an order a price limit
+# allows, what a switch sale leaves behind); 1/20
+MIN_ORDER_FRAC = 0.05
 
 
 def _lim_units(levels, lim_px: float) -> float:
@@ -973,11 +976,11 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                     r_in = r + max(0.0, ((avg_ if got_ > 0 else a1) - last) / nav)
                     if r_in > ent_thr and r <= ent_thr and mode in ("fund", "both"):
                         # the whole order costs too much on average, the first levels do not: buy only the part
-                        # whose average price stays within the threshold — if it is worth a quarter of a position
+                        # whose average price stays within the threshold — if it is worth 1/20 of a position
                         lu = _lim_units(asks, nav * (1 + ent_thr))
                         if lu > 0:
                             g2, a2, _w = _fill_lv(asks, lu)
-                            if g2 * a2 >= 0.25 * p.position_pct / 100.0 * p.initial_capital:
+                            if g2 * a2 >= MIN_ORDER_FRAC * p.position_pct / 100.0 * p.initial_capital:
                                 r_in = r + max(0.0, (a2 - last) / nav)
                                 lim_n = lu
                                 if r_in > ent_thr:          # (rounding: the average sits exactly on the limit)
@@ -1243,7 +1246,7 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
                 eq = cash + invested
             intended = p.position_pct / 100.0 * eq * (1 + bf)    # cash needed incl. fee
             amount = min(intended, cash)
-            if intended <= 0 or amount < 0.25 * intended:
+            if intended <= 0 or amount < MIN_ORDER_FRAC * intended:
                 skipped += 1
                 sz["skip_cash"] += 1
                 continue
@@ -1328,6 +1331,7 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
                       "skipped_no_cash": sz["skip_cash"], "skipped_tiny": sz["skip_tiny"],
                       **({"switch_blocked_by_volume": parker.sz["skip_cap"],
                           "limited_by_price": parker.sz["price"], "switch_partial_sales": parker.sz["partial_sales"],
+                          "topups": parker.sz["topups"],
                           "switch_sales": parker.sz["sales"], "switch_sales_over_cap": parker.sz["sales_over_cap"],
                           "switch_sale_value_over_cap_pct": round(parker.sz["sale_value_over_cap"] / parker.sz["sale_value"] * 100, 1)
                           if parker.sz["sale_value"] > 0 else 0.0,
@@ -1371,8 +1375,8 @@ class _Parker:
       * "best" = the lowest bubble versus its own norm among candidates seen in the last 90 minutes;
       * size = ``position_pct`` of book capital, limited by idle cash and by the volume cap — and, with a real
         book, by what keeps the AVERAGE price of the asks walked within the entry limit (a partial buy, if that
-        part is still worth a quarter of a position); a "hold" switch sells only as much of the held fund as the
-        buy needs (all of it when the rest would be smaller than a quarter of a position);
+        part is still worth 1/20 of a position); a "hold" switch sells only as much of the held fund as the
+        buy needs (all of it when the rest would be smaller than 1/20 of a position);
       * exit = time limit / stop-loss (same rules as normal trades), the fund trading ``fill_exit_rel_pct`` above
         its norm, rotation (a normal entry needs the cash — or the same fund), or the end of the data.
     Parked trades are ``Trade`` objects with ``origin == "fill"``.
@@ -1452,7 +1456,7 @@ class _Parker:
         self.max_age_s = max(1, int(p.fill_quote_age_min)) * 60
         # sizing / liquidity diagnostics of the parker's own trades (merged into the replay's size_info)
         self.sz = {"n": 0, "ratio_sum": 0.0, "small": 0, "liq": 0, "cash": 0, "skip_cap": 0, "price": 0,
-                   "partial_sales": 0,
+                   "partial_sales": 0, "topups": 0,
                    "sales": 0, "sales_over_cap": 0, "sale_value": 0.0, "sale_value_over_cap": 0.0,
                    # sales larger than the visible bids (the rest is assumed sold at the worst visible bid)
                    "book_sales": 0, "sales_over_depth": 0, "book_sale_value": 0.0, "sale_value_over_depth": 0.0}
@@ -1474,14 +1478,15 @@ class _Parker:
         x = bisect.bisect_right(lst, T) - 1
         return x >= 0 and lst[x] > self.cur_ts[j]
 
-    def _buy_adj(self, k: int, i: int, slot: float) -> tuple[float, float, bool]:
-        """Bubble correction for BUYING fund ``k`` at row ``i`` an intended position of ``slot`` rial (incl. fee):
+    def _buy_adj(self, k: int, i: int, size: float, slot: float) -> tuple[float, float, bool]:
+        """Bubble correction for BUYING fund ``k`` at row ``i`` an order of ``size`` rial (incl. fee; the whole
+        position ``slot``, or what tops a held fund up to it):
         (average price of walking the ask levels for that size, capped by the volume cap − last) / fair, never
         negative — the book can only make a buy signal harder. 0 without a book.
 
         Returns (correction, unit limit, price ok). When the whole order would pay too much on average but the
         first levels are cheap enough, only the part that keeps the AVERAGE price at or below the entry limit is
-        bought (the unit limit) — provided it is still worth at least a quarter of the position; the correction is
+        bought (the unit limit) — provided it is still worth at least 1/20 of ``slot``; the correction is
         then that of the smaller order. Unit limit = inf when the whole order is fine."""
         r = self.rel[k][i]
         bk = self.book[k]
@@ -1493,7 +1498,7 @@ class _Parker:
             return 0.0, _INF, r <= self.max_rel
         a1 = asks[0][0]
         bf = self.p.buy_fee
-        want = slot / (a1 * (1 + bf))
+        want = size / (a1 * (1 + bf))
         cp = self._cap(k, d, t)
         if cp < want:
             want = cp
@@ -1507,7 +1512,7 @@ class _Parker:
         if lim <= 0:
             return x, _INF, False
         g2, a2, _w = _fill_lv(asks, lim)
-        if g2 * a2 * (1 + bf) < 0.25 * slot:
+        if g2 * a2 * (1 + bf) < MIN_ORDER_FRAC * slot:
             return x, _INF, False             # what fits under the limit is too small to be worth an order
         x2 = (a2 - last) / fair
         return (x2 if x2 > 0.0 else 0.0), lim, True
@@ -1584,31 +1589,47 @@ class _Parker:
         if at_ts is not None:
             d, t = _ts_to_dt(at_ts)
             o = _ord(d)
-        frac = units / pos["units"]
-        cost_part = pos["cost"] * frac
-        sell_n = units * px
-        bfee, sfee = cost_part * bf, sell_n * sf
-        net = sell_n - sfee - (cost_part + bfee)
-        self.out.append(Trade(
-            symbol=self.labels[k], entry_date=pos["d"], entry_time=pos["t"], exit_date=d, exit_time=t,
-            volume=int(units), entry_price=round(pos["ask"], 2), exit_price=round(px, 2),
-            nav_entry=round(pos["nav_raw"], 2), nav_exit=round(nav_raw, 2),
-            disc_entry_pct=round((pos["ask"] / pos["nav_raw"] - 1) * 100, 4) if pos["nav_raw"] else 0,
-            disc_exit_pct=round((px / nav_raw - 1) * 100, 4) if nav_raw else 0,
-            rel_entry_pct=round((pos["ask"] / pos["fair"] - 1) * 100, 4) if pos["fair"] else 0,
-            rel_exit_pct=round((px / nav - 1) * 100, 4) if nav else 0,
-            base_pct=round((pos["fair"] / pos["nav_raw"] - 1) * 100, 4) if pos["nav_raw"] else 0,
-            mr_score=pos["mr"], buy_notional=round(cost_part, 0), sell_notional=round(sell_n, 0),
-            fees=round(bfee + sfee, 0), net_pnl=round(net, 0),
-            net_pct=round(net / (cost_part + bfee) * 100, 4) if cost_part + bfee else 0,
-            hold_days=max(0, _ord(d) - pos["o"]), exit_reason=reason, origin="fill",
-            spread_in=(1 - pos["mid"] / pos["ask"]) if pos.get("mid") and pos["ask"] > 0 else None,
-            spread_out=(mid / px - 1) if mid > 0 and px > 0 else None))
+        # the position is made of lots (the first buy and any top-ups): sold first-in-first-out, one trade per lot
+        full = units >= pos["units"] * (1 - 1e-12)
+        left, dcash, dinv = units, 0.0, 0.0
+        lots = pos["lots"]
+        while lots:
+            if not full and left <= 1e-9:
+                break
+            lot = lots[0]
+            lu = lot["units"]
+            q = lu if (full or left >= lu) else left
+            cost_part = lot["cost"] * (q / lu)
+            sell_n = q * px
+            bfee, sfee = cost_part * bf, sell_n * sf
+            net = sell_n - sfee - (cost_part + bfee)
+            self.out.append(Trade(
+                symbol=self.labels[k], entry_date=lot["d"], entry_time=lot["t"], exit_date=d, exit_time=t,
+                volume=int(q), entry_price=round(lot["ask"], 2), exit_price=round(px, 2),
+                nav_entry=round(lot["nav_raw"], 2), nav_exit=round(nav_raw, 2),
+                disc_entry_pct=round((lot["ask"] / lot["nav_raw"] - 1) * 100, 4) if lot["nav_raw"] else 0,
+                disc_exit_pct=round((px / nav_raw - 1) * 100, 4) if nav_raw else 0,
+                rel_entry_pct=round((lot["ask"] / lot["fair"] - 1) * 100, 4) if lot["fair"] else 0,
+                rel_exit_pct=round((px / nav - 1) * 100, 4) if nav else 0,
+                base_pct=round((lot["fair"] / lot["nav_raw"] - 1) * 100, 4) if lot["nav_raw"] else 0,
+                mr_score=lot["mr"], buy_notional=round(cost_part, 0), sell_notional=round(sell_n, 0),
+                fees=round(bfee + sfee, 0), net_pnl=round(net, 0),
+                net_pct=round(net / (cost_part + bfee) * 100, 4) if cost_part + bfee else 0,
+                hold_days=max(0, _ord(d) - lot["o"]), exit_reason=reason, origin="fill",
+                spread_in=(1 - lot["mid"] / lot["ask"]) if lot.get("mid") and lot["ask"] > 0 else None,
+                spread_out=(mid / px - 1) if mid > 0 and px > 0 else None))
+            lot["units"] -= q
+            lot["cost"] -= cost_part
+            if lot["units"] <= 1e-9:
+                lots.pop(0)
+            left -= q
+            dcash += sell_n * (1 - sf)
+            dinv -= cost_part
         pos["units"] -= units
-        pos["cost"] -= cost_part
+        pos["cost"] += dinv
         if pos["units"] <= 1e-9:
             del self.parked[k]
-        return sell_n * (1 - sf), -cost_part
+        return dcash, dinv
 
     def mtm(self, cash: float, invested: float) -> float:
         """Liquidation value of the book now: cash + every parked position at its latest bid, net of the sell fee."""
@@ -1691,8 +1712,14 @@ class _Parker:
             if p.require_fresh and not self.rows[k][i][5]:
                 continue
             d = self.rows[k][i][1]
+            # a fund already held but below its target size is judged at the order that would top it up
+            size = slot_c
+            if k in self.parked:
+                room = slot_c - self.parked[k]["cost"] * (1 + bf)
+                if room >= MIN_ORDER_FRAC * slot_c:
+                    size = room
             # at the average price of the order we would place (or of the part of it the entry limit allows)
-            xa, lim, okp = self._buy_adj(k, i, slot_c)
+            xa, lim, okp = self._buy_adj(k, i, size, slot_c)
             self.cand_lim[k] = lim
             ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and okp
                   and not (mr_on and (self.mr[k] is None or self.mr[k][i] is None or self.mr[k][i] < p.mr_min_score))
@@ -1702,7 +1729,11 @@ class _Parker:
         # entries: the lowest bubble first, only if it is also the best among recently seen candidates
         for k, i in sorted(group, key=lambda g: (self.cand.get(g[0]) or (0, self.rank[g[0]][g[1]]))[1]):
             c = self.cand.get(k)
-            if c is None or c[0] != T or k in self.parked or self.real_open.get(self.labels[k], 0) > 0:
+            if c is None or c[0] != T or self.real_open.get(self.labels[k], 0) > 0:
+                continue
+            held = self.parked.get(k)          # held already: only topped up to its target size
+            if held is not None and p.position_pct / 100.0 * (cash + invested) * (1 + bf) - held["cost"] * (1 + bf) \
+                    < MIN_ORDER_FRAC * p.position_pct / 100.0 * (cash + invested) * (1 + bf):
                 continue
             better = False
             for k2, c2 in self.cand.items():
@@ -1717,31 +1748,33 @@ class _Parker:
             o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
             lim = self.cand_lim.get(k, _INF)
             slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
-            amount = min(slot, cash)
+            target = slot - held["cost"] * (1 + bf) if held is not None else slot
+            amount = min(target, cash)
             self._sale_ts = None
-            if self.hold and slot > 0 and amount < 0.25 * slot:
+            if self.hold and slot > 0 and amount < MIN_ORDER_FRAC * slot:
                 # no cash: sell the least attractive holding, but only if this candidate is clearly better —
                 # and only if the candidate can then actually be bought (volume cap, depth, entry limit), or we
                 # would sell for nothing
                 cap_pre = min(self._cap(k, d, t), lim)
                 if self.book[k] is not None:
                     cap_pre = min(cap_pre, sum(v for _p, v in (_book_side(self.book[k], d, t, 1) or [])))
-                if cap_pre * _best(self.book[k], d, t, 1, last * (1 + hs)) * (1 + bf) < 0.25 * slot:
+                if cap_pre * _best(self.book[k], d, t, 1, last * (1 + hs)) * (1 + bf) < MIN_ORDER_FRAC * slot:
                     self.sz["skip_cap"] += 1
                     continue
                 # the cash the buy needs: the intended order (volume cap, depth and entry limit) at its average price
                 asks = _book_side(self.book[k], d, t, 1)
                 if asks:
-                    want = min(slot / (asks[0][0] * (1 + bf)), self._cap(k, d, t), lim)
+                    want = min(target / (asks[0][0] * (1 + bf)), self._cap(k, d, t), lim)
                     g_, a_, _w = _fill_lv(asks, want)
                     need = g_ * a_ * (1 + bf)
                 else:
                     ask0 = last * (1 + hs)
-                    need = min(slot / (ask0 * (1 + bf)), self._cap(k, d, t)) * ask0 * (1 + bf)
+                    need = min(target / (ask0 * (1 + bf)), self._cap(k, d, t)) * ask0 * (1 + bf)
                 cash, invested = self._switch_out(k, i, T, cash, invested, need - cash)
                 slot = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
-                amount = min(slot, cash)
-            if slot <= 0 or amount < 0.25 * slot:
+                target = slot - held["cost"] * (1 + bf) if held is not None else slot
+                amount = min(target, cash)
+            if slot <= 0 or amount < MIN_ORDER_FRAC * slot:
                 continue
             jb = self._xi(k, i, not_before=self._sale_ts)       # the buy fills at the fund's next snapshot when a delay is modelled
             if jb is None:
@@ -1765,9 +1798,9 @@ class _Parker:
                     units, ask = _buy_exec(self.book[k], d, t, amount / (ask * (1 + bf)), last, hs)
                 asks = _book_side(self.book[k], d, t, 1) or []
                 cap_u = min(cap_u, sum(v for _p, v in asks))             # the visible depth also limits the size
-            if units <= 0 or units * ask * (1 + bf) < 0.25 * slot:
+            if units <= 0 or units * ask * (1 + bf) < MIN_ORDER_FRAC * slot:
                 continue
-            ratio = min(1.0, units * ask * (1 + bf) / slot)
+            ratio = min(1.0, units * ask * (1 + bf) / target)
             self.sz["n"] += 1
             self.sz["ratio_sum"] += ratio
             if ratio < 0.5:
@@ -1778,9 +1811,21 @@ class _Parker:
                 else:
                     self.sz["liq" if cap_u * ask * (1 + bf) < amount * 0.999 else "cash"] += 1
             mr_score = round(self.mr[k][i], 1) if mr_on and self.mr[k] and self.mr[k][i] is not None else None
-            self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": t_in,
-                              "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score,
-                              "mid": _book_mid(self.book[k], d, t, last)}
+            lot = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "nav_raw": nav_raw,
+                   "fair": nav, "mr": mr_score, "mid": _book_mid(self.book[k], d, t, last)}
+            if held is not None:
+                # top-up: a new lot of the same position (its own trade record: own time, price and NAV). The
+                # minimum-hold clock restarts (no unit is switched out sooner than that after it was bought); the
+                # time limit keeps running from the first buy
+                held["lots"].append(lot)
+                held["ts"] = t_in
+                held["units"] += units
+                held["cost"] += units * ask
+                self.sz["topups"] += 1
+            else:
+                self.parked[k] = {"units": units, "cost": units * ask, "ask": ask, "o": o, "d": d, "t": t, "ts": t_in,
+                                  "nav_raw": nav_raw, "fair": nav, "rel": self.rel[k][i], "mr": mr_score,
+                                  "lots": [dict(lot)]}
             cash -= units * ask * (1 + bf)
             invested += units * ask
         return cash, invested
@@ -1788,7 +1833,7 @@ class _Parker:
     def _units_to_sell(self, j: int, i: int, need: float, slot: float, bids) -> float:
         """Units of held fund ``j`` to sell (quote of row ``i``, bid levels ``bids`` or None) so the proceeds net of
         fees cover ``need`` rial — walked line by line over the bids. The whole holding when what would be left is
-        smaller than a minimum position (a quarter of ``slot``): no crumbs are kept."""
+        smaller than a minimum position (1/20 of ``slot``): no crumbs are kept."""
         p = self.p
         total = self.parked[j]["units"]
         last = self.rows[j][i][4]
@@ -1797,7 +1842,7 @@ class _Parker:
         else:
             per = last * (1 - p.half_spread_pct / 100.0) * (1 - p.sell_fee)
             u = min(total, need / per) if per > 0 else total
-        if (total - u) * last < 0.25 * slot:
+        if (total - u) * last < MIN_ORDER_FRAC * slot:
             u = total
         return u
 
@@ -1843,9 +1888,9 @@ class _Parker:
         else:
             sale_i, at_ts = self.cur_i[worst], T
         rs = self.rows[worst][sale_i]
-        # the sale must free enough cash for the new position (a buy below a quarter of its target is not placed):
+        # the sale must free enough cash for the new position (a buy below 1/20 of its target is not placed):
         # never sell for nothing
-        if cash + pw["units"] * rs[4] * (1 - p.half_spread_pct / 100.0) * (1 - p.sell_fee) < 0.25 * slot:
+        if cash + pw["units"] * rs[4] * (1 - p.half_spread_pct / 100.0) * (1 - p.sell_fee) < MIN_ORDER_FRAC * slot:
             self._sale_ts = None
             return cash, invested
         # how much to sell, line by line over the bids the sale will actually meet (same book as ``_close``)
