@@ -1400,6 +1400,12 @@ def test_stale_nav_no_trade(R: Results, db):
                 bad.append(f"{t['symbol']} {side} {d} {tm}")
     R.add(g, "صندوقی که آخرین اسنپ‌شاتش NAV کهنه دارد نه خریده می‌شود نه فروخته (حتی برای جابه‌جایی)",
           not bad and n > 0 and n_st > 0, "؛ ".join(bad[:3]) or f"{n} خرید/فروش، {n_st} اسنپ‌شات NAV کهنه")
+    # strict: at the instant of every buy and every switch sale, the fund's NAV is at most the limit old
+    old_ = [f"{t['symbol']} {k} {t[k]}" for t in res["trades"] for k in ("nav_age_in_min", "nav_age_out_min")
+            if not (k == "nav_age_out_min" and t["exit_reason"] == "end")
+            and (t.get(k) is None or t[k] > hp.max_nav_age_min + 1e-9)]
+    R.add(g, "در لحظهٔ هر خرید و هر فروش، سن NAV همان صندوق حداکثر ۵ دقیقه است (در نتایج برای هر معامله ثبت می‌شود)",
+          not old_ and len(res["trades"]) > 0, "؛ ".join(old_[:3]) or f"{len(res['trades'])} معامله")
     import discount_fast as X
     if X.available():
         st = S.Study(db, None, None, None, None, hp, {"fill_switch_pct": [0.8]}, blocks=4, min_trades=1, workers=1)

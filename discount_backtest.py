@@ -529,6 +529,7 @@ class _DayVol(dict):
         super().__init__(*a, **k)
         self.cum: dict = {}
         self.stale: list = []         # instants (ordinal·86400 + seconds) of in-session snapshots whose NAV was stale
+        self.navts: dict = {}         # snapshot instant -> instant the snapshot's NAV was computed (when known)
 
 
 def _vol_cap(day_vol, p: "DiscountParams", d: int, t: int | None) -> float:
@@ -618,6 +619,8 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
                     stats["stale_min"] = stats.get("stale_min", 0) + 1
                 day_vol.stale.append(o * 86400 + _sec(t))
                 continue                              # the NAV was computed too long ago (minutes): not a candidate
+        if nav_d and nav_t:
+            day_vol.navts[o * 86400 + _sec(t)] = _ord(nav_d) * 86400 + _sec(nav_t)
         base_rows.append((o, d, t, nav, last, fresh))
 
     if p.baseline_days <= 0:
@@ -1332,6 +1335,12 @@ class _Parker:
         self.xs = pre.get("xs") or [None] * self.n
         # a fund whose latest snapshot carries a stale NAV is not traded at all — neither bought nor sold
         self.stale = [sorted(getattr(l.get("day_vol"), "stale", None) or []) for l in loaded]
+        # ... nor while its NAV is older than the limit AT THE INSTANT of the trade (not only at its snapshot)
+        self.max_nav_s = max(0, int(p.max_nav_age_min)) * 60
+        self.nav_ts = []
+        for l, rr in zip(loaded, self.rows):
+            nt = getattr(l.get("day_vol"), "navts", None) or {}
+            self.nav_ts.append([nt.get(r[0] * 86400 + _sec(r[2])) for r in rr] if nt else None)
         self.crash = crash_all
         self.mr = [l.get("mr") for l in loaded]
         self.groups = pre["groups"]
@@ -1359,6 +1368,10 @@ class _Parker:
     def _stale_now(self, j: int, T: int) -> bool:
         """Is fund ``j``'s NAV stale at instant ``T``: a snapshot dropped for its stale NAV came after the fund's
         latest valid snapshot (so its price can no longer be compared with a current NAV)?"""
+        if self.max_nav_s and self.cur_i[j] >= 0 and self.nav_ts[j] is not None:
+            nt = self.nav_ts[j][self.cur_i[j]]
+            if nt is not None and T - nt > self.max_nav_s:
+                return True                   # the NAV it would be traded on is too old by now
         lst = self.stale[j]
         if not lst:
             return False
@@ -1664,6 +1677,30 @@ class _Parker:
                 dc, di = self._close(k, self.parked[k]["units"], len(self.rows[k]) - 1, "end")
                 cash, invested = cash + dc, invested + di
         return cash, invested
+
+
+def _nav_ages(trade_dicts: list[dict], loaded: list[dict]) -> None:
+    """Independent check written into every trade: how old the fund's NAV was at the instant of the buy and of the
+    sale (minutes) — from the raw NAV file, the latest snapshot at or before that instant, stale ones included."""
+    idx = {}
+    for l in loaded:
+        ts, nts = [], []
+        for r in l.get("raw") or []:
+            d, t, _nav, nav_d, _last, _vol, nav_t = r
+            ts.append(_ord(d) * 86400 + _sec(t))
+            nts.append(_ord(nav_d) * 86400 + _sec(nav_t) if nav_d and nav_t else None)
+        idx[l["label"]] = (ts, nts)
+
+    def age(sym, d, t):
+        ts, nts = idx.get(sym, ([], []))
+        T = _ord(d) * 86400 + _sec(t)
+        j = bisect.bisect_right(ts, T) - 1
+        if j < 0 or nts[j] is None:
+            return None
+        return round((T - nts[j]) / 60.0, 1)
+    for t in trade_dicts:
+        t["nav_age_in_min"] = age(t["symbol"], t["entry_date"], t["entry_time"])
+        t["nav_age_out_min"] = age(t["symbol"], t["exit_date"], t["exit_time"])
 
 
 def _portfolio_summary(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_exposure: bool = False,
@@ -2058,6 +2095,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         curve = [curve[int(i * step)] for i in range(400)] + [curve[-1]]
     idle_info = _idle_info(loaded, diags, summary, p)
     trade_dicts = [asdict(t) for t in accepted]
+    _nav_ages(trade_dicts, loaded)
     from discount_explain import attribute_trades, explain_trades
     loss_causes = explain_trades(trade_dicts, loaded, p)        # adds "why" to every losing trade
     attribution = attribute_trades(trade_dicts, p, p.initial_capital)

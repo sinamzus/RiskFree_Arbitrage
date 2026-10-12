@@ -7596,7 +7596,7 @@ function discRenderTrades(res) {
   const showMr = !!res.mr_info;
   const all = res.trades || [];
   const LIM = 600;
-  const ncol = 22 + (showIdx ? 2 : 0) + (showMr ? 1 : 0);
+  const ncol = 23 + (showIdx ? 2 : 0) + (showMr ? 1 : 0);
   const idxs = all.map((t, i) => i).filter(i => !_discOnlyLoss || all[i].why);
   const rows = idxs.slice(0, LIM).map(i => {
     const t = all[i];
@@ -7606,7 +7606,8 @@ function discRenderTrades(res) {
     return `<tr ${t.why ? `onclick="discToggleWhy(${i})" style="cursor:pointer"` : ''}><td>${t.origin === 'fill' ? '<span title="معاملهٔ پر کردن سرمایهٔ بیکار">⟳ </span>' : ''}${t.symbol}</td><td>${fmtTime(t.entry_date)}</td><td>${discTime(t.entry_time)}</td><td class="disc-obc" data-i="${i}" data-side="buy" title="اردربوک، سیگنال و حباب در لحظهٔ خرید">${discFmt(t.entry_price)} <span style="color:var(--muted);font-size:9px">📖</span></td>
       <td>${t.disc_entry_pct}%</td><td>${t.base_pct}%</td><td>${t.rel_entry_pct}%</td>${showIdx ? `<td>${t.idx_entry_pct == null ? '—' : t.idx_entry_pct + '%'}</td>` : ''}${showMr ? `<td>${t.mr_score == null ? '—' : t.mr_score}</td>` : ''}<td>${fmtTime(t.exit_date)}</td><td>${discTime(t.exit_time)}</td><td class="disc-obc" data-i="${i}" data-side="sell" title="اردربوک، سیگنال و حباب در لحظهٔ فروش">${discFmt(t.exit_price)} <span style="color:var(--muted);font-size:9px">📖</span></td>
       <td>${t.disc_exit_pct}%</td><td>${t.rel_exit_pct}%</td>${showIdx ? `<td>${t.idx_exit_pct == null ? '—' : t.idx_exit_pct + '%'}</td>` : ''}<td>${discFmt(t.volume)}</td><td>${discM(t.buy_notional)}</td><td>${t.hold_days}</td>
-      <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td>${wcell}</tr>${discWhyDetail(t, i, ncol)}`;
+      <td>${discFmt(t.fees)}</td><td class="${c}">${discFmt(t.net_pnl)}</td><td class="${c}">${t.net_pct}%</td><td>${why}</td>
+      <td title="سن NAV در لحظهٔ خرید / فروش (دقیقه): لحظهٔ معامله منهای زمان محاسبهٔ آخرین NAV همان صندوق" style="direction:ltr;white-space:nowrap">${t.nav_age_in_min ?? '—'} / ${t.nav_age_out_min ?? '—'}</td>${wcell}</tr>${discWhyDetail(t, i, ncol)}`;
   }).join('');
   setTimeout(discAttachObHover, 0);
   document.getElementById('disc-trades').innerHTML = `${discLossHtml(res)}
@@ -7615,7 +7616,7 @@ function discRenderTrades(res) {
     <div class="disc-tblwrap" style="max-height:560px"><table class="disc-tbl"><thead><tr>
       <th>نماد</th><th>تاریخ ورود</th><th>ساعت</th><th>قیمت خرید</th><th>تخفیف ورود (از NAV)</th><th>حباب معمول</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (ورود)</th>' : ''}${showMr ? '<th>امتیاز بازگشت</th>' : ''}
       <th>تاریخ خروج</th><th>ساعت</th><th>قیمت فروش</th><th>تخفیف خروج</th><th>نسبت به معمول</th>${showIdx ? '<th>شاخص حباب (خروج)</th>' : ''}<th>حجم</th><th>مبلغ خرید (م.ر)</th><th>روز</th>
-      <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th><th>تفسیر زیان</th>
+      <th>کارمزد</th><th>سود/زیان</th><th>بازده</th><th>خروج</th><th title="سن NAV در لحظهٔ خرید / فروش به دقیقه">سن NAV (خرید/فروش)</th><th>تفسیر زیان</th>
     </tr></thead><tbody>${rows || `<tr><td colspan="${ncol}" style="color:var(--muted)">${all.length ? 'معاملهٔ زیان‌ده‌ای نیست.' : 'معامله‌ای انجام نشد — آستانهٔ ورود را کم کنید یا «آمار تخفیف» را ببینید.'}</td></tr>`}</tbody></table></div>`;
 }
 

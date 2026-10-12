@@ -125,7 +125,16 @@ def pack(loaded: list[dict], pre: dict) -> dict:
     for k, lst in enumerate(st_lists):
         st_ptr[k + 1] = st_ptr[k] + len(lst)
     st_ts = np.array([x for lst in st_lists for x in lst], dtype=np.int64) if st_ptr[K] else np.zeros(0, np.int64)
-    nb = {"st_ptr": st_ptr, "st_ts": st_ts, "K": K, "R": R, "nrows": nrows, "base": base, "o": o, "d": d, "t": t, "sec": sec, "fair": fair,
+    navts = np.full(R, -1, np.int64)
+    for k, rr in enumerate(rows):
+        nt = getattr(loaded[k].get("day_vol"), "navts", None) or {}
+        if nt:
+            b0 = int(base[k])
+            for i, r in enumerate(rr):
+                v = nt.get(r[0] * 86400 + D._sec(r[2]))
+                if v is not None:
+                    navts[b0 + i] = v
+    nb = {"navts": navts, "st_ptr": st_ptr, "st_ts": st_ts, "K": K, "R": R, "nrows": nrows, "base": base, "o": o, "d": d, "t": t, "sec": sec, "fair": fair,
           "last": last, "fresh": fresh, "navr": navr, "rel": rel, "xb": xb, "xs": xs, "na": na, "nbid": nbid,
           "ap": ap, "av": av, "bp": bp, "bv": bv, "has_bk": has_bk, "has_at": has_at,
           "g_T": g_T, "g_ptr": g_ptr, "m_k": m_k, "m_i": m_i, "_per": {}}
@@ -234,8 +243,12 @@ if _HAVE:
         return got, avg, worst
 
     @njit(cache=True)
-    def _stale(j, T, cur_ts, st_ptr, st_ts):
-        """Fund j's NAV is stale at T: its latest snapshot at or before T was dropped for a stale NAV."""
+    def _stale(j, T, cur_ts, st_ptr, st_ts, cur_i, base, navts, max_nav_s):
+        """Fund j's NAV is stale at T: older than the limit at T, or its latest snapshot was dropped for it."""
+        if max_nav_s > 0 and cur_i[j] >= 0:
+            nt = navts[base[j] + cur_i[j]]
+            if nt >= 0 and T - nt > max_nav_s:
+                return True
         lo = st_ptr[j]
         hi = st_ptr[j + 1]
         if lo == hi:
@@ -270,7 +283,7 @@ if _HAVE:
 
     @njit(cache=True)
     def _kernel(K, nrows, base, o, d, t, sec, fair, last, fresh, navr, rank, xb, xs, na, nbid, ap, av, bp, bv,
-                has_bk, has_at, g_T, g_ptr, m_k, m_i, okst, cap, st_ptr, st_ts,
+                has_bk, has_at, g_T, g_ptr, m_k, m_i, okst, cap, st_ptr, st_ts, navts, max_nav_s,
                 req_fresh, hs, bf, sf, position_pct, switch, min_hold_s, max_age_s, dl, cash0, start_ts, end_ts,
                 tr_i, tr_f, mk_i, mk_f):
         # trade records: tr_i[n] = (k, sig_row, entry_row, exit_row, at_ts, reason, seq) ; tr_f[n] = (units, cost_part,
@@ -430,7 +443,7 @@ if _HAVE:
                 for k2 in range(K):
                     if k2 == k or cand_T[k2] == -1 or T - cand_T[k2] > max_age_s or parked[k2]:
                         continue
-                    if _stale(k2, T, cur_ts, st_ptr, st_ts):
+                    if _stale(k2, T, cur_ts, st_ptr, st_ts, cur_i, base, navts, max_nav_s):
                         continue
                     if cand_v[k2] < cv - 1e-12:
                         better = True
@@ -473,7 +486,7 @@ if _HAVE:
                             continue
                         if min_hold_s != 0 and T - p_ts[j] < min_hold_s:
                             continue
-                        if _stale(j, T, cur_ts, st_ptr, st_ts):
+                        if _stale(j, T, cur_ts, st_ptr, st_ts, cur_i, base, navts, max_nav_s):
                             continue
                         rr = base[j] + cur_i[j]
                         rv = rank[rr] - xs[rr]
@@ -707,7 +720,7 @@ def run_hold(fill: dict, p, d0: int, d1: int, marks: list | None = None, lite: b
             nb["K"], nb["nrows"], nb["base"], nb["o"], nb["d"], nb["t"], nb["sec"], nb["fair"], nb["last"],
             nb["fresh"], nb["navr"], rank, nb["xb"], nb["xs"], nb["na"], nb["nbid"], nb["ap"], nb["av"], nb["bp"],
             nb["bv"], nb["has_bk"], nb["has_at"], nb["g_T"], nb["g_ptr"], nb["m_k"], nb["m_i"], okst, cap,
-            nb["st_ptr"], nb["st_ts"],
+            nb["st_ptr"], nb["st_ts"], nb["navts"], max(0, int(p.max_nav_age_min)) * 60,
             bool(p.require_fresh), p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee, float(p.position_pct),
             p.fill_switch_pct / 100.0, max(0, int(p.fill_min_hold_min)) * 60, max(1, int(p.fill_quote_age_min)) * 60,
             max(0, int(p.exec_delay_snaps)), float(p.initial_capital), start_ts, end_ts, tr_i, tr_f, mk_i, mk_f)
