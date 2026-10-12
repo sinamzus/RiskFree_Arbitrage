@@ -1640,6 +1640,13 @@ class _Parker:
         else:
             sale_i, at_ts = self.cur_i[worst], T
         rs = self.rows[worst][sale_i]
+        # the sale must free enough cash for the new position (a buy below a quarter of its target is not placed):
+        # never sell for nothing
+        p = self.p
+        slot = p.position_pct / 100.0 * (cash + invested) * (1 + p.buy_fee)
+        if cash + pw["units"] * rs[4] * (1 - p.half_spread_pct / 100.0) * (1 - p.sell_fee) < 0.25 * slot:
+            self._sale_ts = None
+            return cash, invested
         cap_u = self._cap(worst, rs[1], rs[2])
         val = pw["units"] * rs[4]
         self.sz["sales"] += 1

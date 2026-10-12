@@ -44,8 +44,6 @@ import discount_validation as V
 DIMS: dict[str, dict] = {
     "entry_mode":         {"kind": "slow", "label": "حالت ورود", "choices": ["fund", "index", "both"]},
     "baseline_days":      {"kind": "slow", "label": "تعدیل حباب دائمی (روز)", "choices": [0, 10, 20, 40, 60]},
-    "max_nav_age_days":   {"kind": "slow", "label": "حداکثر سن NAV (روز)", "choices": [1, 2, 3, 5]},
-    "max_nav_age_min":    {"kind": "slow", "label": "حداکثر سن NAV (دقیقه؛ ۰ = خاموش)", "choices": [0, 2, 5, 10, 30, 60, 120]},
     "mr_center":          {"kind": "slow", "label": "مرکز بازگشت به میانگین", "choices": ["off", "zero", "category", "self"]},
     "mr_window_days":     {"kind": "slow", "label": "پنجرهٔ امتیاز بازگشت (روز)", "choices": [10, 20, 30, 40]},
     "mr_horizon_days":    {"kind": "slow", "label": "افق بازگشت (روز)", "choices": [3, 5, 10]},
@@ -81,7 +79,8 @@ DIMS: dict[str, dict] = {
     "stop_mode":          {"kind": "fast", "label": "نوع حد ضرر", "choices": ["nav_widen", "nav_level", "price"]},
     "position_pct":       {"kind": "fast", "label": "سهم هر پوزیشن از سرمایه ٪", "choices": [5, 10, 20, 33, 50]},
 }
-SLOW_ORDER = ["entry_mode", "baseline_days", "max_nav_age_days", "max_nav_age_min", "session_mode", "session_start", "session_end",
+# (the maximum NAV age is not a parameter but a rule: only a current NAV is traded — it is never searched)
+SLOW_ORDER = ["entry_mode", "baseline_days", "session_mode", "session_start", "session_end",
               "index_min_share", "mr_center", "mr_window_days", "mr_horizon_days", "mr_lag",
               "crash_window_min", "crash_cooldown_min", "crash_scope"]
 FAST_ORDER = ["entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct", "max_hold_days",
@@ -110,8 +109,6 @@ SETTLED = {
     "mr_window_days": "فیلتر بازگشت خاموش است", "mr_horizon_days": "فیلتر بازگشت خاموش است",
     "mr_lag": "فیلتر بازگشت خاموش است", "mr_min_score": "فیلتر بازگشت خاموش است",
     "crash_scope": "دستهٔ صندوق در همهٔ ترکیب‌های برتر",
-    "max_nav_age_days": "فقط با NAV به‌روز معامله می‌شود (نه خرید، نه فروش) — بهینه‌سازی نمی‌شود",
-    "max_nav_age_min": "فقط با NAV به‌روز معامله می‌شود (نه خرید، نه فروش) — بهینه‌سازی نمی‌شود",
     "entry_mode": "در حالت hold بی‌اثر", "index_min_share": "در حالت hold بی‌اثر",
     "entry_discount_pct": "در حالت hold بی‌اثر", "exit_discount_pct": "در حالت hold بی‌اثر",
     "index_entry_pct": "در حالت hold بی‌اثر", "index_exit_pct": "در حالت hold بی‌اثر",
@@ -669,14 +666,14 @@ class Study:
 
     def _base_cfg(self) -> dict:
         b = self.base
-        return {"entry_mode": b.entry_mode, "baseline_days": b.baseline_days, "max_nav_age_days": b.max_nav_age_days,
+        return {"entry_mode": b.entry_mode, "baseline_days": b.baseline_days,
                 "mr_center": b.mr_center, "mr_window_days": b.mr_window_days, "mr_horizon_days": b.mr_horizon_days,
                 "mr_min_score": b.mr_min_score, "entry_discount_pct": b.entry_discount_pct,
                 "exit_discount_pct": b.exit_discount_pct, "index_entry_pct": b.index_entry_pct,
                 "index_exit_pct": b.index_exit_pct, "max_hold_days": b.max_hold_days,
                 "stop_loss_pct": b.stop_loss_pct, "stop_mode": b.stop_mode, "position_pct": b.position_pct,
                 "crash_drop_pct": b.crash_drop_pct, "crash_window_min": b.crash_window_min,
-                "crash_cooldown_min": b.crash_cooldown_min, "crash_scope": b.crash_scope, "max_nav_age_min": b.max_nav_age_min,
+                "crash_cooldown_min": b.crash_cooldown_min, "crash_scope": b.crash_scope,
                 "session_mode": b.session_mode, "session_start": b.session_start, "session_end": b.session_end,
                 "index_min_share": b.index_min_share, "mr_lag": b.mr_lag, "require_fresh": b.require_fresh,
                 "participation_pct": b.participation_pct, "half_spread_pct": b.half_spread_pct,

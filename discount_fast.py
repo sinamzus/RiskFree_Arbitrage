@@ -500,6 +500,12 @@ if _HAVE:
                             sale_i = cur_i[worst]
                             at_ts = T
                     if do_sale:
+                        # the sale must free enough cash for the new position (never sell for nothing)
+                        rs0 = base[worst] + sale_i
+                        if cash + p_units[worst] * last[rs0] * (1 - hs) * (1 - sf) < 0.25 * slot:
+                            do_sale = False
+                            sale_ts = -1
+                    if do_sale:
                         # ---- _close(worst, units, sale_i, "rotate", at_ts) ----
                         rs = base[worst] + sale_i
                         units = p_units[worst]

@@ -1415,8 +1415,8 @@ def test_stale_nav_no_trade(R: Results, db):
               f"{len(a1)} معامله")
     from discount_study import space_info
     info2 = {d["key"]: d for d in space_info()["dims"]}
-    R.add(g, "سن NAV از جستجوی بهینه‌سازی خارج است (مسجل) و پیش‌فرض ۵ دقیقه است",
-          info2["max_nav_age_min"]["settled"] and info2["max_nav_age_days"]["settled"]
+    R.add(g, "سن NAV پارامتر بهینه‌سازی نیست (یک قاعدهٔ ثابت است) و پیش‌فرض ۵ دقیقه است",
+          "max_nav_age_min" not in info2 and "max_nav_age_days" not in info2 and "max_nav_age_min" not in S.DIMS
           and D.DiscountParams().max_nav_age_min == 5, "")
 
 
@@ -1453,7 +1453,8 @@ def test_optimizer_coverage(R: Results):
     among its choices, and the study dialog can put every one of them back into the form."""
     import re as _re
     dflt = asdict(D.DiscountParams())
-    not_dims = {"initial_capital", "dataset", "tse_grid_sec"}       # the capital: volume study; the data: a choice
+    # the capital: volume study; the data: a choice; the NAV age: a fixed rule (only a current NAV is traded)
+    not_dims = {"initial_capital", "dataset", "tse_grid_sec", "max_nav_age_days", "max_nav_age_min"}
     miss = [f for f in dflt if f not in S.DIMS and f not in not_dims]
     off = [f"{d}={dflt[d]}" for d in S.ORDER if dflt[d] not in S.DIMS[d]["choices"]]
     html = _html()
