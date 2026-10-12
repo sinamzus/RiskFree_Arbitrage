@@ -45,7 +45,7 @@ DIMS: dict[str, dict] = {
     "entry_mode":         {"kind": "slow", "label": "حالت ورود", "choices": ["fund", "index", "both"]},
     "baseline_days":      {"kind": "slow", "label": "تعدیل حباب دائمی (روز)", "choices": [0, 10, 20, 40, 60]},
     "max_nav_age_days":   {"kind": "slow", "label": "حداکثر سن NAV (روز)", "choices": [1, 2, 3, 5]},
-    "max_nav_age_min":    {"kind": "slow", "label": "حداکثر سن NAV (دقیقه؛ ۰ = خاموش)", "choices": [0, 10, 30, 60, 120]},
+    "max_nav_age_min":    {"kind": "slow", "label": "حداکثر سن NAV (دقیقه؛ ۰ = خاموش)", "choices": [0, 2, 5, 10, 30, 60, 120]},
     "mr_center":          {"kind": "slow", "label": "مرکز بازگشت به میانگین", "choices": ["off", "zero", "category", "self"]},
     "mr_window_days":     {"kind": "slow", "label": "پنجرهٔ امتیاز بازگشت (روز)", "choices": [10, 20, 30, 40]},
     "mr_horizon_days":    {"kind": "slow", "label": "افق بازگشت (روز)", "choices": [3, 5, 10]},

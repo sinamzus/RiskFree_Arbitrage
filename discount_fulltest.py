@@ -1448,6 +1448,22 @@ def test_volume_study(R: Results, db):
           r.status_code == 200 and len(rr.get("rows") or []) == 2 and rr["rows"][0]["capital"] == 5e8, str(rr.get("error") or ""))
 
 
+def test_optimizer_coverage(R: Results):
+    """Every strategy / execution parameter of the backtest can be studied by the optimizer, the form's default is
+    among its choices, and the study dialog can put every one of them back into the form."""
+    import re as _re
+    dflt = asdict(D.DiscountParams())
+    not_dims = {"initial_capital", "dataset", "tse_grid_sec"}       # the capital: volume study; the data: a choice
+    miss = [f for f in dflt if f not in S.DIMS and f not in not_dims]
+    off = [f"{d}={dflt[d]}" for d in S.ORDER if dflt[d] not in S.DIMS[d]["choices"]]
+    html = _html()
+    m = _re.search(r"const DS_FORM = \{(.*?)\};", html, _re.S)
+    keys = set(_re.findall(r"(\w+):\s*'disc-", m.group(1))) if m else set()
+    nform = [d for d in S.ORDER if d not in keys]
+    R.add("بهینه‌ساز", "همهٔ پارامترهای بک‌تست در بهینه‌ساز هستند، پیش‌فرض فرم جزو گزینه‌هاست و «اعمال» همه را به فرم برمی‌گرداند",
+          not miss and not off and not nform, f"جا افتاده: {miss} · پیش‌فرض خارج از گزینه‌ها: {off} · بدون نگاشت فرم: {nform}")
+
+
 def test_parallel_study(R: Results, db):
     """The optimizer's parallel workers (separate processes) must find exactly what one process finds."""
     import sys as _sys
@@ -1921,7 +1937,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
-             ("بهینه‌سازی موازی", lambda: (test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
+             ("بهینه‌سازی موازی", lambda: (test_optimizer_coverage(R), test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),
              ("NAV به‌روز", lambda: test_stale_nav_no_trade(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
