@@ -172,8 +172,7 @@ def _per_params(nb: dict, loaded: list[dict], crash, p) -> tuple:
         nb["crash"] = _flat(crash, nb) if crash is not None else None
     last_row = np.zeros(R, np.bool_)
     last_row[nb["base"] + nb["nrows"] - 1] = True
-    max_rel = p.fill_max_rel_pct / 100.0
-    ok = ~last_row & (nb["rel"] + nb["xb"] <= max_rel)
+    ok = ~last_row.copy()                       # the bubble limit is checked in the kernel (depends on the size)
     if p.mr_center != "off":
         mr = nb["mr"]
         bad = np.isnan(mr) | (mr < p.mr_min_score)
@@ -243,6 +242,31 @@ if _HAVE:
         return got, avg, worst
 
     @njit(cache=True)
+    def _buy_adj(r, slot, bf, has_bk_k, ap, av, na, cap, last, fair):
+        """Same as _Parker._buy_adj: average price of buying the intended position, never below last."""
+        if not has_bk_k or na[r] <= 0 or fair[r] <= 0:
+            return 0.0
+        a1 = ap[r, 0]
+        want = slot / (a1 * (1 + bf))
+        if cap[r] < want:
+            want = cap[r]
+        got, avg, _w = _fill(ap[r], av[r], na[r], want)
+        px = avg if got > 0 else a1
+        x = (px - last[r]) / fair[r]
+        return x if x > 0.0 else 0.0
+
+    @njit(cache=True)
+    def _sell_adj(r, units, has_bk_k, bp, bv, nbid, last, fair):
+        """Same as _Parker._sell_adj: average price of selling ``units`` (beyond the depth at the worst bid)."""
+        if not has_bk_k or nbid[r] <= 0 or fair[r] <= 0:
+            return 0.0
+        got, avg, worst = _fill(bp[r], bv[r], nbid[r], units)
+        if got < units:
+            avg = (avg * got + worst * (units - got)) / units
+        x = (last[r] - avg) / fair[r]
+        return x if x > 0.0 else 0.0
+
+    @njit(cache=True)
     def _stale(j, T, cur_ts, st_ptr, st_ts, cur_i, base, navts, max_nav_s):
         """Fund j's NAV is stale at T: older than the limit at T, or its latest snapshot was dropped for it."""
         if max_nav_s > 0 and cur_i[j] >= 0:
@@ -282,9 +306,9 @@ if _HAVE:
         return -1
 
     @njit(cache=True)
-    def _kernel(K, nrows, base, o, d, t, sec, fair, last, fresh, navr, rank, xb, xs, na, nbid, ap, av, bp, bv,
+    def _kernel(K, nrows, base, o, d, t, sec, fair, last, fresh, navr, rank, rel, xs, na, nbid, ap, av, bp, bv,
                 has_bk, has_at, g_T, g_ptr, m_k, m_i, okst, cap, st_ptr, st_ts, navts, max_nav_s,
-                req_fresh, hs, bf, sf, position_pct, switch, min_hold_s, max_age_s, dl, cash0, start_ts, end_ts,
+                req_fresh, hs, bf, sf, position_pct, switch, max_rel, min_hold_s, max_age_s, dl, cash0, start_ts, end_ts,
                 tr_i, tr_f, mk_i, mk_f):
         # trade records: tr_i[n] = (k, sig_row, entry_row, exit_row, at_ts, reason, seq) ; tr_f[n] = (units, cost_part,
         # ask, px, mid_in, mid_out)    marks: mk_i[n] = (date, elapsed) ; mk_f[n] = (equity, exp_area)
@@ -403,15 +427,17 @@ if _HAVE:
                     if p_units[k] <= 1e-9:
                         parked[k] = False
                     cash, invested = cash + sell_n * (1 - sf), invested + (-cost_part)
-            # which funds are candidates right now
+            # which funds are candidates right now — at the average price of buying the intended position
+            slot_c = position_pct / 100.0 * (cash + invested) * (1 + bf)
             for a in range(a0, a1):
                 k = m_k[a]
                 r = base[k] + m_i[a]
                 if req_fresh and not fresh[r]:
                     continue
-                if okst[r]:
+                xa = _buy_adj(r, slot_c, bf, has_bk[k], ap, av, na, cap, last, fair)
+                if okst[r] and rel[r] + xa <= max_rel:
                     cand_T[k] = T
-                    cand_v[k] = rank[r] + xb[r]
+                    cand_v[k] = rank[r] + xa
                 else:
                     cand_T[k] = -1
             # entries: stable sort of the group by (candidate value or rank)
@@ -489,11 +515,11 @@ if _HAVE:
                         if _stale(j, T, cur_ts, st_ptr, st_ts, cur_i, base, navts, max_nav_s):
                             continue
                         rr = base[j] + cur_i[j]
-                        rv = rank[rr] - xs[rr]
+                        rv = rank[rr] - _sell_adj(rr, p_units[j], has_bk[j], bp, bv, nbid, last, fair)
                         if worst < 0 or rv > w_rel:
                             worst = j
                             w_rel = rv
-                    do_sale = not (worst < 0 or rank[r] + xb[r] > w_rel - switch)
+                    do_sale = not (worst < 0 or cand_v[k] > w_rel - switch)
                     sale_i = -1
                     at_ts = -1
                     if do_sale:
@@ -718,11 +744,11 @@ def run_hold(fill: dict, p, d0: int, d1: int, marks: list | None = None, lite: b
         end_ts = (D._ord(d1) + 1) * 86400
         n_tr, n_mk, _final = _kernel(
             nb["K"], nb["nrows"], nb["base"], nb["o"], nb["d"], nb["t"], nb["sec"], nb["fair"], nb["last"],
-            nb["fresh"], nb["navr"], rank, nb["xb"], nb["xs"], nb["na"], nb["nbid"], nb["ap"], nb["av"], nb["bp"],
+            nb["fresh"], nb["navr"], rank, nb["rel"], nb["xs"], nb["na"], nb["nbid"], nb["ap"], nb["av"], nb["bp"],
             nb["bv"], nb["has_bk"], nb["has_at"], nb["g_T"], nb["g_ptr"], nb["m_k"], nb["m_i"], okst, cap,
             nb["st_ptr"], nb["st_ts"], nb["navts"], max(0, int(p.max_nav_age_min)) * 60,
             bool(p.require_fresh), p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee, float(p.position_pct),
-            p.fill_switch_pct / 100.0, max(0, int(p.fill_min_hold_min)) * 60, max(1, int(p.fill_quote_age_min)) * 60,
+            p.fill_switch_pct / 100.0, p.fill_max_rel_pct / 100.0, max(0, int(p.fill_min_hold_min)) * 60, max(1, int(p.fill_quote_age_min)) * 60,
             max(0, int(p.exec_delay_snaps)), float(p.initial_capital), start_ts, end_ts, tr_i, tr_f, mk_i, mk_f)
     except Exception as e:                # never fail a study because of the fast path: fall back to Python
         _BROKEN.append(repr(e))

@@ -1232,6 +1232,20 @@ def test_tse_dataset(R: Results, db_path: str):
                 bad.append(f"{t['symbol']} {side}: حباب‌ها ناقص")
     R.add(g, "نمایش اردربوک و حباب در لحظهٔ هر خرید و فروش (hover): همان صف‌هایی که بک‌تست با آن معامله کرد",
           not bad and n > 0, "؛ ".join(bad[:3]) or f"{n} لحظه")
+    # the signal is confirmed at the AVERAGE price of the whole order (all ask levels it walks), not only the best
+    # ask: every hold-mode buy's real fill price (rel_entry_pct = fill vs fair) is within the entry limit
+    bad, n, deep = [], 0, 0
+    for mx in (0.0, 0.3):
+        hpv = _base(fill_mode="hold", fill_max_rel_pct=mx, position_pct=100, dataset="hybrid", participation_pct=0.0)
+        rv = _run(db, hpv)
+        for t in rv["trades"]:
+            n += 1
+            if t.get("spread_in") is not None and t["spread_in"] > 0.0012:
+                deep += 1                                     # walked past the first ask level
+            if t["rel_entry_pct"] > mx + 1e-6:
+                bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {t['rel_entry_pct']}% > {mx}%")
+    R.add(g, "سیگنال خرید با میانگین قیمت کل سفارش (همهٔ سطرهای صف فروش) تأیید می‌شود: قیمت واقعی هر خرید در حد مجاز ورود است",
+          not bad and n > 0 and deep > 0, "؛ ".join(bad[:3]) or f"{n} خرید، {deep} خرید از سطرهای بعدی")
     ck = rhy["dataset"].get("clock") or {}
     R.add(g, "بررسی ساعت NAV↔TSE: در دادهٔ هم‌ساعت، جابه‌جایی صفر بهترین است؛ هیچ معامله‌ای بیرون از ساعت بازار نیست",
           ck.get("aligned") is True and ck.get("best_offset_min") == 0 and ck.get("trade_legs_checked", 0) > 0
@@ -1316,7 +1330,9 @@ def test_fast_replay(R: Results, db_path: str):
     import discount_fast as X
     g = "بهینه‌سازی موازی"
     if not X.available():
-        R.add(g, "شبیه‌سازی کامپایل‌شده = شبیه‌سازی پایتون", None, "numba نصب نیست (مسیر پایتون استفاده می‌شود)")
+        # numba missing = skip; numba installed but the kernel failed to compile/run = a real failure
+        R.add(g, "شبیه‌سازی کامپایل‌شده = شبیه‌سازی پایتون", False if X._HAVE else None,
+              ("کرنل کامپایل نشد: " + str(X._BROKEN[:1])[:300]) if X._HAVE else "numba نصب نیست (مسیر پایتون استفاده می‌شود)")
         return
     p2 = db_path + ".fast.db"
     _sh.copyfile(db_path, p2)

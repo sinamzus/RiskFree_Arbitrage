@@ -7677,20 +7677,23 @@ async function discShowOb(cell, ev) {
   if (buy) {
     const thr = p.fill_mode === 'hold' || p.fill_mode === 'best' ? p.fill_max_rel_pct : -p.entry_discount_pct;
     const okL = me.bubble_last_pct != null && thr != null && me.bubble_last_pct <= thr + 1e-9;
-    const okA = me.bubble_ask_pct == null || (thr != null && me.bubble_ask_pct <= thr + 1e-9);
+    // the signal is confirmed at the AVERAGE price of the whole order (all ask levels it walked) = the fill price
+    const okA = t.rel_entry_pct == null || (thr != null && t.rel_entry_pct <= thr + 1e-6);
     const cand = (m.funds || []).filter(f => f.bubble_ask_pct != null || f.bubble_last_pct != null)
       .map(f => ({s: f.symbol, v: Math.max(f.bubble_last_pct ?? -1e9, f.bubble_ask_pct ?? -1e9)})).sort((a, b) => a.v - b.v);
     const rank = cand.findIndex(c => c.s === t.symbol) + 1;
     sig = `حباب با آخرین قیمت ${pc(me.bubble_last_pct)} · با <span style="color:var(--red)">سر صف فروش</span> ${pc(me.bubble_ask_pct)}
+      · با <b>میانگین قیمت خرید کل سفارش</b> (همهٔ سطرهای خورده‌شده) ${pc(t.rel_entry_pct)}
       ${thr != null ? ` · حد ورود ${pc(thr)}` : ''}<br>
-      ${okL && okA ? '✔ هر دو شرط (آخرین قیمت و سر صف فروش) برقرار' : '⚠ یکی از دو شرط در این لحظه برقرار نیست (ممکن است تصمیم در اسنپ‌شات دیگری/با تأخیر گرفته شده باشد)'}
+      ${okL && okA ? '✔ هر دو شرط (آخرین قیمت و میانگین قیمت کل سفارش) برقرار' : '⚠ یکی از دو شرط در این لحظه برقرار نیست (ممکن است تصمیم در اسنپ‌شات دیگری/با تأخیر گرفته شده باشد)'}
       ${rank ? ` · رتبهٔ حباب بین ${cand.length} صندوق: <b>${rank}</b>` : ''}`;
   } else {
     const rep = t.exit_reason === 'rotate' ? all.find(x => x !== t && x.entry_date === t.exit_date && x.entry_time === t.exit_time) : null;
     const rm = rep ? (m.funds || []).find(f => f.symbol === rep.symbol) : null;
     const held = Math.min(me.bubble_last_pct ?? 1e9, me.bubble_bid_pct ?? 1e9);
     const cv = rm ? Math.max(rm.bubble_last_pct ?? -1e9, rm.bubble_ask_pct ?? -1e9) : null;
-    sig = `حباب با آخرین قیمت ${pc(me.bubble_last_pct)} · با <span style="color:var(--green)">سر صف خرید</span> ${pc(me.bubble_bid_pct)}<br>
+    sig = `حباب با آخرین قیمت ${pc(me.bubble_last_pct)} · با <span style="color:var(--green)">سر صف خرید</span> ${pc(me.bubble_bid_pct)}
+      · با <b>میانگین قیمت فروش کل موقعیت</b> ${pc(t.rel_exit_pct)}<br>
       علت فروش: <b>${{rotate: 'جابه‌جایی با کاندیدای بهتر', end: 'پایان داده', signal: 'سیگنال خروج', stop: 'حد ضرر', time: 'سقف زمان'}[t.exit_reason] || t.exit_reason}</b>
       ${rep ? `<br>جایگزین: <b>${rep.symbol}</b> با حباب (سر صف فروش) ${pc(rm && rm.bubble_ask_pct)}
          ${cv != null && held < 1e8 ? ` → برتری ${pc(held - cv)} (آستانهٔ جابه‌جایی ${pc(p.fill_switch_pct)})` : ''}` : ''}`;

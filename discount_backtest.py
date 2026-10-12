@@ -309,6 +309,21 @@ def _best(book, d: int, t: int, side: int, default: float) -> float:
     return lv[0][0] if lv else default
 
 
+def _fill_lv(levels, units: float) -> tuple[float, float, float]:
+    """Walk ``levels`` ([[price, vol], ...], best first) for ``units``: (filled within the visible depth, their
+    average price, worst price touched). Same arithmetic as ``tse_dataset.fill``."""
+    left, cost, got, worst = float(units), 0.0, 0.0, 0.0
+    for px, v in levels:
+        if left <= 0:
+            break
+        q = min(left, float(v))
+        cost += q * px
+        got += q
+        left -= q
+        worst = px
+    return got, (cost / got if got > 0 else 0.0), worst
+
+
 def _book_mid(book, d: int, t: int, default: float) -> float:
     """Mid of the real book at (d, t) — the reference the paid spread is measured against; ``default`` without one."""
     b, a = _best(book, d, t, 0, 0.0), _best(book, d, t, 1, 0.0)
@@ -895,11 +910,18 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                     diag["crash"] = diag.get("crash", 0) + 1
                 continue                      # the group is falling fast (or just did): no new entry
             ix = idx[i] if idx is not None else None
-            if book and rel is None:                   # confirmed at the price we would pay (best ask)
-                a = _best(book, d, t, 1, 0.0)
-                r_in = r + max(0.0, (a - last) / nav) if a > 0 and nav > 0 else r
-            else:
-                r_in = r
+            r_in = r
+            if book and rel is None and nav > 0:
+                # confirmed at the AVERAGE price of the order it would place (walking the ask levels), never easier
+                asks = _book_side(book, d, t, 1)
+                if asks:
+                    a1 = asks[0][0]
+                    want = p.position_pct / 100.0 * p.initial_capital / a1
+                    cp_ = _cap(d, t)
+                    if cp_ < want:
+                        want = cp_
+                    got_, avg_, _w = _fill_lv(asks, want)
+                    r_in = r + max(0.0, ((avg_ if got_ > 0 else a1) - last) / nav)
             fund_ok = r_in <= ent_thr
             idx_ok = ix is not None and ix <= ix_entry
             if not ((mode == "fund" and fund_ok) or (mode == "index" and idx_ok)
@@ -942,7 +964,15 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             e_mr = mr[i] if mr_on else None
         else:
             bid = _best(book, d, t, 0, last * (1 - hs))
-            r_out = r - max(0.0, (last - bid) / nav) if book and rel is None and nav > 0 else r   # confirmed at the bid
+            r_out = r
+            if book and rel is None and nav > 0:
+                # confirmed at the AVERAGE price of selling the whole position (walking the bid levels)
+                bids_ = _book_side(book, d, t, 0)
+                if bids_:
+                    got_, avg_, w_ = _fill_lv(bids_, pos)
+                    if got_ < pos:
+                        avg_ = (avg_ * got_ + w_ * (pos - got_)) / pos
+                    r_out = r - max(0.0, (last - avg_) / nav)
             reason = None
             if p.max_hold_days > 0 and o - e_ord >= p.max_hold_days:
                 reason = "time"
@@ -1378,14 +1408,41 @@ class _Parker:
         x = bisect.bisect_right(lst, T) - 1
         return x >= 0 and lst[x] > self.cur_ts[j]
 
-    def _xadj(self, k: int, i: int, side: int) -> float:
-        """Executable-price correction of the bubble at row ``i`` of fund ``k`` (real book only, else 0): buying
-        pays the best ask, selling gets the best bid, so the bubble that can actually be traded is
-        rel + (ask − last)/fair for a buy and rel − (last − bid)/fair for a sale."""
-        arr = self.xb[k] if side == 1 else self.xs[k]
-        return arr[i] if arr is not None else 0.0
+    def _buy_adj(self, k: int, i: int, slot: float) -> float:
+        """Bubble correction for BUYING fund ``k`` at row ``i`` an intended position of ``slot`` rial (incl. fee):
+        (average price of walking the ask levels for that size, capped by the volume cap − last) / fair, never
+        negative — the book can only make a buy signal harder. 0 without a book."""
+        bk = self.book[k]
+        if not bk:
+            return 0.0
+        _o, d, t, fair, last, _f, _n = self.rows[k][i]
+        asks = _book_side(bk, d, t, 1)
+        if not asks or fair <= 0:
+            return 0.0
+        a1 = asks[0][0]
+        want = slot / (a1 * (1 + self.p.buy_fee))
+        cp = self._cap(k, d, t)
+        if cp < want:
+            want = cp
+        got, avg, _w = _fill_lv(asks, want)
+        px = avg if got > 0 else a1
+        return max(0.0, (px - last) / fair)
 
-    # ---- driver interface -------------------------------------------------------
+    def _sell_adj(self, j: int, i: int, units: float) -> float:
+        """Bubble correction for SELLING ``units`` of fund ``j`` at row ``i``: (last − average price of walking the
+        bid levels; beyond the visible depth at the worst bid) / fair, never negative. 0 without a book."""
+        bk = self.book[j]
+        if not bk:
+            return 0.0
+        _o, d, t, fair, last, _f, _n = self.rows[j][i]
+        bids = _book_side(bk, d, t, 0)
+        if not bids or fair <= 0:
+            return 0.0
+        got, avg, worst = _fill_lv(bids, units)
+        if got < units:
+            avg = (avg * got + worst * (units - got)) / units
+        return max(0.0, (last - avg) / fair)
+
     def peek_ts(self):
         return self.groups[self.gi][0] if self.gi < len(self.groups) else None
 
@@ -1526,7 +1583,7 @@ class _Parker:
                                  or (p.stop_mode == "nav_level" and r <= -stop_s)
                                  or (p.stop_mode not in ("price", "nav_level") and r <= pos["rel"] - stop_s)):
                 reason = "stop"
-            elif r - self._xadj(k, i, 0) >= self.exit_rel:      # the bubble at the price we can sell at (bid)
+            elif r - self._sell_adj(k, i, pos["units"]) >= self.exit_rel:   # at the average price of selling it all
                 reason = "signal"
             if reason:
                 jx = self._xi(k, i)                   # fill row (a later snapshot when a delay is modelled)
@@ -1544,12 +1601,13 @@ class _Parker:
             if k in self.parked and i == len(self.rows[k]) - 1:
                 dc, di = self._close(k, self.parked[k]["units"], i, "end")
                 cash, invested = cash + dc, invested + di
-        # which funds are candidates right now
+        # which funds are candidates right now — judged at the average price of buying the intended position
+        slot_c = p.position_pct / 100.0 * (cash + invested) * (1 + bf)
         for k, i in group:
             if p.require_fresh and not self.rows[k][i][5]:
                 continue
             d = self.rows[k][i][1]
-            xa = self._xadj(k, i, 1)                  # judged at the price we would pay (best ask)
+            xa = self._buy_adj(k, i, slot_c)          # at the average price of the order we would place
             ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and self.rel[k][i] + xa <= self.max_rel
                   and not (mr_on and (self.mr[k] is None or self.mr[k][i] is None or self.mr[k][i] < p.mr_min_score))
                   and not (self.crash is not None and p.crash_drop_pct > 0 and self.crash[k][i] is not None
@@ -1633,10 +1691,12 @@ class _Parker:
                 continue                      # bought too recently to be switched out
             if self._stale_now(j, T):
                 continue                      # its NAV is stale right now: not sold
-            r = self.rank[j][self.cur_i[j]] - self._xadj(j, self.cur_i[j], 0)    # at the price we can sell at (bid)
+            # at the average price of selling the whole holding (walking the bids of its latest snapshot)
+            r = self.rank[j][self.cur_i[j]] - self._sell_adj(j, self.cur_i[j], self.parked[j]["units"])
             if w_rel is None or r > w_rel:
                 worst, w_rel = j, r
-        if worst is None or self.rank[k][i] + self._xadj(k, i, 1) > w_rel - self.switch:
+        # the candidate's value as judged this instant (average price of buying the intended position)
+        if worst is None or self.cand[k][1] > w_rel - self.switch:
             return cash, invested
         pw = self.parked[worst]
         if self.p.exec_delay_snaps > 0:
