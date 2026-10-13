@@ -62,6 +62,10 @@ def ensure_schema(db) -> None:
     G.ensure_schema(db)
     with db._conn() as conn:
         conn.executescript(_SCHEMA)
+        try:                                  # per-day fingerprint of the tapes a stored window was built from
+            conn.execute("ALTER TABLE tse_window ADD COLUMN ver TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 
 def _sec(t: int) -> int:
@@ -147,28 +151,29 @@ def _all_windows(db) -> dict:
     """{date: (first, last)} for every collected day, read in bulk and kept per process (refreshed whenever the
     collected data changes); days whose cached window is out of date are rebuilt from the tapes."""
     k = _dbkey(db)
+    ensure_schema(db)
+    gv = _global_version(db)                  # any tape added OR replaced (a count alone misses a re-fetch)
+    hit = _WINS.get(k)
+    if hit is not None and hit[0] == gv:
+        return hit[1]
     with db._conn() as conn:
-        n = conn.execute("SELECT COUNT(*) FROM tse_raw").fetchone()[0]
-        hit = _WINS.get(k)
-        if hit is not None and hit[0] == n:
-            return hit[1]
-        cnt = {int(d): int(c) for d, c in conn.execute(
-            "SELECT date, COUNT(*) FROM tse_raw WHERE kind='trades' AND n>0 GROUP BY date")}
-        have = {int(d): (int(nf), lo, hi) for d, nf, lo, hi in conn.execute("SELECT date, n_funds, first, last FROM tse_window")}
+        cur = {int(d): f"{int(c)}|{int(tot)}|{mx}" for d, c, tot, mx in conn.execute(
+            "SELECT date, COUNT(*), TOTAL(n), MAX(fetched_at) FROM tse_raw WHERE kind='trades' AND n>0 GROUP BY date")}
+        have = {int(d): (v or "", lo, hi) for d, v, lo, hi in conn.execute("SELECT date, ver, first, last FROM tse_window")}
     out, rebuild = {}, []
-    for d, c in cnt.items():
+    for d, v in cur.items():
         h = have.get(d)
-        if h is not None and h[0] == c:
+        if h is not None and h[0] == v:
             out[d] = (h[1], h[2]) if h[1] is not None else None
         else:
             rebuild.append(d)
     for d in rebuild:
-        out[d] = _build_window(db, d)
-    _WINS[k] = (n, out)
+        out[d] = _build_window(db, d, cur[d])
+    _WINS[k] = (gv, out)
     return out
 
 
-def _build_window(db, date: int) -> tuple[int, int] | None:
+def _build_window(db, date: int, ver: str = "") -> tuple[int, int] | None:
     with db._conn() as conn:
         sids = [int(r[0]) for r in conn.execute(
             "SELECT symbol_id FROM tse_raw WHERE date=? AND kind='trades' AND n>0", (date,))]
@@ -181,7 +186,8 @@ def _build_window(db, date: int) -> tuple[int, int] | None:
             lo = x if lo is None or x < lo else lo
             hi = x if hi is None or x > hi else hi
     with db._conn() as conn:
-        conn.execute("INSERT OR REPLACE INTO tse_window VALUES (?,?,?,?)", (date, len(sids), lo, hi))
+        conn.execute("INSERT OR REPLACE INTO tse_window (date, n_funds, first, last, ver) VALUES (?,?,?,?,?)",
+                     (date, len(sids), lo, hi, ver))
     return (lo, hi) if lo is not None else None
 
 
@@ -221,16 +227,19 @@ _LOADS_MAX = 256
 
 
 def _collected_version(db, symbol_id: int) -> tuple:
-    """Changes whenever TSE or NAV-dump data of this fund is added or replaced (so a cached load is never stale)."""
+    """Changes whenever TSE or NAV-dump data of this fund is added or replaced (so a cached load is never stale).
+    The dump part is a fingerprint of the rows' contents (times, NAVs, prices, volumes), not only their count and
+    last date: a re-import that corrects times or NAVs in place must invalidate the cache too."""
     with db._conn() as conn:
         r = conn.execute("SELECT COUNT(*), COALESCE(MAX(fetched_at), '') FROM tse_raw WHERE symbol_id=?",
                          (symbol_id,)).fetchone()
         try:                                  # the NAV dump's rows too (hybrid takes its snapshots from there)
-            n = conn.execute("SELECT COUNT(*), COALESCE(MAX(date), 0) FROM nav_intraday WHERE symbol_id=?",
-                             (symbol_id,)).fetchone()
+            n = conn.execute("SELECT COUNT(*), COALESCE(MAX(date), 0), TOTAL(date), TOTAL(time), TOTAL(nav), "
+                             "TOTAL(nav_date), TOTAL(nav_time), TOTAL(last), TOTAL(vol) FROM nav_intraday "
+                             "WHERE symbol_id=?", (symbol_id,)).fetchone()
         except Exception:
-            n = (0, 0)
-    return (int(r[0]), r[1], int(n[0]), int(n[1]))
+            n = (0, 0, 0, 0, 0, 0, 0, 0, 0)
+    return (int(r[0]), r[1], int(n[0]), int(n[1])) + tuple(repr(float(x)) for x in n[2:])
 
 
 def _pc_get(db, name: str, ver: str):
@@ -269,13 +278,14 @@ def _memo_load(db, kind: str, symbol_id: int, start, end, grid: int, fn):
     it once and share it between all backtests / optimizer configurations — in memory within a process, and on
     disk (``tse_cache``) across restarts, so reopening the app does not prepare the data again."""
     cv = _collected_version(db, symbol_id)
-    key = (str(getattr(db, "path", id(db))), kind, symbol_id, start, end, grid, cv)
+    gv = _global_version(db)                  # other funds' tapes move the market windows this load is filtered by
+    key = (str(getattr(db, "path", id(db))), kind, symbol_id, start, end, grid, cv, gv)
     hit = _LOADS.get(key)
     if hit is None:
         import time as _t
         t0 = _t.time()
         name = f"load|{kind}|{symbol_id}|{start}|{end}|{grid}"
-        ver = f"{HYBRID_VERSION}|{GRID_VERSION}|{cv}|{_global_version(db)}"
+        ver = f"{HYBRID_VERSION}|{GRID_VERSION}|{LOAD_VERSION}|{cv}|{gv}"
         got = _pc_get(db, name, ver)
         if got is not None:
             rows, items = got
@@ -399,6 +409,7 @@ def _book_states(book: list[list], secs: list[int]) -> list[tuple[list, list]]:
 # --------------------------------------------------------------------------- #
 
 HYBRID_VERSION = 1
+LOAD_VERSION = 2            # bump when the rows a load returns change meaning (2: ghost rows, crossed books dropped)
 _UNION: dict = {}             # (db, date) -> sorted snapshot times (HHMMSS) of every collected fund that day
 _TSE_SIDS: dict = {}          # db -> (collected fund ids, row count of tse_raw when read)
 
@@ -501,11 +512,16 @@ def _load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tupl
             new.append((symbol_id, d, sig, _pack([[t, b, a] for t, (b, a) in states.items()])))
         if len(book._pre) < book._DAYS_KEPT:
             book._pre[d] = states
-        for r in rr:
-            bids, asks = states.get(int(r[1]), ([], []))
-            if bids and asks:
+        for r in by_day[d]:
+            bids, asks = states.get(int(r[1]), ([], [])) if win[0] <= _sec(r[1]) <= win[1] else ([], [])
+            if bids and asks and bids[0][0] < asks[0][0]:
                 rows.append(r)
                 dict.__setitem__(book, (r[0], r[1]), (bids, asks))
+            else:
+                # not tradable (outside the window, one-sided or crossed book) — kept as a "ghost" row without price
+                # or NAV, which the preparation skips, so its traded volume still counts: the next snapshot is
+                # "fresh" only if something traded AFTER this one
+                rows.append((r[0], r[1], 0.0, r[3], 0.0, r[5], r[6]))
     if new:
         with db._conn() as conn:
             conn.executemany("INSERT OR REPLACE INTO tse_hybrid VALUES (?,?,?,?)", new)
@@ -560,14 +576,18 @@ def clock_check(db, funds: list[tuple[int, str]], start: int | None, end: int | 
     with db._conn() as conn:
         n_raw = conn.execute("SELECT COUNT(*) FROM tse_raw").fetchone()[0]
         try:
-            n_nav = tuple(conn.execute(f"SELECT COUNT(*), COALESCE(MAX(date), 0) FROM nav_intraday WHERE symbol_id IN "
-                                       f"({','.join('?' * len(sids))})", sids).fetchone()) if sids else ()
+            # a fingerprint of the rows' contents: a re-import correcting times / prices in place must show up
+            n_nav = tuple(repr(x) for x in conn.execute(
+                f"SELECT COUNT(*), COALESCE(MAX(date), 0), TOTAL(date), TOTAL(time), TOTAL(nav), TOTAL(nav_time), "
+                f"TOTAL(last) FROM nav_intraday WHERE symbol_id IN ({','.join('?' * len(sids))})", sids).fetchone()) \
+                if sids else ()
         except Exception:
             n_nav = ()
-    mkey = (_dbkey(db), sids, start, end, max_days, n_raw, n_nav)
+    gv = _global_version(db)
+    mkey = (_dbkey(db), sids, start, end, max_days, n_raw, n_nav, gv)
     hit = _CLOCK.get(mkey)
     if hit is None:
-        name, ver = f"clock|{sids}|{start}|{end}|{max_days}", f"{n_raw}|{n_nav}|{_global_version(db)}"
+        name, ver = f"clock|{sids}|{start}|{end}|{max_days}", f"{n_raw}|{n_nav}|{gv}"
         hit = _pc_get(db, name, ver)
         if hit is None:
             devs, rows_in, rows_out = _clock_offsets(db, funds, start, end, max_days, cache)

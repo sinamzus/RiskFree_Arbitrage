@@ -387,7 +387,11 @@ def dataset_dates(db, sids: list[int], start: int | None, end: int | None, p: "D
     if p.dataset in ("tse", "hybrid"):
         import tse_dataset as TD
         return TD.tse_dates(db, sids, start, end)
-    return db.get_nav_intraday_dates(start, end)
+    real = getattr(db, "_db", db)
+    try:                                       # the selected funds' days only (not every fund in the database)
+        return real.get_nav_intraday_dates(start, end, list(sids) if sids else None)
+    except TypeError:
+        return db.get_nav_intraday_dates(start, end)
 
 
 _LOAD_T = {"raw": 0.0, "prep": 0.0}     # time spent reading the dataset / preparing the rows (diagnostics)
@@ -678,7 +682,17 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
                 stats["stale_days"] = stats.get("stale_days", 0) + 1
             day_vol.stale.append(o * 86400 + _sec(t))
             continue                                  # the NAV is from an older DAY: not a candidate
-        if nav_age_s > 0 and nav_d and nav_t:
+        if nav_d and (nav_d > d or (nav_d == d and nav_t and _sec(nav_t) > _sec(t) + 60)):
+            if counted:                               # a NAV stamped after the snapshot (beyond clock jitter) is not
+                stats["stale_min"] = stats.get("stale_min", 0) + 1     # usable: it would be a look into the future
+            day_vol.stale.append(o * 86400 + _sec(t))
+            continue
+        if nav_age_s > 0 and not (nav_d and nav_t):
+            if counted:                               # no NAV time (or exactly 00:00:00, a date-only NAV): its
+                stats["stale_min"] = stats.get("stale_min", 0) + 1     # freshness cannot be shown → not traded
+            day_vol.stale.append(o * 86400 + _sec(t))
+            continue
+        if nav_age_s > 0:
             age = (o * 86400 + _sec(t)) - (_ord(nav_d) * 86400 + _sec(nav_t))
             if age > nav_age_s:
                 if counted:
@@ -1113,7 +1127,7 @@ def _summarize(trades: list[Trade], base_capital: float) -> dict:
         "worst_pct": round(min(t.net_pct for t in trades), 4),
         "avg_hold_days": round(sum(t.hold_days for t in trades) / len(trades), 2),
         "total_fees": round(sum(t.fees for t in trades), 0),
-        "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else 0,
+        "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else (999.0 if gross_win > 0 else 0),
         "avg_disc_entry_pct": round(sum(t.disc_entry_pct for t in trades) / len(trades), 3),
         "avg_disc_exit_pct": round(sum(t.disc_exit_pct for t in trades) / len(trades), 3),
         "max_drawdown_pct": round(dd / base_capital * 100, 3) if base_capital else 0,
@@ -1584,7 +1598,7 @@ class _Parker:
             # the real book of the held fund at the very instant of the sale (not at its last snapshot)
             d2, t2 = _ts_to_dt(at_ts)
             st = bk.at(d2, t2)
-            if st[0] and st[1]:
+            if st[0]:                         # bids at that instant (the sell side may be empty: a buying queue)
                 bk = {(d, t): st}
         _u, px = _sell_exec(bk, d, t, units, last, hs)      # the quote's own book (before re-dating)
         mid = _book_mid(bk, d, t, last)
@@ -1908,8 +1922,10 @@ class _Parker:
         sbids = None
         if at_ts is not None and bk is not None and hasattr(bk, "at"):
             st = bk.at(*_ts_to_dt(at_ts))
-            if st[0] and st[1]:
-                sbids = st[0]
+            if not st[0]:                     # no bid at the instant of the sale: nothing can be sold now
+                self._sale_ts = None
+                return cash, invested
+            sbids = st[0]
         if sbids is None:
             sbids = _book_side(bk, rs[1], rs[2], 0)
         units = self._units_to_sell(worst, sale_i, need, slot, sbids)
@@ -2006,8 +2022,8 @@ def _daily_series(raw: list[tuple], p: DiscountParams) -> tuple[dict, dict]:
 def _returns_by_date(series: list[dict]) -> tuple[int | None, dict[int, dict[int, float]]]:
     """{date: {fund_index: return}} from per-fund price series.
 
-    A return is vs the fund's own previous observation; returns beyond ±30% or
-    across >10-day gaps are treated as data errors and dropped.
+    A return is vs the fund's own previous observation (across any gap — a market holiday or a pause in the data
+    collection must not erase the move made meanwhile); returns beyond ±30% are treated as data errors and dropped.
     """
     by_date: dict[int, dict[int, float]] = {}
     first = None
@@ -2018,7 +2034,7 @@ def _returns_by_date(series: list[dict]) -> tuple[int | None, dict[int, dict[int
         first = ds[0] if first is None else min(first, ds[0])
         for a, b in zip(ds, ds[1:]):
             r = ser[b] / ser[a] - 1.0
-            if abs(r) <= 0.30 and (_ord(b) - _ord(a)) <= 10:
+            if abs(r) <= 0.30:
                 by_date.setdefault(b, {})[k] = r
     return first, by_date
 
@@ -2121,27 +2137,33 @@ def _level_stats(levels: list[tuple[int, float]], daily: bool = True) -> dict:
 
 
 def _buy_and_hold(series: list[dict], initial: float, bf: float, sf: float) -> dict:
-    """Equal-weight buy-and-hold of the funds that already trade on the first date.
+    """Equal-weight buy-and-hold of the funds that trade within the first week of the period.
 
-    ``initial`` capital buys equally (incl. buy fee) on day 1; a fund whose data
-    ends is held at its last price; everything is sold (sell fee) at the end.
+    ``initial`` capital is split equally; each fund is bought (incl. buy fee) on its first traded day in that week
+    (its share waits as cash until then — a fund that simply did not trade on day 1 is not left out); a fund whose
+    data ends is held at its last price; everything is sold (sell fee) at the end. Funds listed later are not part
+    of it (there was nothing to buy at the start).
     """
     series = [s for s in series if s]
     if not series:
         return {}
-    d_first = min(min(s) for s in series)
-    start = [s for s in series if d_first in s]
+    all_dates = sorted({d for s in series for d in s})
+    d_first = all_dates[0]
+    first_week = set(all_dates[:5])
+    start = [s for s in series if min(s) in first_week]
     if not start:
         return {}
-    all_dates = sorted({d for s in series for d in s})
     per = initial / (1 + bf) / len(start)
-    units = [per / s[d_first] for s in start]
-    ptr = [d_first] * len(start)                       # last known price per fund
-    last_px = [s[d_first] for s in start]
+    buy_d = [min(s) for s in start]
+    units = [per / s[b] for s, b in zip(start, buy_d)]
+    last_px = [s[b] for s, b in zip(start, buy_d)]
     curve = []
     for d in all_dates:
         tot = 0.0
         for k, s in enumerate(start):
+            if d < buy_d[k]:
+                tot += per * (1 + bf)              # not bought yet: its share is still cash
+                continue
             if d in s:
                 last_px[k] = s[d]
             tot += units[k] * last_px[k]

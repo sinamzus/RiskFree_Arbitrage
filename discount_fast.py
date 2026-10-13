@@ -16,6 +16,7 @@ Without numba (or if compiling fails) ``available()`` is False and callers keep 
 from __future__ import annotations
 
 import math
+import threading
 
 import numpy as np
 
@@ -199,22 +200,25 @@ def _per_params(nb: dict, loaded: list[dict], crash, p) -> tuple:
 
 _CTX: dict = {}
 _LAST: dict = {}                       # final capital of the latest run_hold call
+# _CTX / _LAST are module state read by the kernel's Python callback: one replay at a time per process (the web
+# server may run a validation and an optimizer in two threads)
+_RUN_LOCK = threading.RLock()
 
 
 def _at_bids(k, at_ts, buf):
-    """buf[0:5] bid prices, buf[5:10] bid volumes, buf[10] best ask; returns the number of bid levels, or -1 when
-    the book at that instant is not two-sided (the row's own book is used then, as in ``_Parker._close``)."""
+    """buf[0:5] bid prices, buf[5:10] bid volumes, buf[10] best ask (0 = none); returns the number of bid levels, or
+    -1 when there is no bid at that instant (then nothing is sold, as in ``_Parker._switch_out``)."""
     import discount_backtest as D
     bk = _CTX["books"][int(k)]
     d2, t2 = D._ts_to_dt(int(at_ts))
     st = bk.at(d2, t2)
-    if not (st[0] and st[1]):
+    if not st[0]:
         return -1
     n = min(5, len(st[0]))
     for q in range(n):
         buf[q] = st[0][q][0]
         buf[5 + q] = st[0][q][1]
-    buf[10] = st[1][0][0]
+    buf[10] = st[1][0][0] if st[1] else 0.0
     return n
 
 
@@ -686,15 +690,18 @@ if _HAVE:
                         if cash + p_units[worst] * last[rs0] * (1 - hs) * (1 - sf) < min_frac * slot:
                             do_sale = False
                             sale_ts = -1
+                    use_st = 0
+                    if do_sale and at_ts >= 0 and has_at[worst]:
+                        with objmode(nlev="int64"):
+                            nlev = _at_bids(worst, at_ts, buf)
+                        if nlev > 0:
+                            use_st = nlev
+                        else:
+                            do_sale = False          # no bids at the instant of the sale: nothing can be sold
+                            sale_ts = -1
                     if do_sale:
                         # ---- _close(worst, units, sale_i, "rotate", at_ts) ----
                         rs = base[worst] + sale_i
-                        use_st = 0
-                        if at_ts >= 0 and has_at[worst]:
-                            with objmode(nlev="int64"):
-                                nlev = _at_bids(worst, at_ts, buf)
-                            if nlev > 0:
-                                use_st = nlev
                         # only as much as the buy needs, line by line over the bids the sale meets
                         units = _units_to_sell(rs, p_units[worst], need, slot, use_st > 0, buf, use_st, has_bk[worst],
                                                bp, bv, nbid, last, hs, sf, min_frac)
@@ -830,8 +837,9 @@ if _HAVE:
 
 def final_capital(fill: dict, p, d0: int, d1: int) -> float | None:
     """Final capital of the "hold" replay (what the placebo test needs), or None without the fast path."""
-    acc = run_hold(fill, p, d0, d1, lite=True)
-    return None if acc is None else _LAST.get("final")
+    with _RUN_LOCK:
+        acc = run_hold(fill, p, d0, d1, lite=True)
+        return None if acc is None else _LAST.get("final")
 
 
 class LiteTrade:
@@ -843,6 +851,11 @@ class LiteTrade:
 
 
 def run_hold(fill: dict, p, d0: int, d1: int, marks: list | None = None, lite: bool = False):
+    with _RUN_LOCK:
+        return _run_hold(fill, p, d0, d1, marks, lite)
+
+
+def _run_hold(fill: dict, p, d0: int, d1: int, marks: list | None = None, lite: bool = False):
     """Fast equivalent of ``_replay([], p, d0, d1, fill=fill, marks=marks)[0]`` for ``fill_mode == "hold"``:
     returns the accepted (parked) trades, appends the daily marks. None when the fast path is unavailable.
     ``lite``: only entry date / net P&L / net % per trade (``LiteTrade``) — what the optimizer needs."""

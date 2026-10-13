@@ -699,12 +699,17 @@ CREATE INDEX IF NOT EXISTS ix_bp_sym  ON bond_prices(symbol);
                 "SELECT DISTINCT symbol_id FROM nav_intraday ORDER BY symbol_id")]
 
     def get_nav_intraday_dates(self, start: Optional[int] = None,
-                               end: Optional[int] = None) -> list[int]:
+                               end: Optional[int] = None, symbol_ids: Optional[list] = None) -> list[int]:
+        """Days with NAV snapshots — of the given funds only when ``symbol_ids`` is passed."""
+        q, args = "", []
+        if symbol_ids:
+            q = f" AND symbol_id IN ({','.join('?' * len(symbol_ids))})"
+            args = list(symbol_ids)
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT date FROM nav_intraday "
-                "WHERE date >= ? AND date <= ? ORDER BY date",
-                (start or 0, end or 99999999)).fetchall()
+                "WHERE date >= ? AND date <= ?" + q + " ORDER BY date",
+                (start or 0, end or 99999999, *args)).fetchall()
         return [int(r[0]) for r in rows]
 
     def get_nav_intraday(self, symbol_id: int, start: Optional[int] = None,

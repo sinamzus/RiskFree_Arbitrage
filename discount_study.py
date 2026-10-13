@@ -241,10 +241,10 @@ class _RawCache:
         b = bisect.bisect_right(ds, end) if end else len(rows)
         return rows[a:b]
 
-    def get_nav_intraday_dates(self, start=None, end=None):
-        k = (start, end)
+    def get_nav_intraday_dates(self, start=None, end=None, symbol_ids=None):
+        k = (start, end, tuple(symbol_ids) if symbol_ids else None)
         if k not in self._dates:
-            self._dates[k] = self._db.get_nav_intraday_dates(start, end)
+            self._dates[k] = self._db.get_nav_intraday_dates(start, end, symbol_ids)
         return self._dates[k]
 
 
@@ -468,7 +468,9 @@ class Study:
                 p.mr_window_days if p.mr_center != "off" else 0,
                 p.mr_horizon_days if p.mr_center != "off" else 0,
                 p.mr_lag if p.mr_center != "off" else 0,
-                (p.crash_window_min, p.crash_cooldown_min, p.crash_scope) if self._crash_searched else None,
+                # the crash series depend on window / cooldown / scope whenever the filter is on in ANY config
+                (p.crash_window_min, p.crash_cooldown_min, p.crash_scope)
+                if (self._crash_searched or p.crash_drop_pct > 0) else None,
                 (p.session_mode, p.session_start, p.session_end) if p.session_mode == "fixed" else p.session_mode,
                 p.index_min_share if p.entry_mode != "fund" else None)
 
@@ -536,13 +538,16 @@ class Study:
         return acc, marks
 
     def _passive(self, U) -> dict:
-        """Equal-weight buy-and-hold of the same funds over every block / region (no fees)."""
+        """Equal-weight buy-and-hold of the same funds over every block / region (no fees). Measured like the
+        strategy's block return: from the last price before the block (the previous close) to the last one in it,
+        so the move overnight into the block's first day is counted."""
         def span(lo, hi):
             rs = []
             for it in U["items"]:
                 a, b = bisect.bisect_left(it["dates"], lo), bisect.bisect_right(it["dates"], hi)
-                if b - a >= 2:
-                    rs.append(it["rows"][b - 1][4] / it["rows"][a][4] - 1.0)
+                ref = a - 1 if a > 0 else a
+                if b - 1 > ref and b > a:
+                    rs.append(it["rows"][b - 1][4] / it["rows"][ref][4] - 1.0)
             return _mean(rs) * 100 if rs else 0.0
         return {"blocks": [_num(span(lo, hi), 2) for lo, hi in self.bounds],
                 "train": _num(span(*self.train_rng), 2), "hold": _num(span(*self.hold_rng), 2)}
@@ -734,10 +739,12 @@ class Study:
 
     # ---- run ---------------------------------------------------------------------------
     def _open(self, db) -> None:
+        centers = set(self.space.get("mr_center", [])) | {self.base.mr_center}
+        # the warm-up must cover the most demanding mean-reversion centre searched (not only the base one)
+        warm_c = "self" if "self" in centers else next((c for c in sorted(centers) if c != "off"), "off")
         warm_p = replace(self.base, baseline_days=max([self.base.baseline_days] + self.space.get("baseline_days", [])),
                          mr_window_days=max([self.base.mr_window_days] + self.space.get("mr_window_days", [])),
-                         mr_center="self" if "self" in self.space.get("mr_center", []) or self.base.mr_center == "self"
-                         else self.base.mr_center)
+                         mr_center=warm_c)
         self.db_raw = _RawCache(db, D._warmup_start(self.start, warm_p) if self.start else None)
         self._setup()
 
@@ -1158,7 +1165,7 @@ class Study:
         light("برندهٔ آموزش در دادهٔ دیده‌نشده", lv,
               f"بازدهٔ آزمون {ho_b:+.2f}٪ (در دورهٔ آزمون {pos_hold:.0f}٪ از ترکیب‌ها سودده بودند)؛ "
               f"جایگاه برنده بین ترکیب‌ها: صدک {pct:.0f}. میانگین آزمونِ ۱۰٪ برترِ آموزش: {top_hold:+.2f}٪."
-              + (f" آمارهٔ t تقریبیِ معاملات آزمون {tt:.1f}" + (" (کمتر از ۱٫۵: سود قابل‌تشخیص از نوسان نیست)." if weak_t else ".") if tt is not None else ""))
+              + (f" آمارهٔ t تقریبیِ آزمون {tt:.1f}" + (" (کمتر از ۱٫۵: سود قابل‌تشخیص از نوسان نیست)." if weak_t else ".") if tt is not None else ""))
         pas = self.passive.get("hold")
         if pas is not None:
             excess = ho_b - pas
@@ -1312,15 +1319,23 @@ def _window(acc: list, marks: list, lo: int, hi: int, p: D.DiscountParams, with_
     years = max(1, D._ord(hi) - D._ord(lo)) / 365.0
     s = {"portfolio_return_pct": round(ret * 100, 3), "trade_count": len(ts),
          "win_rate": round(wins / len(ts) * 100, 1) if ts else 0.0,
-         "profit_factor": round(gain / loss, 2) if loss > 0 else 0,
+         # no losing trade at all: the factor is unbounded — capped instead of reported as 0 (the worst value)
+         "profit_factor": round(gain / loss, 2) if loss > 0 else (999.0 if gain > 0 else 0),
          "max_drawdown_pct": round(dd * 100, 3),
          "cagr_pct": round(((1 + ret) ** (1 / years) - 1) * 100, 2) if years >= 30 / 365.0 and ret > -1 else None,
          "final_capital": round(cap * (1 + ret), 0), "net_profit": round(cap * ret, 0),
          "avg_exposure_pct": round(expo, 1)}
     if with_t:
-        n = len(nets)
-        sd = _std(nets) * math.sqrt(n / (n - 1)) if n > 2 else 0.0
-        s["t_stat"] = (_mean(nets) / (sd / math.sqrt(n))) if n >= 5 and sd > 1e-12 else None
+        # t of the DAILY equity returns: lots and partial sales of one position are not independent samples, so a
+        # per-trade t would overstate the evidence
+        rets, prev = [], start
+        for eq, _a, _e in path:
+            if prev > 0:
+                rets.append(eq / prev - 1.0)
+            prev = eq
+        n = len(rets)
+        sd = _std(rets) * math.sqrt(n / (n - 1)) if n > 2 else 0.0
+        s["t_stat"] = (_mean(rets) / (sd / math.sqrt(n))) if n >= 5 and sd > 1e-12 else None
     return s
 
 
