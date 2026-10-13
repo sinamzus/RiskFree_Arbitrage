@@ -58,7 +58,13 @@ CREATE TABLE IF NOT EXISTS tse_grid (
 """
 
 
+_SCHEMA_DONE: set = set()
+
+
 def ensure_schema(db) -> None:
+    k = str(getattr(db, "path", id(db)))
+    if k in _SCHEMA_DONE:                     # once per database and process (it is called in tight loops)
+        return
     G.ensure_schema(db)
     with db._conn() as conn:
         conn.executescript(_SCHEMA)
@@ -66,6 +72,7 @@ def ensure_schema(db) -> None:
             conn.execute("ALTER TABLE tse_window ADD COLUMN ver TEXT DEFAULT ''")
         except Exception:
             pass
+    _SCHEMA_DONE.add(k)
 
 
 def _sec(t: int) -> int:
@@ -157,8 +164,8 @@ def _all_windows(db) -> dict:
     if hit is not None and hit[0] == gv:
         return hit[1]
     with db._conn() as conn:
-        cur = {int(d): f"{int(c)}|{int(tot)}|{mx}" for d, c, tot, mx in conn.execute(
-            "SELECT date, COUNT(*), TOTAL(n), MAX(fetched_at) FROM tse_raw WHERE kind='trades' AND n>0 GROUP BY date")}
+        cur = {int(d): f"{int(c)}|{int(tot)}|{int(mx)}" for d, c, tot, mx in conn.execute(
+            "SELECT date, COUNT(*), TOTAL(n), MAX(rowid) FROM tse_raw WHERE kind='trades' AND n>0 GROUP BY date")}
         have = {int(d): (v or "", lo, hi) for d, v, lo, hi in conn.execute("SELECT date, ver, first, last FROM tse_window")}
     out, rebuild = {}, []
     for d, v in cur.items():
@@ -231,8 +238,11 @@ def _collected_version(db, symbol_id: int) -> tuple:
     The dump part is a fingerprint of the rows' contents (times, NAVs, prices, volumes), not only their count and
     last date: a re-import that corrects times or NAVs in place must invalidate the cache too."""
     with db._conn() as conn:
-        r = conn.execute("SELECT COUNT(*), COALESCE(MAX(fetched_at), '') FROM tse_raw WHERE symbol_id=?",
+        # index-only (see _global_version): rows, newest rowid of this fund, and that row's size
+        r = conn.execute("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM tse_raw WHERE symbol_id=?",
                          (symbol_id,)).fetchone()
+        rl = conn.execute("SELECT n FROM tse_raw WHERE rowid=?", (r[1],)).fetchone() if r[1] else None
+        r = (r[0], f"{int(r[1])}:{int(rl[0]) if rl else 0}")
         try:                                  # the NAV dump's rows too (hybrid takes its snapshots from there)
             n = conn.execute("SELECT COUNT(*), COALESCE(MAX(date), 0), TOTAL(date), TOTAL(time), TOTAL(nav), "
                              "TOTAL(nav_date), TOTAL(nav_time), TOTAL(last), TOTAL(vol) FROM nav_intraday "
@@ -266,11 +276,28 @@ def _pc_put(db, name: str, ver: str, obj) -> bool:
         return False
 
 
+_GV: dict = {}              # db -> (monotonic time, version): the global version re-read at most every second
+
+
 def _global_version(db) -> tuple:
-    """Changes whenever any TSE data is added or replaced (the market windows depend on every fund)."""
+    """Changes whenever any TSE data is added or replaced (the market windows depend on every fund).
+
+    Read from the table's index only — row count, highest rowid (an INSERT OR REPLACE gets a new rowid) and the size
+    of that newest row — never from ``fetched_at``: that column sits after the big data blob, and reading it walks
+    every blob's overflow pages (the whole TSE store) — which made each call cost seconds on a real database. Memoised
+    for one second, since it is asked for in tight loops."""
+    import time as _t
+    k = _dbkey(db)
+    now = _t.monotonic()
+    hit = _GV.get(k)
+    if hit is not None and now - hit[0] < 1.0 and hit[2] == G.WRITES[0]:
+        return hit[1]
     with db._conn() as conn:
-        r = conn.execute("SELECT COUNT(*), COALESCE(MAX(fetched_at), '') FROM tse_raw").fetchone()
-    return (int(r[0]), r[1])
+        n, mx = conn.execute("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM tse_raw").fetchone()
+        last = conn.execute("SELECT n FROM tse_raw WHERE rowid=?", (mx,)).fetchone() if mx else None
+    v = (int(n), int(mx), int(last[0]) if last else 0)
+    _GV[k] = (now, v, G.WRITES[0])
+    return v
 
 
 def _memo_load(db, kind: str, symbol_id: int, start, end, grid: int, fn):
@@ -491,8 +518,9 @@ def _load_hybrid(db, symbol_id: int, start: int | None, end: int | None) -> tupl
     rows, book = [], Book(db, symbol_id)
     book.hybrid = True
     new = []
+    wins = _all_windows(db)                   # once, not per day
     for d in dl:
-        win = market_window(db, d)
+        win = wins.get(d)
         if win is None:
             continue
         # only snapshots taken while the market was trading (a snapshot after the close still shows a book, but

@@ -194,7 +194,11 @@ def fetch_day(fetcher, ins_code: str, date: int, kind: str) -> list[list] | None
     raise ValueError(kind)
 
 
+WRITES = [0]                # bumped on every stored day (lets readers' short-lived caches notice it at once)
+
+
 def store_day(db, symbol_id: int, date: int, kind: str, ins_code: str, rows: list[list]) -> None:
+    WRITES[0] += 1
     with db._conn() as conn:
         conn.execute("INSERT OR REPLACE INTO tse_raw VALUES (?,?,?,?,?,?,?)",
                      (symbol_id, date, kind, ins_code, len(rows), pack(rows),
