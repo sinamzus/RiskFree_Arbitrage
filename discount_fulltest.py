@@ -1377,6 +1377,14 @@ def test_window_marks(R: Results, db):
     R.add(g, "یک اجرای پیوسته: بلوک‌ها دقیقاً به کل دوره زنجیر می‌شوند و کل دوره = بک‌تست عادی", ok,
           f"کل {whole['portfolio_return_pct']} / بک‌تست {ref['portfolio_return_pct']} / زنجیر بلوک‌ها {round((chain - 1) * 100, 3)}"
           f" / معامله {whole['trade_count']} و {ref['trade_count']}")
+    # the backtest's equity curve / drawdown are the daily liquidation value (not cash + purchase cost, which stays
+    # flat while the holdings move): same drawdown as the optimizer's marks, one point per trading day
+    _a2, ref2, curve2 = D._portfolio_summary([], hp, st.dates[0], st.dates[-1], fill=st._fill_ctx(U, st.dates[0], st.dates[-1]))
+    mk_eq = {d: e for d, e, _x, _y in marks}
+    same = all(abs(curve2_d[1] - mk_eq[curve2_d[0]]) <= 1 for curve2_d in curve2[1:] if curve2_d[0] in mk_eq)
+    R.add(g, "منحنی سرمایه و افت سرمایهٔ بک‌تست = ارزش روزانه به قیمت بازار (همان افتِ بهینه‌ساز)، نه نقد + بهای خرید",
+          abs(ref2["max_drawdown_pct"] - whole["max_drawdown_pct"]) < 1e-3 and same and len(curve2) >= len(marks),
+          f"افت بک‌تست {ref2['max_drawdown_pct']} / افت از ارزش روزانه {whole['max_drawdown_pct']} / {len(curve2)} نقطه، {len(marks)} روز")
 
 
 def test_fast_replay(R: Results, db_path: str):

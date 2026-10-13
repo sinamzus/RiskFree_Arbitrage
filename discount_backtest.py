@@ -1194,14 +1194,18 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
             last_ts = ts
 
     def mark_parked(n0: int):
-        """equity curve / drawdown after parked trades closed (their exit dates)."""
+        """(kept for the call sites) with parking, the equity curve and the drawdown come from the daily
+        mark-to-market below — a realised-only curve (cash + purchase cost) stays flat while the holdings move."""
+        return
+
+    def mark_day(date: int, eq_m: float):
+        """End of a trading day: the book at its liquidation value (parked funds at their best bid net of the sell
+        fee; normal-trade positions at cost — no intraday prices for them here)."""
         nonlocal peak, max_dd
-        for tr in parker.out[n0:]:
-            eq2 = cash + invested
-            curve[tr.exit_date] = eq2
-            peak = max(peak, eq2)
-            if peak > 0:
-                max_dd = max(max_dd, (peak - eq2) / peak)
+        curve[date] = eq_m
+        peak = max(peak, eq_m)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - eq_m) / peak)
 
     mk = {"day": None, "date": None}
 
@@ -1209,10 +1213,13 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
         nonlocal cash, invested, peak_exp
         while parker is not None and parker.peek_ts() is not None and (limit_ts is None or parker.peek_ts() < limit_ts):
             T, grp = parker.pop_group()
-            if marks is not None and T // 86400 != mk["day"]:
+            if T // 86400 != mk["day"]:
                 if mk["day"] is not None:                   # the previous day is over: value the book as it stands
                     advance(T)
-                    marks.append((mk["date"], parker.mtm(cash, invested), exp_area, last_ts - start_ts))
+                    mv = parker.mtm(cash, invested)
+                    if marks is not None:
+                        marks.append((mk["date"], mv, exp_area, last_ts - start_ts))
+                    mark_day(mk["date"], mv + invested - sum(x["cost"] for x in parker.parked.values()))
                 mk["day"] = T // 86400
             k0_, i0_ = grp[0]
             mk["date"] = parker.rows[k0_][i0_][1]
@@ -1283,11 +1290,12 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
                 c, volume=int(c.volume * f), buy_notional=round(buy_n, 0),
                 sell_notional=round(sell_n, 0), fees=round(buy_n * bf + sell_n * sf, 0),
                 net_pnl=round(net, 0), scale=round(f, 4)))
-            eq2 = cash + invested
-            curve[d] = eq2
-            peak = max(peak, eq2)
-            if peak > 0:
-                max_dd = max(max_dd, (peak - eq2) / peak)
+            if parker is None:               # without parking: realised equity at exits (no prices of open trades here)
+                eq2 = cash + invested
+                curve[d] = eq2
+                peak = max(peak, eq2)
+                if peak > 0:
+                    max_dd = max(max_dd, (peak - eq2) / peak)
         if want_exposure:
             e_now = cash + invested
             exp_curve.append([d, t, round(invested / e_now * 100, 3) if e_now > 0 else 0.0])
@@ -1308,6 +1316,8 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
             exp_curve.append([d1, 235959, round(invested / eq * 100, 3) if eq > 0 else 0.0])
     if marks is not None and mk["date"] is not None:
         marks.append((mk["date"], final, exp_area, last_ts - start_ts))
+    if parker is not None and mk["date"] is not None:
+        mark_day(mk["date"], final)
     total_s = max(1, end_ts - start_ts)
     span_days = max(1, _ord(d1) - first_ord)
     years = span_days / 365.0
