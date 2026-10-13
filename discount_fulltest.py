@@ -1295,6 +1295,50 @@ def test_tse_dataset(R: Results, db_path: str):
              "در جابه‌جایی فقط به اندازهٔ لازم از صندوق قبلی فروخته می‌شود",
           not bad and n_lim > 0 and n_part > 0 and ent_ok > 0 and n_top > 0,
           "؛ ".join(bad[:3]) or f"{n_lim} خرید محدود به قیمت، {ent_ok} بررسی مستقل، {n_part} فروش جزئی، {n_top} تکمیل موقعیت")
+    # execution audit: (1) one participation budget per fund and day — buys never exceed the cap of the day's volume;
+    # (2) two switches at one instant never sell into the same bids twice — the proceeds at an instant are at most
+    # those of walking its bids once for all the units sold then; (3) with an execution delay nothing is sold before
+    # its buy filled
+    import collections as _C
+    bad, n_fd, n_inst = [], 0, 0
+    for cfg in ({"participation_pct": 2.0, "participation_basis": "day", "position_pct": 50, "fill_max_rel_pct": 0.3},
+                {"participation_pct": 0.0, "position_pct": 100, "fill_max_rel_pct": 0.0},
+                {"participation_pct": 0.0, "position_pct": 25, "fill_max_rel_pct": 0.3, "fill_min_hold_min": 0}):
+        hpx = _base(fill_mode="hold", dataset="hybrid", **cfg)
+        rx = _run(db, hpx)
+        L = {f["symbol"]: D._load_ex(db, f["symbol_id"], None, None, hpx) for f in funds}
+        if cfg["participation_pct"] > 0:
+            buys = _C.defaultdict(float)
+            for t in rx["trades"]:
+                buys[(t["symbol"], t["entry_date"])] += t["buy_notional"] / t["entry_price"]
+            for (sym, d_), u in buys.items():
+                n_fd += 1
+                cap_d = L[sym]["day_vol"].get(d_, 0) * cfg["participation_pct"] / 100.0
+                if u > cap_d * (1 + 1e-6) + 1:
+                    bad.append(f"{sym} {d_}: خرید {u:,.0f} > سقف {cap_d:,.0f}")
+        sales = _C.defaultdict(lambda: [0.0, 0.0])
+        for t in rx["trades"]:
+            if t["exit_reason"] == "rotate":
+                g_ = sales[(t["symbol"], t["exit_date"], t["exit_time"])]
+                g_[0] += t["sell_notional"] / t["exit_price"]
+                g_[1] += t["sell_notional"]
+        for (sym, d_, t_), (u, proceeds) in sales.items():
+            bids = L[sym]["book"].at(d_, t_)[0]
+            if not bids:
+                continue
+            n_inst += 1
+            got, avg, worst = _TD0.fill(bids, u)
+            best = got * avg + (u - got) * worst
+            if proceeds > best * (1 + 1e-4) + 1:
+                bad.append(f"{sym} {d_} {t_}: فروش {proceeds:,.0f} > یک بار پیمودن صف خرید {best:,.0f}")
+    hpd = _base(fill_mode="hold", dataset="hybrid", exec_delay_snaps=1, fill_min_hold_min=0, position_pct=25,
+                fill_max_rel_pct=0.3, participation_pct=0.0)
+    for t in _run(db, hpd)["trades"]:
+        if (t["exit_date"], t["exit_time"]) < (t["entry_date"], t["entry_time"]):
+            bad.append(f"{t['symbol']}: خروج {t['exit_date']} {t['exit_time']} پیش از ورود {t['entry_date']} {t['entry_time']}")
+    R.add(g, "اجرا: سقف حجم برای هر صندوق و روز یک بودجه است؛ صف خرید یک لحظه دو بار فروخته نمی‌شود؛ "
+             "با تأخیر اجرا هیچ فروشی پیش از پر شدن خریدش نیست",
+          not bad and n_fd > 0 and n_inst > 0, "؛ ".join(bad[:3]) or f"{n_fd} صندوق-روز، {n_inst} لحظهٔ فروش")
     # the normal strategy takes the same partial entry
     hpo = _base(dataset="hybrid", position_pct=100, entry_discount_pct=0.0, participation_pct=0.0)
     ro = _run(db, hpo)
@@ -1387,6 +1431,49 @@ def test_window_marks(R: Results, db):
           f"افت بک‌تست {ref2['max_drawdown_pct']} / افت از ارزش روزانه {whole['max_drawdown_pct']} / {len(curve2)} نقطه، {len(marks)} روز")
 
 
+def test_same_instant_sales(R: Results):
+    """Two candidates at one instant, each needing part of the same held fund: the second sale must meet only the
+    bids the first one left (here 2000 units at 102, then 90) — in Python and in the compiled replay alike."""
+    g = "بک‌تست روی دادهٔ TSE (تیک و اردربوک)"
+    d = 20260103
+    o = D._ord(d)
+
+    def mk(label, snaps):
+        rows, book, dv = [], {}, D._DayVol()
+        for t, fair, last, bids, asks in snaps:
+            rows.append((o, d, t, fair, last, True, fair))
+            book[(d, t)] = (bids, asks)
+        dv[d] = 10 ** 12
+        return {"label": label, "rows": rows, "book": book, "day_vol": dv, "mr": None, "sid": len(label), "raw": []}
+    W = mk("W", [(90000, 101.0, 100.0, [[99.9, 1e9]], [[100.0, 1e9]]),
+                 (100000, 100.0, 102.0, [[102.0, 2000], [90.0, 1e9]], [[102.1, 1e9]]),
+                 (110000, 100.0, 102.0, [[102.0, 1e9]], [[102.1, 1e9]])])
+    cheap = [(83000, 100.0, 110.0, [[109, 1]], [[110, 1]]), (100000, 100.0, 97.0, [[96.9, 1e9]], [[97.0, 1500], [130.0, 1e9]]),
+             (110000, 100.0, 97.0, [[96.9, 1e9]], [[97.0, 1e9]])]
+    p = _base(fill_mode="hold", dataset="hybrid", position_pct=100, fill_max_rel_pct=0.0, fill_switch_pct=0.5,
+              fill_min_hold_min=0, buy_fee=0.0, sell_fee=0.0, initial_capital=1e6, participation_pct=0.0)
+    ctx = {"loaded": [W, mk("A", cheap), mk("B", cheap)], "crash": None}
+    acc = D._replay([], p, d, d, False, ctx)[0]
+    sold = [t for t in acc if t.symbol == "W" and t.exit_time == 100000]
+    u = sum(t.sell_notional / t.exit_price for t in sold)
+    proceeds = sum(t.sell_notional for t in sold)
+    got, avg, worst = __import__("tse_dataset").fill([[102.0, 2000], [90.0, 1e9]], u)
+    once = got * avg + (u - got) * worst
+    ok = len(sold) >= 2 and proceeds <= once * (1 + 1e-9) + 1
+    det = f"{len(sold)} فروش در یک لحظه، {u:,.0f} واحد: {proceeds:,.0f} ≤ {once:,.0f}"
+    try:
+        import discount_fast as X
+        if X.available():
+            ctx2 = {"loaded": [W, mk("A", cheap), mk("B", cheap)], "crash": None}
+            a2 = X.run_hold(ctx2, p, d, d)
+            same = a2 is not None and [asdict(x) for x in acc] == [asdict(x) for x in a2]
+            ok = ok and same
+            det += "؛ کامپایل‌شده یکسان" if same else "؛ کامپایل‌شده متفاوت!"
+    except Exception as e:                            # noqa: BLE001
+        ok, det = False, f"{det}؛ خطا {e}"
+    R.add(g, "دو جابه‌جایی در یک لحظه: فروش دوم فقط به آنچه از صف خرید مانده می‌فروشد (نه دوباره به همان سطرها)", ok, det)
+
+
 def test_fast_replay(R: Results, db_path: str):
     """The compiled (numba) replay of the "hold" strategy must give EXACTLY the Python replay: every trade field
     and every daily mark, on both datasets, with delays, volume caps, filters and placebo ranks."""
@@ -1408,7 +1495,10 @@ def test_fast_replay(R: Results, db_path: str):
             # tight entry limits: partial buys (average price at the limit) and partial switch sales
             {"fill_max_rel_pct": 0.0, "position_pct": 100, "participation_pct": 0.0},
             {"fill_max_rel_pct": 0.0, "participation_pct": 0.0, "exec_delay_snaps": 1},
-            {"fill_max_rel_pct": -0.1, "position_pct": 50, "participation_pct": 0.0}]
+            {"fill_max_rel_pct": -0.1, "position_pct": 50, "participation_pct": 0.0},
+            # one volume budget per fund and day; several switches in one group
+            {"fill_max_rel_pct": 0.3, "position_pct": 25, "participation_pct": 2.0, "participation_basis": "sofar",
+             "fill_min_hold_min": 0}]
     bad, n, ntr = [], 0, 0
     for ds in ("dump", "hybrid"):
         for c in cfgs:
@@ -2037,7 +2127,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),
              ("NAV به‌روز", lambda: test_stale_nav_no_trade(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
-             ("بک‌تست روی دادهٔ TSE", lambda: test_tse_dataset(R, path)),
+             ("بک‌تست روی دادهٔ TSE", lambda: (test_tse_dataset(R, path), test_same_instant_sales(R))),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
              ("ارسال نتایج برای تحلیل", lambda: test_export(R, db)),
              ("تفسیر زیان", lambda: test_explain(R, db)),

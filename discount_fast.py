@@ -312,7 +312,7 @@ if _HAVE:
         return u
 
     @njit(cache=True)
-    def _buy_adj(r, size, slot, bf, has_bk_k, ap, av, na, cap, last, fair, rel, max_rel, min_frac):
+    def _buy_adj(r, size, slot, bf, has_bk_k, ap, av, na, capv, last, fair, rel, max_rel, min_frac):
         """Same as _Parker._buy_adj: (correction, unit limit, price ok) — the average price of buying the intended
         position, never below last; or, when that is too dear, of the part that keeps the average within the limit."""
         rv = rel[r]
@@ -320,8 +320,8 @@ if _HAVE:
             return 0.0, np.inf, rv <= max_rel
         a1 = ap[r, 0]
         want = size / (a1 * (1 + bf))
-        if cap[r] < want:
-            want = cap[r]
+        if capv < want:
+            want = capv
         got, avg, _w = _fill(ap[r], av[r], na[r], want)
         px = avg if got > 0 else a1
         x = (px - last[r]) / fair[r]
@@ -349,8 +349,38 @@ if _HAVE:
         return x if x > 0.0 else 0.0
 
     @njit(cache=True)
+    def _capk(k, r, cap, o, u_day, u_vol):
+        """Same as _Parker._cap: the row's participation cap minus what this book traded in fund k that day."""
+        c = cap[r] - (u_vol[k] if u_day[k] == o[r] else 0.0)
+        return c if c > 0 else 0.0
+
+    @njit(cache=True)
+    def _use(k, od, units, u_day, u_vol):
+        if u_day[k] == od:
+            u_vol[k] += units
+        else:
+            u_day[k] = od
+            u_vol[k] = units
+
+    @njit(cache=True)
+    def _consume_lv(cb, n, used):
+        """Same as discount_backtest._consume, in place on cb[0:5] prices / cb[5:10] volumes; new level count."""
+        w = 0
+        left = used
+        for q in range(n):
+            v = cb[5 + q]
+            if left >= v:
+                left -= v
+                continue
+            cb[w] = cb[q]
+            cb[5 + w] = v - left
+            left = 0.0
+            w += 1
+        return w
+
+    @njit(cache=True)
     def _close_lots(k, units, rx, at_ts, reason, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask,
-                    l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr):
+                    l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr, od, u_day, u_vol):
         """Same as _Parker._close: sell ``units`` of fund k first-in-first-out over its lots, one record per lot."""
         full = units >= p_units[k] * (1 - 1e-12)
         left = units
@@ -389,6 +419,7 @@ if _HAVE:
         if p_units[k] <= 1e-9:
             parked[k] = False
             head[k] = -1
+        _use(k, od, units, u_day, u_vol)
         return dcash, dinv, n_tr
 
     @njit(cache=True)
@@ -457,6 +488,11 @@ if _HAVE:
         head = np.full(K, -1, np.int64)
         tail = np.full(K, -1, np.int64)
         n_lot = 0
+        u_day = np.full(K, -1, np.int64)          # per fund: day (ordinal) and units this book traded in it that day
+        u_vol = np.zeros(K)
+        s_inst = np.full(K, -1, np.int64)         # per fund: instant of the latest switch sale, units sold into it
+        s_units = np.zeros(K)
+        cbuf = np.zeros(11)
         p_seq = np.zeros(K, np.int64)
         seq = 0
         cur_i = np.full(K, -1, np.int64)
@@ -540,7 +576,7 @@ if _HAVE:
                     b_ = bp[r, 0] if (has_bk[k] and nbid[r] > 0) else 0.0
                     a_ = ap[r, 0] if (has_bk[k] and na[r] > 0) else 0.0
                     mid = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[r]
-                    dc, di, n_tr = _close_lots(k, units, r, -1, 0, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr)
+                    dc, di, n_tr = _close_lots(k, units, r, -1, 0, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr, o[r], u_day, u_vol)
                     cash, invested = cash + dc, invested + di
             # which funds are candidates right now — at the average price of buying the intended position
             slot_c = position_pct / 100.0 * (cash + invested) * (1 + bf)
@@ -554,7 +590,8 @@ if _HAVE:
                     room = slot_c - p_cost[k] * (1 + bf)
                     if room >= min_frac * slot_c:
                         size = room
-                xa, lim_, okp = _buy_adj(r, size, slot_c, bf, has_bk[k], ap, av, na, cap, last, fair, rel, max_rel, min_frac)
+                xa, lim_, okp = _buy_adj(r, size, slot_c, bf, has_bk[k], ap, av, na, _capk(k, r, cap, o, u_day, u_vol), last, fair, rel,
+                                         max_rel, min_frac)
                 cand_lim[k] = lim_
                 if okst[r] and okp:
                     cand_T[k] = T
@@ -607,7 +644,7 @@ if _HAVE:
                 amount = target if target < cash else cash
                 sale_ts = -1
                 if slot > 0 and amount < min_frac * slot:
-                    cap_pre = cap[r]
+                    cap_pre = _capk(k, r, cap, o, u_day, u_vol)
                     if lim < cap_pre:
                         cap_pre = lim
                     if has_bk[k]:
@@ -622,8 +659,8 @@ if _HAVE:
                     # the cash the buy needs: the intended order at its average price
                     if has_bk[k] and na[r] > 0:
                         want = target / (ap[r, 0] * (1 + bf))
-                        if cap[r] < want:
-                            want = cap[r]
+                        if _capk(k, r, cap, o, u_day, u_vol) < want:
+                            want = _capk(k, r, cap, o, u_day, u_vol)
                         if lim < want:
                             want = lim
                         g_, a_n, _w = _fill(ap[r], av[r], na[r], want)
@@ -631,8 +668,8 @@ if _HAVE:
                     else:
                         ask0 = last[r] * (1 + hs)
                         want = target / (ask0 * (1 + bf))
-                        if cap[r] < want:
-                            want = cap[r]
+                        if _capk(k, r, cap, o, u_day, u_vol) < want:
+                            want = _capk(k, r, cap, o, u_day, u_vol)
                         need = want * ask0 * (1 + bf)
                     need -= cash
                     # ---- _switch_out(k, i, T, need) ----
@@ -654,6 +691,8 @@ if _HAVE:
                         j = order[ng + x2]
                         if j == k or cur_i[j] < 0 or T - cur_ts[j] > max_age_s:
                             continue
+                        if p_ts[j] > T:
+                            continue                 # its (delayed) buy has not filled yet
                         if min_hold_s != 0 and T - p_ts[j] < min_hold_s:
                             continue
                         if _stale(j, T, cur_ts, st_ptr, st_ts, cur_i, base, navts, max_nav_s):
@@ -699,29 +738,52 @@ if _HAVE:
                         else:
                             do_sale = False          # no bids at the instant of the sale: nothing can be sold
                             sale_ts = -1
+                    nlv = 0
+                    rs = 0
+                    inst = -1
+                    if do_sale:
+                        rs = base[worst] + sale_i
+                        # the bids the sale meets (the book at that instant, else its snapshot's) minus what another
+                        # switch already sold into them at this same instant
+                        if use_st > 0:
+                            for q in range(11):
+                                cbuf[q] = buf[q]
+                            nlv = use_st
+                        elif has_bk[worst] and nbid[rs] > 0:
+                            nlv = nbid[rs] if nbid[rs] < 5 else 5
+                            for q in range(nlv):
+                                cbuf[q] = bp[rs, q]
+                                cbuf[5 + q] = bv[rs, q]
+                            cbuf[10] = ap[rs, 0] if na[rs] > 0 else 0.0
+                        inst = at_ts if at_ts >= 0 else o[rs] * 86400 + sec[rs]
+                        if nlv > 0 and s_inst[worst] == inst and s_units[worst] > 0:
+                            nlv = _consume_lv(cbuf, nlv, s_units[worst])
+                            if nlv == 0:
+                                do_sale = False
+                                sale_ts = -1
                     if do_sale:
                         # ---- _close(worst, units, sale_i, "rotate", at_ts) ----
-                        rs = base[worst] + sale_i
                         # only as much as the buy needs, line by line over the bids the sale meets
-                        units = _units_to_sell(rs, p_units[worst], need, slot, use_st > 0, buf, use_st, has_bk[worst],
+                        units = _units_to_sell(rs, p_units[worst], need, slot, nlv > 0, cbuf, nlv, has_bk[worst],
                                                bp, bv, nbid, last, hs, sf, min_frac)
-                        if use_st > 0:
-                            got, px, wpx = _fill(buf[0:5], buf[5:10], use_st, units)
+                        if nlv > 0:
+                            got, px, wpx = _fill(cbuf[0:5], cbuf[5:10], nlv, units)
                             if got < units:
                                 px = (px * got + wpx * (units - got)) / units
-                            b_ = buf[0]
-                            a_ = buf[10]
-                        else:
-                            if has_bk[worst] and nbid[rs] > 0:
-                                got, px, wpx = _fill(bp[rs], bv[rs], nbid[rs], units)
-                                if got < units:
-                                    px = (px * got + wpx * (units - got)) / units
+                            b_ = cbuf[0]
+                            a_ = cbuf[10]
+                            if s_inst[worst] == inst:
+                                s_units[worst] += units
                             else:
-                                px = last[rs] * (1 - hs)
-                            b_ = bp[rs, 0] if (has_bk[worst] and nbid[rs] > 0) else 0.0
+                                s_inst[worst] = inst
+                                s_units[worst] = units
+                        else:
+                            px = last[rs] * (1 - hs)
+                            b_ = 0.0
                             a_ = ap[rs, 0] if (has_bk[worst] and na[rs] > 0) else 0.0
                         mid = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[rs]
-                        dc, di, n_tr = _close_lots(worst, units, rs, at_ts, 1, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr)
+                        od = at_ts // 86400 if at_ts >= 0 else o[rs]
+                        dc, di, n_tr = _close_lots(worst, units, rs, at_ts, 1, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr, od, u_day, u_vol)
                         cash, invested = cash + dc, invested + di
                     slot = position_pct / 100.0 * (cash + invested) * (1 + bf)
                     target = slot - p_cost[k] * (1 + bf) if parked[k] else slot
@@ -734,7 +796,7 @@ if _HAVE:
                 rb = base[k] + jb
                 t_in = o[rb] * 86400 + sec[rb]
                 ask = last[rb] * (1 + hs)
-                cap_u = cap[rb]
+                cap_u = _capk(k, rb, cap, o, u_day, u_vol)
                 units = amount / (ask * (1 + bf))
                 if cap_u < units:
                     units = cap_u
@@ -786,6 +848,7 @@ if _HAVE:
                     p_seq[k] = seq
                 cash -= units * ask * (1 + bf)
                 invested += units * ask
+                _use(k, o[rb], units, u_day, u_vol)
         # ---- flush (insertion order) ----
         npk = 0
         for j in range(K):
@@ -814,7 +877,7 @@ if _HAVE:
             b_ = bp[r, 0] if (has_bk[k] and nbid[r] > 0) else 0.0
             a_ = ap[r, 0] if (has_bk[k] and na[r] > 0) else 0.0
             mid = (b_ + a_) / 2.0 if (b_ > 0 and a_ > b_) else last[r]
-            dc, di, n_tr = _close_lots(k, units, r, -1, 0, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr)
+            dc, di, n_tr = _close_lots(k, units, r, -1, 0, px, mid, sf, p_units, p_cost, parked, head, l_units, l_cost, l_ask, l_mid, l_sig, l_ent, l_next, tr_i, tr_f, n_tr, o[r], u_day, u_vol)
             cash, invested = cash + dc, invested + di
         final = cash + invested
         if end_ts > last_ts:

@@ -269,8 +269,20 @@ def _raw_for(db, sid: int, start: int | None, end: int | None, p: "DiscountParam
             a = _bs.bisect_left(ds, start) if start else 0
             b = _bs.bisect_right(ds, end) if end else len(raw)
             raw = raw[a:b]
-        return raw, book
-    return db.get_nav_intraday(sid, start, end), None
+        return _dedupe(raw), book
+    return _dedupe(db.get_nav_intraday(sid, start, end)), None
+
+
+def _dedupe(raw: list) -> list:
+    """One row per (date, time): the NAV table has no uniqueness constraint, and a duplicated snapshot would let the
+    same fund be bought twice from the same asks at one instant (the later copy is kept)."""
+    out = []
+    for r in raw:
+        if out and out[-1][0] == r[0] and out[-1][1] == r[1]:
+            out[-1] = r
+        else:
+            out.append(r)
+    return out
 
 
 def _book_side(book, d: int, t: int, side: int):
@@ -351,6 +363,18 @@ def _lim_units(levels, lim_px: float) -> float:
         got += q
         break
     return got
+
+
+def _consume(levels, used: float):
+    """``levels`` (best first) after ``used`` units were already taken from the top of them at this instant."""
+    out, left = [], used
+    for px, v in levels or []:
+        if left >= v:
+            left -= v
+            continue
+        out.append([px, v - left])
+        left = 0.0
+    return out
 
 
 def _units_for_cash(levels, need: float, sf: float, total: float) -> float:
@@ -891,8 +915,16 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     crash_thr = -p.crash_drop_pct / 100.0
     crash_on = p.crash_drop_pct > 0 and crash is not None
 
+    used = {"d": None, "u": 0}                # units this fund already traded today (entry + exit chunks share it)
+
     def _cap(date_int: int, t_int: int | None = None) -> int:
-        return int(_vol_cap(day_vol, p, date_int, t_int))
+        c = _vol_cap(day_vol, p, date_int, t_int) - (used["u"] if used["d"] == date_int else 0)
+        return int(c) if c > 0 else 0
+
+    def _use(date_int: int, units) -> None:
+        if used["d"] != date_int:
+            used["d"], used["u"] = date_int, 0
+        used["u"] += units
 
     dl = max(0, int(p.exec_delay_snaps))
     skip_until = -1
@@ -1035,6 +1067,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
             skip_until = j + 1                         # (the fill row itself is not re-evaluated)
             e_mid = _book_mid(book, d, t, last)
             pos, cost = units, units * ask
+            _use(d, units)
             e_ord, e_date, e_time, e_nav, e_px = o, d, t, nav_raw, ask
             e_fair, e_rel = nav, r
             e_idx = ix
@@ -1070,6 +1103,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                     o, d, t, nav, last, _fr, nav_raw = rows[j]
                 units = min(pos, _cap(d, t))
                 if units > 0:
+                    _use(d, units)
                     _u, bid = _sell_exec(book, d, t, units, last, hs)
                     _close(units, bid, d, t, nav_raw, nav, reason,
                            idx[j] if idx is not None else None, _book_mid(book, d, t, last))
@@ -1472,6 +1506,9 @@ class _Parker:
         self.blocked_day: dict[int, int] = {}
         self.cand: dict[int, tuple | None] = {}
         self.cand_lim: dict[int, float] = {}          # units that keep the average buy price within the entry limit
+        self.vol_used = [(0, 0.0)] * self.n           # (day ordinal, units traded by us that day) per fund
+        self.sold_now: dict[tuple, float] = {}        # (fund, instant) -> units already sold into its bids then
+        self.row_ts = [[r[0] * 86400 + _sec(r[2]) for r in rr] for rr in self.rows]
         self.cur_i = [-1] * self.n
         self.cur_ts = [0] * self.n                    # instant of the latest snapshot of each fund
         self.hold = p.fill_mode == "hold"
@@ -1565,7 +1602,17 @@ class _Parker:
         return g
 
     def _cap(self, k: int, d: int, t: int | None = None) -> float:
-        return _vol_cap(self.loaded[k]["day_vol"], self.p, d, t)
+        """Units still allowed for fund ``k`` at (d, t): the participation cap of the day so far minus what this
+        book already traded in that fund that day (buys, top-ups and sales share one budget)."""
+        c = _vol_cap(self.loaded[k]["day_vol"], self.p, d, t)
+        u = self.vol_used[k]
+        if u[0] == _ord(d):
+            c -= u[1]
+        return c if c > 0 else 0.0
+
+    def _use(self, k: int, o: int, units: float) -> None:
+        u = self.vol_used[k]
+        self.vol_used[k] = (o, (u[1] if u[0] == o else 0.0) + units)
 
     def _xi(self, k: int, i: int, not_before: int | None = None):
         """Row index at which an order on fund ``k`` decided at its row ``i`` is filled: the ``exec_delay_snaps``-th next
@@ -1586,15 +1633,19 @@ class _Parker:
                 return j
         return None
 
-    def _close(self, k: int, units: float, i: int, reason: str, at_ts: int | None = None) -> tuple[float, float]:
+    def _close(self, k: int, units: float, i: int, reason: str, at_ts: int | None = None,
+               state: tuple | None = None) -> tuple[float, float]:
         """Sell ``units`` of the parked fund at the bid of its quote at snapshot ``i``.  ``at_ts`` (rotation)
-        is the instant the cash is needed: the sale is booked at that instant with the latest known quote."""
+        is the instant the cash is needed: the sale is booked at that instant with the latest known quote.
+        ``state`` = (bids, asks) to sell into instead (the book at that instant minus what was already sold)."""
         p = self.p
         hs, bf, sf = p.half_spread_pct / 100.0, p.buy_fee, p.sell_fee
         pos = self.parked[k]
         o, d, t, nav, last, _f, nav_raw = self.rows[k][i]
         bk = self.book[k]
-        if at_ts is not None and bk is not None and hasattr(bk, "at"):
+        if state is not None:
+            bk = {(d, t): state}
+        elif at_ts is not None and bk is not None and hasattr(bk, "at"):
             # the real book of the held fund at the very instant of the sale (not at its last snapshot)
             d2, t2 = _ts_to_dt(at_ts)
             st = bk.at(d2, t2)
@@ -1653,6 +1704,7 @@ class _Parker:
         pos["cost"] += dinv
         if pos["units"] <= 1e-9:
             del self.parked[k]
+        self._use(k, o, units)
         return dcash, dinv
 
     def mtm(self, cash: float, invested: float) -> float:
@@ -1673,18 +1725,24 @@ class _Parker:
         """A normal entry on ``symbol`` needs ``need_cash`` at instant ``ts``: hand back the same fund, then the
         biggest others (sold at the latest known bid)."""
         k = self.k_of.get(symbol)
+
+        def row_at(x):                        # the fund's latest quote AT the instant (its snapshot at ts included)
+            return bisect.bisect_right(self.row_ts[x], ts) - 1
+
+        def no_bid(x):                        # real book with no bid at that instant: nothing can be sold
+            bk = self.book[x]
+            return bk is not None and hasattr(bk, "at") and not bk.at(*_ts_to_dt(ts))[0]
         # the same fund is always handed back: the normal entry itself happens on a snapshot with a current NAV
-        if k is not None and k in self.parked and self.cur_i[k] >= 0:
-            dc, di = self._close(k, self.parked[k]["units"], self.cur_i[k], "rotate", ts)
+        if k is not None and k in self.parked and row_at(k) >= 0 and not no_bid(k):
+            dc, di = self._close(k, self.parked[k]["units"], row_at(k), "rotate", ts)
             cash, invested = cash + dc, invested + di
         while cash < need_cash and self.parked:
-            ok = [x for x in self.parked if not self._stale_now(x, ts)]   # a stale-NAV holding is not sold
+            # a stale-NAV holding, or one with no bid right now, is not sold
+            ok = [x for x in self.parked if not self._stale_now(x, ts) and row_at(x) >= 0 and not no_bid(x)]
             if not ok:
                 break
             j = max(ok, key=lambda x: self.parked[x]["cost"])
-            if self.cur_i[j] < 0:
-                break
-            dc, di = self._close(j, self.parked[j]["units"], self.cur_i[j], "rotate", ts)
+            dc, di = self._close(j, self.parked[j]["units"], row_at(j), "rotate", ts)
             cash, invested = cash + dc, invested + di
         return cash, invested
 
@@ -1852,6 +1910,7 @@ class _Parker:
                                   "lots": [dict(lot)]}
             cash -= units * ask * (1 + bf)
             invested += units * ask
+            self._use(k, o, units)
         return cash, invested
 
     def _units_to_sell(self, j: int, i: int, need: float, slot: float, bids) -> float:
@@ -1883,6 +1942,8 @@ class _Parker:
         for j in self.parked:
             if j == k or self.cur_i[j] < 0 or T - self.cur_ts[j] > self.max_age_s:
                 continue
+            if self.parked[j]["ts"] > T:
+                continue                      # its (delayed) buy has not filled yet
             if self.min_hold_s and T - self.parked[j]["ts"] < self.min_hold_s:
                 continue                      # bought too recently to be switched out
             if self._stale_now(j, T):
@@ -1919,15 +1980,26 @@ class _Parker:
             return cash, invested
         # how much to sell, line by line over the bids the sale will actually meet (same book as ``_close``)
         bk = self.book[worst]
-        sbids = None
+        sbids, sasks = None, None
         if at_ts is not None and bk is not None and hasattr(bk, "at"):
             st = bk.at(*_ts_to_dt(at_ts))
             if not st[0]:                     # no bid at the instant of the sale: nothing can be sold now
                 self._sale_ts = None
                 return cash, invested
-            sbids = st[0]
-        if sbids is None:
-            sbids = _book_side(bk, rs[1], rs[2], 0)
+            sbids, sasks = st[0], st[1]
+        if sbids is None and bk:
+            sbids, sasks = _book_side(bk, rs[1], rs[2], 0), _book_side(bk, rs[1], rs[2], 1)
+        state = None
+        if sbids:
+            # another switch may already have sold into these bids at this same instant: what is left of them
+            inst = at_ts if at_ts is not None else rs[0] * 86400 + _sec(rs[2])
+            used = self.sold_now.get((worst, inst), 0.0)
+            if used > 0:
+                sbids = _consume(sbids, used)
+                if not sbids:
+                    self._sale_ts = None
+                    return cash, invested
+            state = (sbids, sasks or [])
         units = self._units_to_sell(worst, sale_i, need, slot, sbids)
         if units < pw["units"]:
             self.sz["partial_sales"] += 1
@@ -1938,7 +2010,9 @@ class _Parker:
         if units > cap_u:                     # more than the volume cap would let us sell at once (still sold)
             self.sz["sales_over_cap"] += 1
             self.sz["sale_value_over_cap"] += val * (1 - cap_u / units)
-        dc, di = self._close(worst, units, sale_i, "rotate", at_ts)
+        if state is not None:
+            self.sold_now[(worst, inst)] = self.sold_now.get((worst, inst), 0.0) + units
+        dc, di = self._close(worst, units, sale_i, "rotate", at_ts, state)
         return cash + dc, invested + di
 
     def flush(self, cash: float, invested: float) -> tuple[float, float]:
