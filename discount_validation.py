@@ -110,6 +110,7 @@ def _decorate(it: dict) -> None:
 
 def load_universe(db, cats, symbols, start, end, p: DiscountParams) -> dict:
     funds = D._universe(db, cats, symbols)
+    start = D.effective_start(db, [sid for sid, _l in funds], start, end, p)     # measured from the end of the warm-up
     loaded = []
     for sid, label in funds:
         d = D._load_ex(db, sid, start, end, p)

@@ -45,7 +45,7 @@ DIMS: dict[str, dict] = {
     "entry_mode":         {"kind": "slow", "label": "حالت ورود", "choices": ["fund", "index", "both"]},
     "baseline_days":      {"kind": "slow", "label": "تعدیل حباب دائمی (روز)", "choices": [0, 10, 20, 40, 60]},
     "mr_center":          {"kind": "slow", "label": "مرکز بازگشت به میانگین", "choices": ["off", "zero", "category", "self"]},
-    "mr_window_days":     {"kind": "slow", "label": "پنجرهٔ امتیاز بازگشت (روز)", "choices": [10, 20, 30, 40]},
+    "mr_window_days":     {"kind": "slow", "label": "پنجرهٔ امتیاز بازگشت (روز)", "choices": [10, 20, 30]},
     "mr_horizon_days":    {"kind": "slow", "label": "افق بازگشت (روز)", "choices": [3, 5, 10]},
     "mr_min_score":       {"kind": "fast", "label": "حداقل امتیاز بازگشت", "choices": [50, 60, 70, 80, 90]},
     "entry_discount_pct": {"kind": "fast", "label": "ورود: تخفیف ≥ ٪", "choices": [0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0]},
@@ -105,9 +105,12 @@ SETTLED = {
     "session_mode": "خودکار از حجم بهتر یا برابر ساعت ثابت",
     "session_start": "فقط برای ساعت ثابت", "session_end": "فقط برای ساعت ثابت",
     "require_fresh": "اثری ندارد",
-    "mr_center": "خاموش در همهٔ ترکیب‌های برتر",
-    "mr_window_days": "فیلتر بازگشت خاموش است", "mr_horizon_days": "فیلتر بازگشت خاموش است",
-    "mr_lag": "فیلتر بازگشت خاموش است", "mr_min_score": "فیلتر بازگشت خاموش است",
+    # the mean-reversion filter (centre, window, minimum score) IS searched: it is what tells a fund whose bubble
+    # returns to its own norm from one whose "norm" is drifting. Its horizon only rescales the score (score ≥ s
+    # ⟺ φ_day ≤ (1 − s/100)^(1/H)): the minimum score alone already moves that cut-off; the pair spacing is a
+    # measurement detail.
+    "mr_horizon_days": "فقط مقیاس امتیاز را عوض می‌کند؛ «حداقل امتیاز بازگشت» همان آستانه را جابه‌جا می‌کند",
+    "mr_lag": "جزئیات اندازه‌گیری امتیاز (≈ یک ساعت)",
     "crash_scope": "دستهٔ صندوق در همهٔ ترکیب‌های برتر",
     "entry_mode": "در حالت hold بی‌اثر", "index_min_share": "در حالت hold بی‌اثر",
     "entry_discount_pct": "در حالت hold بی‌اثر", "exit_discount_pct": "در حالت hold بی‌اثر",
@@ -745,6 +748,18 @@ class Study:
         warm_p = replace(self.base, baseline_days=max([self.base.baseline_days] + self.space.get("baseline_days", [])),
                          mr_window_days=max([self.base.mr_window_days] + self.space.get("mr_window_days", [])),
                          mr_center=warm_c)
+        # every configuration is measured over the SAME period, starting when the most demanding one searched has
+        # finished its warm-up (in real operation the history exists: the warm-up is not part of any result)
+        warm = max(D.warmup_days(replace(self.base, baseline_days=int(b), mr_center=c, mr_window_days=int(n)))
+                   for b in set(self.space.get("baseline_days", [])) | {self.base.baseline_days}
+                   for c in centers
+                   for n in set(self.space.get("mr_window_days", [])) | {self.base.mr_window_days})
+        req = self.start
+        funds = D._universe(db, self.cats, self.symbols)
+        if funds:
+            self.start = D.effective_start(db, [sid for sid, _l in funds], self.start, self.end, self.base, warm=warm)
+        self.warmup = {"days": warm, "requested_start": req, "effective_start": self.start,
+                       "shifted": self.start != req}
         self.db_raw = _RawCache(db, D._warmup_start(self.start, warm_p) if self.start else None)
         self._setup()
 
@@ -1420,6 +1435,7 @@ class Study:
                       "dates": [self.dates[0], self.dates[-1]], "blocks": [list(b) for b in self.bounds],
                       "train_blocks": self.T, "hold_blocks": self.H,
                       "train_range": list(self.train_rng), "hold_range": list(self.hold_rng),
+                      "warmup": getattr(self, "warmup", None),
                       "objective": self.objective, "objective_label": OBJECTIVES[self.objective],
                       "min_trades": self.min_trades, "min_trades_requested": self.min_trades_requested,
                       "exhaustive": getattr(self, "exhaustive", False), "n_random": len([r for r in self.records if r["src"] == "random"]),

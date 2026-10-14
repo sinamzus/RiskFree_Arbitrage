@@ -235,6 +235,34 @@ def _universe(db, cats: list[str] | None, symbols: list[str] | None) -> list[tup
     return [(i, label[i]) for i in ids if kinds.get(i, "other") in want_c]
 
 
+def warmup_days(p: DiscountParams) -> int:
+    """Trading days of history the strategy needs before it can trade at all: the per-fund baseline needs
+    ``max(3, baseline_days // 3)`` days, the mean-reversion score ``max(3, N // 3)`` days (plus the N days of
+    its centre for "self"). Both are computed from the same raw rows, side by side, so the larger one counts."""
+    b = max(3, p.baseline_days // 3) if p.baseline_days > 0 else 0
+    m = 0
+    if p.mr_center != "off":
+        n = max(3, int(p.mr_window_days))
+        m = max(3, n // 3) + (n if p.mr_center == "self" else 0)
+    return max(b, m)
+
+
+def effective_start(db, sids: list[int], start: int | None, end: int | None, p: DiscountParams,
+                    warm: int | None = None) -> int | None:
+    """First day the strategy is fully warmed up: the requested start, or — when the data begins less than
+    ``warm`` trading days before it — the trading day ``warm`` days after the first day with data. Measuring
+    returns from there compares like with like: in real operation the history already exists, so the days a
+    backtest spends gathering it (no trades possible, the benchmarks running) are not part of the result."""
+    w = warmup_days(p) if warm is None else warm
+    if w <= 0:
+        return start
+    dates = dataset_dates(db, sids, None, end, p)
+    if len(dates) <= w:
+        return start
+    first_ready = dates[w]
+    return first_ready if not start or start < first_ready else start
+
+
 def _warmup_start(start: int | None, p: DiscountParams) -> int | None:
     """Date to start LOADING from so the per-fund baseline already has history on
     ``start`` (≈ 2 calendar days per trading day + a week of slack)."""
@@ -585,7 +613,7 @@ def _compute_mr(db, loaded: list[dict], p: DiscountParams, start, end) -> None:
         for l in loaded:
             l["cat"] = cats_of.get(l["sid"], "other")
     for l in loaded:
-        rows_all = l["rows_all"]
+        rows_all = getattr(l.get("day_vol"), "pre", None) or l["rows_all"]
         if p.mr_center == "category":
             keys, vals = cat_tl.get(l["cat"], ([], []))
             dev = []
@@ -595,7 +623,11 @@ def _compute_mr(db, loaded: list[dict], p: DiscountParams, start, end) -> None:
         else:
             dev = [r[4] / r[6] - 1.0 for r in rows_all]
         sc = _mr_scores(rows_all, dev, p, centered=(p.mr_center == "self"))
-        l["mr"] = sc[l["off"]:]
+        if rows_all is l["rows_all"]:
+            l["mr"] = sc[l["off"]:]
+        else:                                  # a score belongs to a whole day: map it onto the traded rows
+            by_day = {r[1]: s for r, s in zip(rows_all, sc)}
+            l["mr"] = [by_day.get(r[1]) for r in l["rows"]]
 
 
 def _mr_summary(label: str, rows: list[tuple], mr: list, p: DiscountParams) -> dict:
@@ -624,6 +656,7 @@ class _DayVol(dict):
         self.cum: dict = {}
         self.stale: list = []         # instants (ordinal·86400 + seconds) of in-session snapshots whose NAV was stale
         self.navts: dict = {}         # snapshot instant -> instant the snapshot's NAV was computed (when known)
+        self.pre: list | None = None  # every usable row incl. the baseline warm-up (mean-reversion score only)
 
 
 def _vol_cap(day_vol, p: "DiscountParams", d: int, t: int | None) -> float:
@@ -729,6 +762,10 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
 
     if p.baseline_days <= 0:
         return [(o, d, t, nav, last, fr, nav) for o, d, t, nav, last, fr in base_rows], day_vol
+    if p.mr_center != "off":
+        # the mean-reversion score reads the raw bubble, so it warms up on the same days as the baseline
+        # (not only after it): the rows before the baseline exists are kept for it
+        day_vol.pre = [(o, d, t, nav, last, fr, nav) for o, d, t, nav, last, fr in base_rows]
 
     # per-day typical discount (median of the day's fresh snapshots), then a causal
     # rolling median over the previous baseline_days trading days
@@ -2392,6 +2429,11 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     except Exception:
         _TD, cs0 = None, None
     funds = _universe(db, cats, symbols)
+    # returns (and the benchmarks) are measured from the end of the warm-up, never from inside it
+    req_start = start
+    start = effective_start(db, [sid for sid, _l in funds], start, end, p)
+    warm_info = {"days": warmup_days(p), "requested_start": req_start, "effective_start": start,
+                 "shifted": start != req_start}
     use_index = p.entry_mode in ("index", "both")
     raw_trades: list[Trade] = []
     tested = skipped_funds = 0
@@ -2502,6 +2544,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "fund_labels": [l["label"] for l in loaded],
         "params": asdict(p),
         "period": [d0, d1],
+        "warmup": warm_info,
         "signals": len({(t.symbol, t.entry_date, t.entry_time) for t in raw_trades}),
         "trades": trade_dicts,
         "loss_causes": loss_causes,

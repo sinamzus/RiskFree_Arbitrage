@@ -558,9 +558,12 @@ def test_optimizer_fill(R: Results, db):
     base = _base()
     dflt_space = S.default_space()
     info = {d["key"]: d for d in S.space_info()["dims"]}
-    R.add(g, "پارامترهای مسجل (مثل fill_mode، mr_center، crash_scope) از جستجوی پیش‌فرض خارج‌اند ولی قابل انتخاب می‌مانند",
-          all(d not in dflt_space and info[d]["settled"] for d in ("fill_mode", "mr_center", "crash_scope", "session_mode"))
+    R.add(g, "پارامترهای مسجل (مثل fill_mode، crash_scope) از جستجوی پیش‌فرض خارج‌اند ولی قابل انتخاب می‌مانند",
+          all(d not in dflt_space and info[d]["settled"] for d in ("fill_mode", "crash_scope", "session_mode", "mr_horizon_days"))
           and "fill_max_rel_pct" in dflt_space and "fill_switch_pct" in dflt_space, "")
+    R.add(g, "فیلتر بازگشت به میانگین و معمولِ هر صندوق در جستجوی پیش‌فرض‌اند",
+          all(d in dflt_space and not info[d]["settled"] for d in ("mr_center", "mr_window_days", "mr_min_score", "baseline_days")),
+          str(sorted(d for d in ("mr_center", "mr_window_days", "mr_min_score", "baseline_days") if d not in dflt_space)))
     space = dict(dflt_space, **{d: list(S.DIMS[d]["choices"]) for d in ("fill_mode", "fill_exit_rel_pct", "mr_center")})
     st = S.Study(db, None, None, None, None, base, space, n_samples=40, blocks=6, min_trades=5,
                  max_seconds=60, max_universes=3, seed=2)
@@ -607,7 +610,8 @@ def test_optimizer(R: Results, db):
     bad = []
     for rec in sample:
         p = S._to_params(base, rec["cfg"])
-        full = _run(db, p)["summary"]["final_capital"]
+        # over the study's period: every configuration is measured from the common end of the warm-up
+        full = _run_range(db, p, d0, d1)["summary"]["final_capital"]
         U = st._universe(p)
         import discount_validation as V
         tr = V._sim_all(U, p)
@@ -1547,7 +1551,10 @@ def test_fast_replay(R: Results, db_path: str):
             {"fill_max_rel_pct": -0.1, "position_pct": 50, "participation_pct": 0.0},
             # one volume budget per fund and day; several switches in one group
             {"fill_max_rel_pct": 0.3, "position_pct": 25, "participation_pct": 2.0, "participation_basis": "sofar",
-             "fill_min_hold_min": 0}]
+             "fill_min_hold_min": 0},
+            # ranking against each fund's own norm + the mean-reversion filter
+            {"baseline_days": 10, "mr_center": "self", "mr_window_days": 10, "mr_min_score": 50.0},
+            {"baseline_days": 6, "mr_center": "zero", "mr_window_days": 10, "mr_min_score": 60.0}]
     bad, n, ntr = [], 0, 0
     for ds in ("dump", "hybrid"):
         for c in cfgs:
@@ -1578,6 +1585,75 @@ def test_fast_replay(R: Results, db_path: str):
             os.remove(p2 + ext)
         except OSError:
             pass
+
+
+def test_warmup(R: Results, db):
+    """Returns are measured from the end of the warm-up: the backtest (strategy, equity, benchmarks), the validation
+    and the optimizer (one common start for every configuration searched). The mean-reversion score warms up on the
+    same days as the per-fund norm, not after it."""
+    import discount_validation as V
+    g = "گرم‌شدن"
+    wd = D.warmup_days
+    cases = [({}, 0), ({"baseline_days": 20}, 6), ({"mr_center": "zero", "mr_window_days": 20}, 6),
+             ({"mr_center": "self", "mr_window_days": 20}, 26), ({"mr_center": "self", "mr_window_days": 10, "baseline_days": 60}, 20),
+             ({"mr_center": "category", "mr_window_days": 30, "baseline_days": 20}, 10)]
+    bad = [f"{c} → {wd(_base(**c))} ≠ {w}" for c, w in cases if wd(_base(**c)) != w]
+    R.add(g, "طول گرم‌شدن (روز معاملاتی) = بیشینهٔ نیاز معمولِ صندوق و امتیاز بازگشت", not bad, "؛ ".join(bad))
+
+    sids = [sid for sid, _l in D._universe(db, None, None)]
+    all_dates = D.dataset_dates(db, sids, None, None, _base())
+    p = _base(baseline_days=20, mr_center="self", mr_window_days=10, mr_min_score=0.0)
+    w = wd(p)
+    r = _run(db, p)
+    eff = all_dates[w]
+    wi = r.get("warmup") or {}
+    eq0 = r["equity_curve"][0][0] if r["equity_curve"] else None
+    b = r.get("benchmark") or {}
+    first_trade = min((t["entry_date"] for t in r["trades"]), default=None)
+    R.add(g, "بک‌تست از پایان گرم‌شدن شروع می‌شود (دوره، منحنی سرمایه، اولین معامله)",
+          wi.get("effective_start") == eff and wi.get("shifted") and r["period"][0] == eff
+          and (eq0 is None or eq0 >= eff) and (first_trade is None or first_trade >= eff)
+          and b.get("first") is not None and b["first"] >= eff,
+          f"warm={w} eff={eff} period={r['period']} eq0={eq0} bench={b.get('first')} first_trade={first_trade} info={wi}")
+    # the first day after the warm-up is tradable: the norm AND the mean-reversion score already exist on it
+    loaded = []
+    for sid in sids:
+        dl = D._load_ex(db, sid, eff, None, p)
+        if dl["rows"]:
+            loaded.append(dl)
+    D._compute_mr(db, loaded, p, eff, None)
+    ready = sum(1 for dl in loaded if dl["rows"] and dl["rows"][0][1] == eff and dl["mr"][0] is not None)
+    R.add(g, "روز اول پس از گرم‌شدن هم معمولِ صندوق و هم امتیاز بازگشت آماده است",
+          ready >= max(1, len(loaded) // 2), f"{ready} از {len(loaded)} صندوق")
+    # warm-ups run side by side: a mean-reversion score shorter than the baseline adds no days
+    p2 = _base(baseline_days=30, mr_center="zero", mr_window_days=10)
+    dl = next(x for x in (D._load_ex(db, sid, None, None, p2) for sid in sids) if x["rows"])
+    D._compute_mr(db, [dl], p2, None, None)
+    R.add(g, "امتیاز بازگشت هم‌زمان با معمولِ صندوق گرم می‌شود، نه پس از آن",
+          dl["mr"] and dl["mr"][0] is not None, f"first={dl['rows'][0][1] if dl['rows'] else None}")
+    later = all_dates[w + 15]
+    r2 = _run_range(db, p, later)
+    R.add(g, "شروعی که پس از گرم‌شدن است جابه‌جا نمی‌شود", r2["period"][0] == later and not r2["warmup"]["shifted"],
+          f"{r2['period']}")
+    U = V.load_universe(db, None, None, None, None, p)
+    R.add(g, "اعتبارسنجی هم از پایان گرم‌شدن شروع می‌شود", U["d0"] == eff, f"{U['d0']} vs {eff}")
+    # optimizer: one common start — the most demanding configuration searched
+    space = {"baseline_days": [0, 20], "mr_center": ["off", "self"], "mr_window_days": [10, 20], "mr_min_score": [50, 70]}
+    st = S.Study(db, None, None, None, None, _base(fill_mode="hold", fill_max_rel_pct=2.0), space, blocks=4, min_trades=1, workers=1)
+    st._open(db)
+    need = max(wd(_base(baseline_days=b_, mr_center=c, mr_window_days=n_)) for b_ in (0, 20) for c in ("off", "self") for n_ in (10, 20))
+    R.add(g, "بهینه‌ساز: همهٔ ترکیب‌ها از یک شروع مشترک پس از سخت‌ترین گرم‌شدن سنجیده می‌شوند",
+          need == 26 and st.dates[0] == all_dates[need] and st.bounds[0][0] == all_dates[need] and st.warmup["days"] == need,
+          f"need={need} start={st.dates[0]} expected={all_dates[need]}")
+    st2 = S.Study(db, None, None, None, None, _base(fill_mode="hold", fill_max_rel_pct=2.0), {"fill_switch_pct": [0.5, 0.8]},
+                  blocks=4, min_trades=1, workers=1)
+    st2._open(db)
+    R.add(g, "بدون نیاز به گرم‌شدن، دورهٔ بهینه‌ساز از اولین روز داده است",
+          st2.dates[0] == all_dates[0] and not st2.warmup["shifted"], f"{st2.dates[0]} vs {all_dates[0]}")
+
+
+def _run_range(db, p: D.DiscountParams, start=None, end=None) -> dict:
+    return D.run_discount_backtest(db, None, None, start, end, p)
 
 
 def test_stale_nav_no_trade(R: Results, db):
@@ -2197,6 +2273,28 @@ def test_mutations(R: Results, db):
         cases.append(("موتور تعدیل حباب دائمی را نادیده بگیرد", caught(test_parameter_audit, db)))
     finally:
         D._prep = o
+    o = D.effective_start
+    D.effective_start = lambda db_, sids, start, end, p, warm=None: start
+    try:
+        cases.append(("بازده از درون گرم‌شدن سنجیده شود", caught(test_warmup, db)))
+    finally:
+        D.effective_start = o
+    o = D.warmup_days
+    D.warmup_days = lambda p: (max(3, p.baseline_days // 3) if p.baseline_days > 0 else 0) + (
+        (max(3, p.mr_window_days // 3) + (p.mr_window_days if p.mr_center == "self" else 0)) if p.mr_center != "off" else 0)
+    o_pre = D._DayVol.__init__
+
+    def _no_pre(self, *a, **k):            # (the old behaviour: the score warmed up only after the baseline)
+        o_pre(self, *a, **k)
+        type(self).pre = property(lambda s: None, lambda s, v: None)
+    D._DayVol.__init__ = _no_pre
+    try:
+        cases.append(("امتیاز بازگشت پس از معمولِ صندوق گرم شود (نه هم‌زمان)", caught(test_warmup, db)))
+    finally:
+        D.warmup_days = o
+        D._DayVol.__init__ = o_pre
+        if isinstance(D._DayVol.__dict__.get("pre"), property):
+            del D._DayVol.pre
     o = D._Parker.make_room
     D._Parker.make_room = lambda self, symbol, need, cash, invested, ts: (cash, invested)
     try:
@@ -2236,6 +2334,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("بهینه‌ساز: قابلیت اطمینان", lambda: test_optimizer_reliability(R, path)),
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),
              ("NAV به‌روز", lambda: test_stale_nav_no_trade(R, db)),
+             ("گرم‌شدن", lambda: test_warmup(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: (test_tse_dataset(R, path), test_same_instant_sales(R))),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),

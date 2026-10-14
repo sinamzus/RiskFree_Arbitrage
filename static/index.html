@@ -8253,8 +8253,10 @@ function renderDiscBacktest(res, p) {
   const rs = s.exit_reasons || {};
   const reasonTxt = Object.keys(rs).map(k => ({signal:'خروج سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[k] || k) + ' ' + rs[k]).join(' · ') || '—';
   const per = res.period ? `${gregIntToJalaliStr(res.period[0])} تا ${gregIntToJalaliStr(res.period[1])} (${s.period_days || 0} روز)` : '';
+  const wu = res.warmup || {};
+  const warmTxt = wu.shifted ? ` · <span title="معمولِ صندوق‌ها و امتیاز بازگشت به ${wu.days} روز معاملاتی تاریخچه نیاز دارند؛ بازده و معیارهای مقایسه از پایان گرم‌شدن سنجیده می‌شوند (در عمل واقعی این تاریخچه از قبل موجود است).">⏳ ${wu.days} روز اول گرم‌شدن کنار گذاشته شد</span>` : '';
   document.getElementById('disc-cards').innerHTML = `
-    <div class="disc-h">نتیجه — ${discScopeText(p.cats, p.symbols)} · ${res.funds_tested} صندوق دارای داده${res.funds_skipped ? ' (' + res.funds_skipped + ' بدون داده)' : ''} · ${per}</div>
+    <div class="disc-h">نتیجه — ${discScopeText(p.cats, p.symbols)} · ${res.funds_tested} صندوق دارای داده${res.funds_skipped ? ' (' + res.funds_skipped + ' بدون داده)' : ''} · ${per}${warmTxt}</div>
     <div class="opt-metric-row">
     ${discCard('سرمایهٔ اولیه', discM(s.initial_capital) + ' میلیون ﷼')}
     ${discCard('💰 سرمایهٔ نهایی', discM(s.final_capital) + ' میلیون ﷼', cls)}
@@ -8326,7 +8328,7 @@ async function discStats() {
 //  Comprehensive parameter study (optimizer)
 // ---------------------------------------------------------------------------
 let _discSpace = null, _discStudy = null;
-const DISC_STUDY_KEY = 'discStudyCfg_v2';   // v2: settled parameters unticked by default
+const DISC_STUDY_KEY = 'discStudyCfg_v3';   // v2: settled parameters unticked by default; v3: mean-reversion searched
 const DS_VAL = {
   participation_basis: {sofar: 'حجم تا لحظه', day: 'کل حجم روز'},
   fill_mode: {off: 'خاموش', best: 'بهترین صندوق', hold: 'همیشه سرمایه‌گذاری'}, crash_scope: {category: 'دسته', all: 'همه'}, session_mode: {auto: 'خودکار', fixed: 'ثابت'}, require_fresh: {true: 'بله', false: 'خیر'},
@@ -8970,7 +8972,7 @@ function renderDiscStudy(res, p) {
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">${lights}</div>
     <div class="opt-metric-row" style="margin-top:8px">${cards}</div>
 
-    <div class="dv-sec"><div class="disc-h">🏆 بهترین ترکیب (انتخاب‌شده فقط با دورهٔ آموزش ${gregIntToJalaliStr(S.train_range[0])} تا ${gregIntToJalaliStr(S.train_range[1])}؛ معیار: ${S.objective_label})</div>
+    <div class="dv-sec"><div class="disc-h">🏆 بهترین ترکیب (انتخاب‌شده فقط با دورهٔ آموزش ${gregIntToJalaliStr(S.train_range[0])} تا ${gregIntToJalaliStr(S.train_range[1])}؛ معیار: ${S.objective_label})${S.warmup && S.warmup.shifted ? ` · ⏳ همهٔ ترکیب‌ها از ${gregIntToJalaliStr(S.warmup.effective_start)} سنجیده شدند (${S.warmup.days} روز گرم‌شدنِ سخت‌ترین ترکیب کنار گذاشته شد)` : ''}</div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">
         <table class="disc-tbl" style="width:auto"><thead><tr><th style="text-align:start">پارامتر</th><th>برنده</th><th>مقدار فرم</th></tr></thead><tbody>${bestRows}</tbody></table>
         <table class="disc-tbl" style="width:auto"><thead><tr><th>ترکیب</th><th>بازده آموزش</th><th>معامله</th><th>بازده آزمون</th><th>معامله</th><th>آمارهٔ t</th></tr></thead><tbody>
