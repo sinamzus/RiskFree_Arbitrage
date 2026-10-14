@@ -1966,6 +1966,7 @@ def create_app(db, scan_callback=None):
             logger.exception("disc backtest failed")
             return jsonify({"error": str(e)}), 500
         _disc_last["backtest"] = res
+        _disc_last.pop("verify", None)          # a verification belongs to the backtest it checked
         return jsonify(res)
 
     @app.route("/api/disc/bubble")
@@ -2119,6 +2120,22 @@ def create_app(db, scan_callback=None):
         return jsonify({"running": _tse_state["running"], "progress": _tse_state["progress"],
                         "last": _tse_state["last"]})
 
+    @app.route("/api/disc/verify", methods=["GET", "POST"])
+    def api_disc_verify():
+        """Independent verification of the latest backtest against the raw data (verify_independent.py shares no
+        code with the engine)."""
+        import verify_independent as VI
+        res = _disc_last.get("backtest")
+        if not res or (isinstance(res, dict) and res.get("error")):
+            return jsonify({"error": "ابتدا یک بک‌تست اجرا کنید."}), 400
+        try:
+            rep = VI.verify(str(db.path), json.loads(json.dumps(res, default=str)))
+        except Exception as e:
+            logger.exception("verify failed")
+            return jsonify({"error": str(e)}), 500
+        _disc_last["verify"] = rep
+        return jsonify(rep)
+
     @app.route("/api/disc/push_results", methods=["POST"])
     def api_disc_push_results():
         """Save the latest backtest / optimizer / validation / stats results next to the app and push them to the
@@ -2127,7 +2144,8 @@ def create_app(db, scan_callback=None):
         import result_export as X
         root = Path(__file__).resolve().parent
         state = {"backtest": _disc_last.get("backtest"), "stats": _disc_last.get("stats"),
-                 "study": _disc_opt_state.get("result"), "validation": _val_state.get("result")}
+                 "study": _disc_opt_state.get("result"), "validation": _val_state.get("result"),
+                 "verify": _disc_last.get("verify")}
         state = {k: v for k, v in state.items() if v and not (isinstance(v, dict) and v.get("error"))}
         if not state:
             return jsonify({"ok": False, "message": "هنوز نتیجه‌ای نیست: ابتدا بک‌تست یا بهینه‌سازی را اجرا کنید."}), 400

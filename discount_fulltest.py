@@ -1327,6 +1327,8 @@ def test_tse_dataset(R: Results, db_path: str):
             if not bids:
                 continue
             n_inst += 1
+            if u > sum(v for _p, v in bids) * (1 + 1e-9) + 1:
+                bad.append(f"{sym} {d_} {t_}: فروش {u:,.0f} واحد > عمق صف خرید {sum(v for _p, v in bids):,.0f}")
             got, avg, worst = _TD0.fill(bids, u)
             best = got * avg + (u - got) * worst
             if proceeds > best * (1 + 1e-4) + 1:
@@ -1339,6 +1341,33 @@ def test_tse_dataset(R: Results, db_path: str):
     R.add(g, "اجرا: سقف حجم برای هر صندوق و روز یک بودجه است؛ صف خرید یک لحظه دو بار فروخته نمی‌شود؛ "
              "با تأخیر اجرا هیچ فروشی پیش از پر شدن خریدش نیست",
           not bad and n_fd > 0 and n_inst > 0, "؛ ".join(bad[:3]) or f"{n_fd} صندوق-روز، {n_inst} لحظهٔ فروش")
+    # the independent verifier (no engine code) agrees with the backtest — and catches deliberate tampering
+    import copy as _cp
+    import verify_independent as VI
+    bad, n_ok = [], 0
+    for cfg in ({"position_pct": 50, "fill_max_rel_pct": 0.1, "participation_pct": 10.0, "participation_basis": "sofar",
+                 "fill_min_hold_min": 60},
+                {"position_pct": 100, "fill_max_rel_pct": 0.0, "participation_pct": 0.0}):
+        rv = json.loads(json.dumps(_run(db, _base(fill_mode="hold", dataset="hybrid", **cfg)), default=str))
+        rep = VI.verify(p2, rv)
+        if not rep["ok"]:
+            bad.append(f"{cfg}: " + "؛ ".join(f"{c['name']}: {c['examples'][:1]}" for c in rep["checks"] if c["status"] == "fail"))
+        n_ok += sum(c["checked"] for c in rep["checks"])
+    tamper = {"قیمت خرید": lambda t: t.update(entry_price=t["entry_price"] * 1.001),
+              "مبلغ فروش": lambda t: t.update(sell_notional=t["sell_notional"] * 1.002),
+              "NAV فروش": lambda t: t.update(nav_exit=t["nav_exit"] * 1.01),
+              "زمان ورود": lambda t: t.update(entry_time=t["entry_time"] + 7),
+              "سود خالص": lambda t: t.update(net_pnl=t["net_pnl"] + 1e6)}
+    missed = []
+    for name, fn in tamper.items():
+        rv2 = _cp.deepcopy(rv)
+        fn(rv2["trades"][len(rv2["trades"]) // 2])
+        if VI.verify(p2, rv2)["ok"]:
+            missed.append(name)
+    R.add(g, "بررسی مستقل (بدون هیچ کدی از موتور بک‌تست): قیمت‌ها، NAV، عمق صف، سقف حجم، پنجرهٔ بازار و نقد با دادهٔ خام "
+             "می‌خوانند؛ هر دست‌کاری عمدی گرفته می‌شود",
+          not bad and not missed and n_ok > 0,
+          "؛ ".join(bad[:2]) or (f"گرفته نشد: {missed}" if missed else f"{n_ok} بررسی، {len(tamper)} دست‌کاری همه گرفته شد"))
     # the normal strategy takes the same partial entry
     hpo = _base(dataset="hybrid", position_pct=100, entry_discount_pct=0.0, participation_pct=0.0)
     ro = _run(db, hpo)
@@ -1472,6 +1501,26 @@ def test_same_instant_sales(R: Results):
     except Exception as e:                            # noqa: BLE001
         ok, det = False, f"{det}؛ خطا {e}"
     R.add(g, "دو جابه‌جایی در یک لحظه: فروش دوم فقط به آنچه از صف خرید مانده می‌فروشد (نه دوباره به همان سطرها)", ok, det)
+    # a thin buying queue: the switch sells only what the visible bids take (2000 units); the rest stays held
+    W2 = mk("W", [(90000, 101.0, 100.0, [[99.9, 1e9]], [[100.0, 1e9]]),
+                  (100000, 100.0, 102.0, [[102.0, 1500], [101.0, 500]], [[102.1, 1e9]]),
+                  (110000, 100.0, 102.0, [[102.0, 1e9]], [[102.1, 1e9]])])
+    ctx = {"loaded": [W2, mk("A", cheap)], "crash": None}
+    acc = D._replay([], p, d, d, False, ctx)[0]
+    at10 = sum(t.sell_notional / t.exit_price for t in acc if t.symbol == "W" and t.exit_time == 100000)
+    held = sum(t.volume for t in acc if t.symbol == "W" and t.exit_reason == "end")
+    ok = 0 < at10 <= 2000 + 1e-6 and held > 0
+    det = f"فروخته در ۱۰:۰۰: {at10:,.0f} از عمق ۲۰۰۰؛ نگه‌داشته تا بعد: {held:,.0f}"
+    try:
+        import discount_fast as X
+        if X.available():
+            a2 = X.run_hold({"loaded": [W2, mk("A", cheap)], "crash": None}, p, d, d)
+            same = a2 is not None and [asdict(x) for x in acc] == [asdict(x) for x in a2]
+            ok = ok and same
+            det += "؛ کامپایل‌شده یکسان" if same else "؛ کامپایل‌شده متفاوت!"
+    except Exception as e:                            # noqa: BLE001
+        ok, det = False, f"{det}؛ خطا {e}"
+    R.add(g, "فروش هرگز بیش از عمق دیده‌شدهٔ صف خرید نیست؛ باقی‌مانده نگه داشته و بعداً فروخته می‌شود", ok, det)
 
 
 def test_fast_replay(R: Results, db_path: str):

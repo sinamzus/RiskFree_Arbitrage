@@ -2547,6 +2547,7 @@ td.disc-obc { cursor: help; }
       <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
       <button class="scan-btn" id="disc-ft-btn" onclick="discFullTest()" title="تست سراسری روی دنیای ساختگی: پارامتر مرده، سیم‌کشی فرم↔سرور↔موتور، پیش‌فرض‌ها، بهینه‌ساز، ناوردایی‌های حسابداری و آزمونِ خودِ آزمون‌ها (حدود ۲ دقیقه)">🧪 تست سراسری برنامه</button>
       <button class="scan-btn" id="disc-push-btn" onclick="discPushResults()" title="آخرین نتایج (بک‌تست، بهینه‌سازی، اعتبارسنجی، آمار) را در پوشهٔ analysis_results ذخیره می‌کند و روی شاخهٔ analysis-results در GitHub پوش می‌کند تا تحلیل و پیشنهاد بهبود بگیرید. فقط نتایج ارسال می‌شود، نه دادهٔ خام. پوشهٔ کاری و شاخهٔ فعلی شما دست نمی‌خورد.">📤 ارسال آخرین نتایج برای تحلیل</button>
+      <button class="scan-btn" id="disc-verify-btn" onclick="discVerify()" title="بررسی مستقل آخرین بک‌تست با دادهٔ خام، با کدی جدا که هیچ بخشی از موتور بک‌تست را به کار نمی‌برد: قیمت هر خرید و فروش از روی رویدادهای خام اردربوک، NAV و سن آن، عمق صف، سقف حجم، پنجرهٔ بازار، کارمزد و مسیر نقد">🔍 بررسی مستقل بک‌تست</button>
       <button class="scan-btn" id="disc-self-btn" onclick="discSelfTest()" title="آزمون خودِ شبیه‌ساز: دنیای با پاسخ معلوم، حسابداری، نگاه به آینده، کالیبراسیون">🧪 آزمون سلامت شبیه‌ساز</button>
       <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="مطالعهٔ جامعِ همهٔ پارامترهای مدل: جستجوی متوازن، اهمیت و رفتار هر پارامتر، آزمون خارج از نمونه، پایداری اطراف برنده، walk-forward و حساسیت به فرض‌های اجرایی">🔧 بهینه‌سازی و مطالعهٔ جامع</button>
       <button class="scan-btn" id="disc-run" onclick="discBacktest()">🧪 اجرای بک‌تست</button>
@@ -8526,11 +8527,49 @@ async function discStudyPayload() {
   return {space, opts: st.opts || {}, fixed, fixedDims};
 }
 
+async function discVerify() {
+  const btn = document.getElementById('disc-verify-btn'), panel = document.getElementById('disc-push');
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '⏳ در حال بررسی ...';
+  panel.style.display = 'block'; panel.innerHTML = '<div class="ob-p">⏳ بازسازی اردربوک و NAV هر معامله از دادهٔ خام ...</div>';
+  const FA = {
+    'buy price = walking the asks at the entry instant (book rebuilt from raw events)': 'قیمت خرید = پیمودن صف فروش در لحظهٔ ورود (اردربوک بازسازی‌شده از رویدادهای خام)',
+    'units bought ≤ visible asks': 'حجم خرید ≤ عمق دیده‌شدهٔ صف فروش',
+    'sale price = walking the bids at the sale instant': 'قیمت فروش = پیمودن صف خرید در لحظهٔ فروش',
+    'units sold ≤ visible bids (except the final liquidation)': 'حجم فروش ≤ عمق دیده‌شدهٔ صف خرید (به‌جز تسویهٔ پایان داده)',
+    'NAV at entry = NAV-dump row at that instant, within the age limit': 'NAV ورود = ردیف فایل NAV در همان لحظه و به‌روز',
+    "NAV at sale = that of the fund's latest tradable quote, and current": 'NAV فروش = آخرین قیمت قابل معاملهٔ صندوق و به‌روز',
+    'entry average price within the entry limit (vs NAV)': 'میانگین قیمت خرید در حد مجاز ورود (نسبت به NAV)',
+    'trade instants inside the market window': 'لحظهٔ معاملات داخل ساعت بازار',
+    'participation budget per fund and day': 'سقف حجم برای هر صندوق و روز',
+    'fees and net P&L of every record': 'کارمزد و سود خالص هر معامله',
+    'no exit before entry; minimum hold respected': 'خروج پیش از ورود نیست؛ حداقل زمان نگه‌داری رعایت شده',
+    'cash never negative; final capital = initial + all records': 'نقد هرگز منفی نیست؛ سرمایهٔ نهایی = اولیه + همهٔ معاملات'};
+  const ST = {pass: '✅', fail: '❌', 'n/a': '—'};
+  try {
+    const r = await fetch('/api/disc/verify', {method: 'POST'});
+    const j = await r.json();
+    if (j.error) { panel.innerHTML = `<div class="dv-head bad">❌ ${j.error}</div>`; }
+    else {
+      const rows = j.checks.map(c => `<tr><td>${ST[c.status] || c.status}</td><td>${FA[c.name] || c.name}</td>
+        <td>${c.checked.toLocaleString('en-US')}</td><td>${c.failed}</td>
+        <td style="font-size:11px">${(c.examples || []).slice(0, 3).map(e => discLtr(e)).join('<br>')}</td></tr>`).join('');
+      const bh = j.buyhold ? `<div class="dv-note">خرید و نگه‌داری ساخته‌شده از معاملات واقعی TSE: ${j.buyhold.return_pct}% (${j.buyhold.funds} صندوق) — گزارش بک‌تست: ${j.buyhold.reported_pct}%. چند واحد اختلاف طبیعی است (منبع قیمت پایانی فرق دارد)، ده‌ها واحد نه.</div>` : '';
+      panel.innerHTML = `<div class="dv-head ${j.ok ? 'ok' : 'bad'}">${j.ok ? '✅ بررسی مستقل: همهٔ معاملات با دادهٔ خام می‌خوانند' : '❌ بررسی مستقل: اختلاف پیدا شد'} — ${j.trades} معامله، دیتاست ${j.dataset}</div>
+        <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th></th><th>بررسی</th><th>تعداد</th><th>ناموفق</th><th>نمونه</th></tr></thead><tbody>${rows}</tbody></table></div>
+        ${bh}${(j.notes || []).map(n => `<div class="dv-note">${discLtr(n)}</div>`).join('')}
+        <div class="dv-note">این بررسی با کدی جدا انجام می‌شود که هیچ بخشی از موتور بک‌تست را به کار نمی‌برد؛ گزارش آن هم با «ارسال نتایج» فرستاده می‌شود.</div>`;
+    }
+  } catch (e) {
+    panel.innerHTML = `<div class="dv-head bad">❌ بررسی ناموفق: ${e.message}</div>`;
+  }
+  btn.disabled = false; btn.textContent = old;
+}
+
 async function discPushResults() {
   const btn = document.getElementById('disc-push-btn'), panel = document.getElementById('disc-push');
   btn.disabled = true; const old = btn.textContent; btn.textContent = '⏳ در حال ارسال ...';
   panel.style.display = 'block'; panel.innerHTML = '<div class="ob-p">⏳ ذخیره و پوش نتایج ...</div>';
-  const NAMES = {backtest: 'بک‌تست', study: 'بهینه‌سازی', validation: 'اعتبارسنجی', stats: 'آمار تخفیف'};
+  const NAMES = {backtest: 'بک‌تست', study: 'بهینه‌سازی', validation: 'اعتبارسنجی', stats: 'آمار تخفیف', verify: 'بررسی مستقل'};
   try {
     const r = await fetch('/api/disc/push_results', {method: 'POST'});
     const j = await r.json().catch(() => ({message: 'پاسخ نامعتبر'}));

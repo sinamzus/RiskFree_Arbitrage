@@ -1102,6 +1102,8 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 if j != i:
                     o, d, t, nav, last, _fr, nav_raw = rows[j]
                 units = min(pos, _cap(d, t))
+                if book:                              # never beyond the visible bids (the rest is sold later)
+                    units = min(units, int(sum(v for _p, v in (_book_side(book, d, t, 0) or []))))
                 if units > 0:
                     _use(d, units)
                     _u, bid = _sell_exec(book, d, t, units, last, hs)
@@ -1389,7 +1391,7 @@ def _replay(trades: list[Trade], p: DiscountParams, d0: int, d1: int, want_expos
                       "skipped_no_cash": sz["skip_cash"], "skipped_tiny": sz["skip_tiny"],
                       **({"switch_blocked_by_volume": parker.sz["skip_cap"],
                           "limited_by_price": parker.sz["price"], "switch_partial_sales": parker.sz["partial_sales"],
-                          "topups": parker.sz["topups"],
+                          "topups": parker.sz["topups"], "sales_cut_at_depth": parker.sz["sales_cut_at_depth"],
                           "switch_sales": parker.sz["sales"], "switch_sales_over_cap": parker.sz["sales_over_cap"],
                           "switch_sale_value_over_cap_pct": round(parker.sz["sale_value_over_cap"] / parker.sz["sale_value"] * 100, 1)
                           if parker.sz["sale_value"] > 0 else 0.0,
@@ -1517,6 +1519,7 @@ class _Parker:
         self.max_age_s = max(1, int(p.fill_quote_age_min)) * 60
         # sizing / liquidity diagnostics of the parker's own trades (merged into the replay's size_info)
         self.sz = {"n": 0, "ratio_sum": 0.0, "small": 0, "liq": 0, "cash": 0, "skip_cap": 0, "price": 0,
+                   "sales_cut_at_depth": 0,
                    "partial_sales": 0, "topups": 0,
                    "sales": 0, "sales_over_cap": 0, "sale_value": 0.0, "sale_value_over_cap": 0.0,
                    # sales larger than the visible bids (the rest is assumed sold at the worst visible bid)
@@ -1729,20 +1732,30 @@ class _Parker:
         def row_at(x):                        # the fund's latest quote AT the instant (its snapshot at ts included)
             return bisect.bisect_right(self.row_ts[x], ts) - 1
 
-        def no_bid(x):                        # real book with no bid at that instant: nothing can be sold
+        def sellable(x):                      # units the bids take right now (all of it without a real book)
             bk = self.book[x]
-            return bk is not None and hasattr(bk, "at") and not bk.at(*_ts_to_dt(ts))[0]
+            if bk is None:
+                return self.parked[x]["units"]
+            if hasattr(bk, "at"):
+                bids = bk.at(*_ts_to_dt(ts))[0]
+            else:
+                r = self.rows[x][row_at(x)]
+                bids = _book_side(bk, r[1], r[2], 0)
+            return min(self.parked[x]["units"], sum(v for _p, v in (bids or [])))
         # the same fund is always handed back: the normal entry itself happens on a snapshot with a current NAV
-        if k is not None and k in self.parked and row_at(k) >= 0 and not no_bid(k):
-            dc, di = self._close(k, self.parked[k]["units"], row_at(k), "rotate", ts)
+        if k is not None and k in self.parked and row_at(k) >= 0 and sellable(k) > 0:
+            dc, di = self._close(k, sellable(k), row_at(k), "rotate", ts)
             cash, invested = cash + dc, invested + di
+        tried = set()
         while cash < need_cash and self.parked:
-            # a stale-NAV holding, or one with no bid right now, is not sold
-            ok = [x for x in self.parked if not self._stale_now(x, ts) and row_at(x) >= 0 and not no_bid(x)]
+            # a stale-NAV holding, or one with no bid right now, is not sold; never beyond the visible bids
+            ok = [x for x in self.parked if x not in tried and not self._stale_now(x, ts) and row_at(x) >= 0
+                  and sellable(x) > 0]
             if not ok:
                 break
             j = max(ok, key=lambda x: self.parked[x]["cost"])
-            dc, di = self._close(j, self.parked[j]["units"], row_at(j), "rotate", ts)
+            tried.add(j)
+            dc, di = self._close(j, sellable(j), row_at(j), "rotate", ts)
             cash, invested = cash + dc, invested + di
         return cash, invested
 
@@ -1778,6 +1791,8 @@ class _Parker:
                     continue
                 rj = self.rows[k][jx]
                 units = min(pos["units"], self._cap(k, rj[1], rj[2]))
+                if self.book[k] is not None:          # never beyond the visible bids (the rest is sold later)
+                    units = min(units, sum(v for _p, v in (_book_side(self.book[k], rj[1], rj[2], 0) or [])))
                 if units > 0:
                     dc, di = self._close(k, units, jx, reason)
                     cash, invested = cash + dc, invested + di
@@ -1951,7 +1966,10 @@ class _Parker:
             # at the average price of selling what the switch needs (walking the bids of its latest snapshot)
             ci = self.cur_i[j]
             rj = self.rows[j][ci]
-            u = self._units_to_sell(j, ci, need, slot, _book_side(self.book[j], rj[1], rj[2], 0))
+            bj = _book_side(self.book[j], rj[1], rj[2], 0)
+            u = self._units_to_sell(j, ci, need, slot, bj)
+            if bj:
+                u = min(u, sum(v for _p, v in bj))     # never more than the visible bids
             r = self.rank[j][ci] - self._sell_adj(j, ci, u)
             if w_rel is None or r > w_rel:
                 worst, w_rel = j, r
@@ -1989,6 +2007,9 @@ class _Parker:
             sbids, sasks = st[0], st[1]
         if sbids is None and bk:
             sbids, sasks = _book_side(bk, rs[1], rs[2], 0), _book_side(bk, rs[1], rs[2], 1)
+            if not sbids:                     # a real book with no bid: nothing can be sold
+                self._sale_ts = None
+                return cash, invested
         state = None
         if sbids:
             # another switch may already have sold into these bids at this same instant: what is left of them
@@ -2001,6 +2022,15 @@ class _Parker:
                     return cash, invested
             state = (sbids, sasks or [])
         units = self._units_to_sell(worst, sale_i, need, slot, sbids)
+        if sbids:
+            # never beyond the visible bids: what they cannot take stays held (the queue refills; sold later)
+            depth = sum(v for _p, v in sbids)
+            if units > depth:
+                units = depth
+                self.sz["sales_cut_at_depth"] += 1
+                if cash + units * rs[4] * (1 - p.half_spread_pct / 100.0) * (1 - p.sell_fee) < MIN_ORDER_FRAC * slot:
+                    self._sale_ts = None
+                    return cash, invested         # what the bids take would not pay for a minimum buy
         if units < pw["units"]:
             self.sz["partial_sales"] += 1
         cap_u = self._cap(worst, rs[1], rs[2])
@@ -2469,6 +2499,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
                    "cache": ({k: (round(v - cs0[k], 2) if isinstance(v, float) else v - cs0[k])
                               for k, v in _TD.CACHE_STATS.items()} if cs0 is not None else None)},
         "funds_tested": tested, "funds_skipped": skipped_funds,
+        "fund_labels": [l["label"] for l in loaded],
         "params": asdict(p),
         "period": [d0, d1],
         "signals": len({(t.symbol, t.entry_date, t.entry_time) for t in raw_trades}),

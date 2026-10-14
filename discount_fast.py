@@ -700,6 +700,12 @@ if _HAVE:
                         rr = base[j] + cur_i[j]
                         u_ = _units_to_sell(rr, p_units[j], need, slot, False, buf, 0, has_bk[j], bp, bv, nbid,
                                             last, hs, sf, min_frac)
+                        if has_bk[j] and nbid[rr] > 0:          # never more than the visible bids
+                            dep = 0.0
+                            for q in range(nbid[rr]):
+                                dep += bv[rr, q]
+                            if dep < u_:
+                                u_ = dep
                         rv = rank[rr] - _sell_adj(rr, u_, has_bk[j], bp, bv, nbid, last, fair)
                         if worst < 0 or rv > w_rel:
                             worst = j
@@ -755,8 +761,11 @@ if _HAVE:
                                 cbuf[q] = bp[rs, q]
                                 cbuf[5 + q] = bv[rs, q]
                             cbuf[10] = ap[rs, 0] if na[rs] > 0 else 0.0
+                        elif has_bk[worst]:
+                            do_sale = False                  # a real book with no bid: nothing can be sold
+                            sale_ts = -1
                         inst = at_ts if at_ts >= 0 else o[rs] * 86400 + sec[rs]
-                        if nlv > 0 and s_inst[worst] == inst and s_units[worst] > 0:
+                        if do_sale and nlv > 0 and s_inst[worst] == inst and s_units[worst] > 0:
                             nlv = _consume_lv(cbuf, nlv, s_units[worst])
                             if nlv == 0:
                                 do_sale = False
@@ -766,6 +775,17 @@ if _HAVE:
                         # only as much as the buy needs, line by line over the bids the sale meets
                         units = _units_to_sell(rs, p_units[worst], need, slot, nlv > 0, cbuf, nlv, has_bk[worst],
                                                bp, bv, nbid, last, hs, sf, min_frac)
+                        if nlv > 0:
+                            # never beyond the visible bids: the rest stays held (sold later)
+                            dep = 0.0
+                            for q in range(nlv):
+                                dep += cbuf[5 + q]
+                            if units > dep:
+                                units = dep
+                                if cash + units * last[rs] * (1 - hs) * (1 - sf) < min_frac * slot:
+                                    do_sale = False
+                                    sale_ts = -1
+                    if do_sale:
                         if nlv > 0:
                             got, px, wpx = _fill(cbuf[0:5], cbuf[5:10], nlv, units)
                             if got < units:
