@@ -214,6 +214,7 @@ AUDIT = [
     ("افق بازگشت", {"mr_center": "zero"}, "mr_horizon_days", [2, 15], "change"),
     ("حداقل امتیاز بازگشت", {"mr_center": "zero"}, "mr_min_score", [30, 95], "change"),
     ("حداکثر سن NAV", {"max_nav_age_min": 0}, "max_nav_age_days", [0, 5], "change"),
+    ("سن NAV به روز وقتی سقف دقیقه‌ای فعال است بی‌اثر است", {"max_nav_age_min": 30}, "max_nav_age_days", [0, 5], "same"),
     ("حداکثر سن NAV (دقیقه)", {}, "max_nav_age_min", [0, 15], "change"),
     ("نیم‌اسپرد", {}, "half_spread_pct", [0.0, 0.3], "change"),
     ("کارمزد خرید", {}, "buy_fee", [0.0, 0.01], "change"),
@@ -746,7 +747,8 @@ def test_invariants(R: Results, db, n: int = 24):
             rr = raw_by_key[t["symbol"]].get((t["entry_date"], t["entry_time"]))
             if rr is not None:
                 _d, _t, _n, nd, _l, _v, nt = rr
-                if p.max_nav_age_days >= 0 and nd and D._ord(t["entry_date"]) - D._ord(nd) > p.max_nav_age_days:
+                if p.max_nav_age_min <= 0 and p.max_nav_age_days >= 0 and nd and \
+                        D._ord(t["entry_date"]) - D._ord(nd) > p.max_nav_age_days:
                     fail("ورود فقط با NAV نه‌چندان کهنه (روز)", f"{tag} {t['symbol']}: NAV از {nd}")
                 if p.max_nav_age_min > 0 and nd and nt:
                     age = (D._ord(t["entry_date"]) * 86400 + D._sec(t["entry_time"])) - (D._ord(nd) * 86400 + D._sec(nt))

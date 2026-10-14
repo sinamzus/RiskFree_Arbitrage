@@ -2495,7 +2495,7 @@ td.disc-obc { cursor: help; }
         <input id="disc-buyfee" type="number" step="0.005" value="0.125" style="width:70px"></div>
       <div class="bbt-field"><label>کارمزد فروش ٪</label>
         <input id="disc-sellfee" type="number" step="0.005" value="0.125" style="width:70px"></div>
-      <div class="bbt-field" title="NAVهای کهنه‌تر از این‌قدر روز نادیده گرفته می‌شود (برای طلا/سهام مهم است)"><label>حداکثر سن NAV (روز)</label>
+      <div class="bbt-field" title="NAVهای کهنه‌تر از این‌قدر روز نادیده گرفته می‌شود. فقط وقتی به کار می‌رود که «حداکثر سن NAV (دقیقه)» صفر باشد؛ با سقفِ دقیقه‌ای (که دقیق‌تر است) این فیلد بی‌اثر است."><label>حداکثر سن NAV (روز)</label>
         <input id="disc-navage" type="number" step="1" value="2" style="width:70px"></div>
       <div class="bbt-field" title="اگر NAV آخرین بار بیش از این‌قدر دقیقه پیش از لحظهٔ اسنپ‌شات محاسبه شده باشد، آن اسنپ‌شات «NAV کهنه» است و کاملاً حذف می‌شود: صندوق تا رسیدن NAV به‌روز نه خریده می‌شود و نه فروخته (حتی برای جابه‌جایی). NAV صندوق‌ها معمولاً هر ۲ دقیقه به‌روز می‌شود؛ پیش‌فرض ۵ دقیقه. ۰ = غیرفعال. اگر ساعت NAV در داده نباشد اسنپ‌شات نگه داشته می‌شود."><label>حداکثر سن NAV (دقیقه)</label>
         <input id="disc-navmin" type="number" step="1" min="0" value="5" style="width:70px"></div>
@@ -8625,7 +8625,7 @@ function discClockHtml(c) {
 const DISC_REL_IDS = ['disc-entrymode', 'disc-entry', 'disc-exit', 'disc-ientry', 'disc-iexit', 'disc-imin', 'disc-hold',
   'disc-stop', 'disc-stopmode', 'disc-fillexit', 'disc-fillswitch', 'disc-fillminhold', 'disc-fillage', 'disc-fillmax',
   'disc-mrwin', 'disc-mrhor', 'disc-mrmin', 'disc-mrlag', 'disc-crashwin', 'disc-crashcool', 'disc-crashscope',
-  'disc-sstart', 'disc-send', 'disc-partbasis'];
+  'disc-sstart', 'disc-send', 'disc-partbasis', 'disc-navage'];
 function discRelevance() {
   const g = id => document.getElementById(id);
   if (!g('disc-fillmode')) return;
@@ -8646,6 +8646,7 @@ function discRelevance() {
   if (!(+val('disc-crashdrop') > 0) && !(+val('disc-rallyrise') > 0)) why(['disc-crashwin', 'disc-crashcool', 'disc-crashscope'], 'فیلترهای ریزش و صعود خاموش‌اند (آستانه ۰)');
   if (val('disc-smode') !== 'fixed') why(['disc-sstart', 'disc-send'], 'ساعت جلسه خودکار است');
   if (!(+val('disc-part') > 0)) why(['disc-partbasis'], 'سقف حجم نامحدود (۰) است');
+  if (+val('disc-navmin') > 0) why(['disc-navage'], 'سن NAV به دقیقه سنجیده می‌شود (سقف دقیقه‌ای فعال است)');
   DISC_REL_IDS.forEach(id => {
     const el = g(id); if (!el) return;
     const dis = !!off[id];
@@ -8660,7 +8661,7 @@ function discRelevance() {
   });
 }
 document.addEventListener('change', e => { if (e.target && e.target.id && e.target.id.startsWith('disc-')) discRelevance(); });
-document.addEventListener('input', e => { if (e.target && e.target.id && /^disc-(stop|crashdrop|rallyrise|part)$/.test(e.target.id)) discRelevance(); });
+document.addEventListener('input', e => { if (e.target && e.target.id && /^disc-(stop|crashdrop|rallyrise|part|navmin)$/.test(e.target.id)) discRelevance(); });
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(discRelevance, 0));
 else setTimeout(discRelevance, 0);
 

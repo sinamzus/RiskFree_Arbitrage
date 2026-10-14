@@ -142,7 +142,8 @@ class DiscountParams:
     tse_grid_sec: int = 300             # tse: sampling step of the book / tape (seconds)
     exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
-    max_nav_age_days: int = 2           # ignore snapshots whose NAV is older than this (calendar days; -1 = off)
+    max_nav_age_days: int = 2           # ignore snapshots whose NAV is older than this (calendar days; -1 = off);
+                                        # only used when max_nav_age_min is 0 (the minute limit is the finer rule)
     max_nav_age_min: int = 5            # ... or older than this many MINUTES (nav_date/nav_time vs the snapshot; 0 = off)
     session_mode: str = "auto"          # auto = per fund & day from the volume | fixed = clock window below
     session_start: int = 90000          # HHMMSS (Tehran) — only for session_mode "fixed"
@@ -767,7 +768,7 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
         counted = stats is not None and d >= count_from
         if counted:
             stats["rows"] = stats.get("rows", 0) + 1
-        if nav_d and p.max_nav_age_days >= 0 and o - _ord(nav_d) > p.max_nav_age_days:
+        if nav_d and nav_age_s <= 0 and p.max_nav_age_days >= 0 and o - _ord(nav_d) > p.max_nav_age_days:
             if counted:
                 stats["stale_days"] = stats.get("stale_days", 0) + 1
             day_vol.stale.append(o * 86400 + _sec(t))
