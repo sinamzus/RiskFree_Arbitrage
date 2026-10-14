@@ -1694,6 +1694,56 @@ def test_optimizer_coverage(R: Results):
           not miss and not off and not nform, f"جا افتاده: {miss} · پیش‌فرض خارج از گزینه‌ها: {off} · بدون نگاشت فرم: {nform}")
 
 
+def test_optimizer_reliability(R: Results, db_path: str):
+    """The optimizer's reliability diagnostics are calibrated: where bubbles mean-revert the winner's edge over the
+    passive index is significant (bootstrap) and the ranking carries over (PBO low); where each fund's bubble is a
+    random walk (no information), no edge is reported and the verdict is never "reliable"."""
+    import shutil as _sh
+    import sqlite3 as _sq
+    g = "بهینه‌ساز: قابلیت اطمینان"
+    hp = _base(fill_mode="hold", fill_max_rel_pct=0.3, position_pct=50, participation_pct=0.0)
+    space = {"fill_switch_pct": [0.3, 0.5, 0.8, 1.2], "position_pct": [20, 33, 50], "fill_min_hold_min": [0, 60, 240],
+             "fill_max_rel_pct": [-0.1, 0.0, 0.1, 0.3]}
+
+    def study(path):
+        return S.run_study(_db(path), None, None, None, None, base=hp, space=space, n_samples=80, blocks=6,
+                           test_frac=0.34, max_seconds=120, min_trades=1, workers=1)
+    r = study(db_path)
+    rel = r.get("reliability") or {}
+    vp = ((rel.get("bootstrap") or {}).get("vs_passive") or {})
+    pb = rel.get("pbo") or {}
+    ok_sig = (vp.get("p_positive") or 0) >= 0.9 and pb.get("pbo") is not None and pb["pbo"] <= 0.5 \
+        and r.get("recommended") is not None and (rel.get("convergence") or {}).get("neighbours_checked", 0) > 0
+    R.add(g, "دنیای دارای سیگنال: برتری بر شاخص هم‌وزن معنادار (بوت‌استرپ) و رتبه‌بندی تکرارپذیر (PBO پایین)؛ ترکیب پیشنهادی ناحیهٔ پایدار ساخته می‌شود",
+          ok_sig, f"p={vp.get('p_positive')} PBO={pb.get('pbo')} پیشنهادی={'بله' if r.get('recommended') else 'خیر'}")
+    bad, ps = [], []
+    for sd in (1, 2, 3):
+        p2 = f"{db_path}.noise{sd}.db"
+        _sh.copyfile(db_path, p2)
+        con = _sq.connect(p2)
+        rng = random.Random(sd)
+        walk, up = {}, []
+        for rid, sid, nav in con.execute("SELECT rowid, symbol_id, nav FROM nav_intraday ORDER BY symbol_id, date, time"):
+            w = walk.get(sid, rng.gauss(0, 0.01)) + rng.gauss(0, 0.0015)      # a random walk: never pulled back
+            walk[sid] = max(-0.08, min(0.08, w))
+            up.append((nav * (1 + walk[sid]), rid))
+        con.executemany("UPDATE nav_intraday SET last=? WHERE rowid=?", up)
+        con.commit()
+        con.close()
+        rn = study(p2)
+        pp = (((rn.get("reliability") or {}).get("bootstrap") or {}).get("vs_passive") or {}).get("p_positive")
+        ps.append(pp)
+        if pp is None or pp >= 0.9 or rn["verdict"]["overall"] == "ok":
+            bad.append(f"بذر {sd}: p={pp} حکم={rn['verdict']['overall']}")
+        for ext in ("", "-wal", "-shm"):
+            try:
+                os.remove(p2 + ext)
+            except OSError:
+                pass
+    R.add(g, "دنیای بی‌سیگنال (حباب گام تصادفی): هیچ برتریِ معناداری گزارش نمی‌شود و حکم هرگز «قابل‌اعتنا» نیست",
+          not bad, "؛ ".join(bad) or f"احتمال برتری در ۳ دنیا: {ps}")
+
+
 def test_parallel_study(R: Results, db):
     """The optimizer's parallel workers (separate processes) must find exactly what one process finds."""
     import sys as _sys
@@ -2173,6 +2223,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
              ("بهینه‌سازی موازی", lambda: (test_optimizer_coverage(R), test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
+             ("بهینه‌ساز: قابلیت اطمینان", lambda: test_optimizer_reliability(R, path)),
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),
              ("NAV به‌روز", lambda: test_stale_nav_no_trade(R, db)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),

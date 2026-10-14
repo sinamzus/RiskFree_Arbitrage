@@ -8816,7 +8816,7 @@ async function discOptimizeRun() {
   panel.style.display = 'block';
   panel.innerHTML = '<div class="ob-p">⏳ آماده‌سازی ...</div>';
   if (discOptTimer) clearInterval(discOptTimer);
-  const PH = {setup: 'آماده‌سازی داده', search: 'جستجوی تصادفیِ متوازن', refine: 'پالایش بهترین‌ها', neighbours: 'سنجش پایداری اطراف برنده',
+  const PH = {setup: 'آماده‌سازی داده', search: 'جستجوی تصادفیِ متوازن', refine: 'پالایش بهترین‌ها', neighbours: 'سنجش پایداری اطراف برنده', reliability: 'سنجش قابلیت اطمینان (PBO، بوت‌استرپ، ناحیهٔ پایدار)',
     sensitivity: 'حساسیت به فرض‌های اجرایی', analysis: 'تحلیل', grid: 'جستجوی شبکه‌ای'};
   const poll = async () => {
     const s = await fetch('/api/disc/optimize/status').catch(() => null);
@@ -8968,10 +8968,12 @@ function renderDiscStudy(res, p) {
         <table class="disc-tbl" style="width:auto"><thead><tr><th style="text-align:start">پارامتر</th><th>برنده</th><th>مقدار فرم</th></tr></thead><tbody>${bestRows}</tbody></table>
         <table class="disc-tbl" style="width:auto"><thead><tr><th>ترکیب</th><th>بازده آموزش</th><th>معامله</th><th>بازده آزمون</th><th>معامله</th><th>آمارهٔ t</th></tr></thead><tbody>
           <tr class="best"><td style="text-align:start">برنده</td>${tH(b)}</tr>
+          ${res.recommended && !res.recommended.same_as_best ? `<tr title="ترکیبی که میانگین امتیاز خودش و همسایه‌های یک‌گامی‌اش در آموزش بهترین است (${res.recommended.neighbours} همسایه): به یک نقطهٔ خوش‌شانس تکیه نمی‌کند"><td style="text-align:start">پیشنهادی (ناحیهٔ پایدار) <button type="button" class="pill" onclick="discApplyStudy(_discStudy.recommended.cfg)">اعمال ▸</button></td>${tH(res.recommended)}</tr>` : ''}
           ${res.default ? `<tr><td style="text-align:start">مقدار فرم</td>${tH(res.default)}</tr>` : ''}
           <tr><td style="text-align:start" title="خرید و نگه‌داری هم‌وزنِ همین صندوق‌ها در همین دوره‌ها، بدون کارمزد">پسیو (هم‌وزن)</td><td>${dsPct(ps.train)}</td><td></td><td>${dsPct(ps.hold)}</td><td></td><td></td></tr></tbody></table>
         <div><button id="bbt-opt-apply" onclick='discApplyStudy(_discStudy.best.cfg)'>اعمال و اجرای بک‌تست ▸</button>
           <div class="dv-note" style="max-width:300px">آزمون (${gregIntToJalaliStr(S.hold_range[0])} تا ${gregIntToJalaliStr(S.hold_range[1])}) هیچ‌گاه در انتخاب دخالت نداشته است.</div></div></div>
+      ${res.recommended ? `<div class="dv-note">${res.recommended.same_as_best ? 'برنده خودش در یک ناحیهٔ پایدار است (میانگین همسایه‌هایش هم بهترین است).' : 'ردیف «پیشنهادی»: به‌جای تکیه بر یک نقطهٔ اوج، ترکیبی که همسایه‌هایش هم خوب‌اند — برای استفادهٔ واقعی امن‌تر از «برنده» است.'}</div>` : ''}
       ${res.findings.length ? `<ul style="margin:6px 0 0;padding-inline-start:18px;font-size:12px;line-height:1.9">${res.findings.map(f => `<li>${f}</li>`).join('')}</ul>` : ''}</div>
 
     <div class="dv-sec"><div class="disc-h">اهمیت پارامترها — هر پارامتر چند درصد از تغییرات نتیجه را توضیح می‌دهد</div>

@@ -1004,6 +1004,113 @@ class Study:
         return self._analyse(best, default_rec, qual, allq)
 
     # ---- analysis -------------------------------------------------------------------------
+    def _neighbours(self, cfg: dict) -> list[dict]:
+        """One-step neighbours of ``cfg`` (each searched parameter one choice up / down)."""
+        out = []
+        for d in ORDER:
+            if d not in self.space or cfg.get(d) is None or cfg[d] not in self.space[d]:
+                continue
+            ch = self.space[d]
+            i = ch.index(cfg[d])
+            for j in (i - 1, i + 1):
+                if 0 <= j < len(ch):
+                    cand = dict(cfg)
+                    cand[d] = ch[j]
+                    cand = self._complete(cand)
+                    if _valid(cand):
+                        out.append(cand)
+        return out
+
+    def _daily(self, cfg: dict, lo: int, hi: int):
+        """{date: daily return} of one configuration over [lo, hi] (hold mode: daily liquidation-value marks)."""
+        p = _to_params(self.base, cfg)
+        if p.fill_mode != "hold":
+            return None
+        U = self._universe(p)
+        _acc, marks = self._run_once(p, U)
+        prev, out = None, {}
+        for d, eq, _a, _e in marks:
+            if d < lo:
+                prev = eq
+            elif d <= hi:
+                if prev and prev > 0:
+                    out[d] = eq / prev - 1.0
+                prev = eq
+        return out
+
+    def _passive_daily(self, lo: int, hi: int) -> dict:
+        """{date: return} of the equal-weight index of the funds (each fund's last price of the day)."""
+        U = self._universe(_to_params(self.base, self._base_cfg()))
+        by_day = {}
+        for it in U["items"]:
+            closes = {}
+            for r in it["rows"]:
+                if r[4] and r[4] > 0:
+                    closes[r[1]] = r[4]
+            ds = sorted(closes)
+            for a, b in zip(ds, ds[1:]):
+                if lo <= b <= hi:
+                    by_day.setdefault(b, []).append(closes[b] / closes[a] - 1.0)
+        return {d: _mean(v) for d, v in by_day.items() if v}
+
+    def _reliability(self, best, default_rec, qual, allq, nb) -> dict:
+        out: dict = {}
+        # 1) probability of overfitting over every split of the blocks into two halves
+        out["pbo"] = _pbo(qual, robust=self.objective == "robust")
+        # 2) plateau: the configuration whose one-step neighbourhood scores best on average (training only)
+        until = self.t0 + self.max_seconds * 1.15
+        for r in sorted(qual, key=lambda r: -r["score"])[:5]:
+            for cand in self._neighbours(r["cfg"]):
+                if time.time() > until:
+                    break
+                if _ckey(_normalize(cand, self.base)) not in self.by_key:
+                    self.evaluate(cand, "plateau")
+        cands = []
+        for r in sorted(allq, key=lambda r: -r["score"])[:30]:
+            ns = [self.by_key.get(_ckey(_normalize(c, self.base))) for c in self._neighbours(r["cfg"])]
+            ns = [x for x in ns if x is not None]
+            if len(ns) >= 3:
+                sm = _mean([r["score"]] + [x["score"] if x["ok"] else min(0.0, x["score"]) for x in ns])
+                cands.append((sm, len(ns), r))
+        rec = None
+        if cands:
+            sm, nn, rec = max(cands, key=lambda x: x[0])
+            row = self._row(rec)
+            row.update({"smoothed_score": _num(sm), "neighbours": nn, "same_as_best": rec is best})
+            out["recommended"] = row
+        # 3) bootstrap significance of the winner's (and the recommended's) test-period excess
+        lo, hi = self.hold_rng
+        try:
+            db_ = self._daily(best["cfg"], lo, hi)
+            if db_:
+                pas = self._passive_daily(lo, hi)
+                days = sorted(d for d in db_ if d in pas)
+                bs = {"vs_passive": _boot_excess([db_[d] for d in days], [pas[d] for d in days])}
+                if default_rec is not None and default_rec is not best:
+                    dd = self._daily(default_rec["cfg"], lo, hi)
+                    days2 = sorted(d for d in db_ if d in dd)
+                    bs["vs_default"] = _boot_excess([db_[d] for d in days2], [dd[d] for d in days2])
+                rc = out.get("recommended")
+                if rc and not rc["same_as_best"] and rec is not None:
+                    dr = self._daily(rec["cfg"], lo, hi)
+                    days3 = sorted(d for d in dr if d in pas)
+                    bs["recommended_vs_passive"] = _boot_excess([dr[d] for d in days3], [pas[d] for d in days3])
+                out["bootstrap"] = {k: ({kk: _num(vv, 4) for kk, vv in v.items()} if v else None) for k, v in bs.items()}
+        except Exception as e:                        # never fail a study for a diagnostic
+            out["bootstrap_error"] = str(e)
+        # 4) did the search converge: best of the first half of the random samples vs all, local optimum
+        rnd = [r for r in self.records if r["src"] == "random" and r["ok"]]
+        if rnd:
+            half = rnd[:max(1, len(rnd) // 2)]
+            better_nb = [x for x in nb if x["ok"] and x["score"] is not None and x["score"] > best["score"] + 1e-9]
+            b_rand = max(r["score"] for r in rnd)
+            out["convergence"] = {
+                "best_first_half": _num(max(r["score"] for r in half), 3), "best_random": _num(b_rand, 3),
+                "refine_gain": _num(best["score"] - b_rand, 3),
+                "plateaued": max(r["score"] for r in half) >= b_rand - max(0.5, 0.05 * abs(b_rand)),
+                "neighbours_checked": len(nb), "better_neighbours": len(better_nb), "local_optimum": not better_nb}
+        return out
+
     def _fmt_cfg(self, c: dict) -> dict:
         return {k: v for k, v in c.items() if v is not None}
 
@@ -1142,6 +1249,10 @@ class Study:
                 sens.append({"name": name, "train": _num(r["train"]["portfolio_return_pct"]),
                              "hold": _num(hold_of(r)), "trades": r["hold"]["trade_count"]})
 
+        # --- reliability: is the optimum real, and was it found? ---------------------------------------
+        self._prog(phase="reliability")
+        reli = self._reliability(best, default_rec, qual, allq, nb)
+
         # --- verdict ------------------------------------------------------------------------------------
         lights = []
 
@@ -1202,12 +1313,52 @@ class Study:
                 light("حساسیت به فرض اجرایی", lv,
                       f"آزمونِ برنده با اسپرد دو برابر: {h2:+.2f}٪ " + ("(هنوز سودده)." if lv == "ok" else
                       "(سود به فرض خوشبینانهٔ اسپرد وابسته است؛ دادهٔ اردربوک نداریم)."))
+        pb = reli.get("pbo")
+        if pb:
+            lv = "ok" if pb["pbo"] <= 0.2 else ("warn" if pb["pbo"] <= 0.5 else "bad")
+            light("احتمال بیش‌برازش (PBO، اعتبارسنجی متقاطع ترکیبی)", lv,
+                  f"در {pb['splits']} حالتِ تقسیم {pb['blocks']} بلوک به دو نیمه، برندهٔ یک نیمه در نیمهٔ دیگر "
+                  f"{pb['pbo'] * 100:.0f}٪ مواقع زیر میانهٔ {pb['configs']} ترکیب بود (PBO={pb['pbo']:.2f})؛ صدک میانهٔ او در نیمهٔ دیگر "
+                  f"{pb['oos_pct_median']:.0f} و احتمال زیان او در نیمهٔ دیگر {pb['p_oos_loss'] * 100:.0f}٪. "
+                  + ("رتبه‌بندی پارامترها در دوره‌های دیگر هم تکرار می‌شود (این به‌تنهایی یعنی برتری بر خرید و نگه‌داری "
+                     "نیست؛ چراغ بوت‌استرپ را ببینید)." if lv == "ok" else
+                     "رتبه‌بندی فقط گاهی تکرار می‌شود." if lv == "warn" else
+                     "«بهترینِ» یک دوره در دورهٔ دیگر بدتر از میانه است: انتخاب پارامتر بیشتر شانس است."))
+        bs = reli.get("bootstrap") or {}
+        if bs.get("vs_passive") or bs.get("vs_default"):
+            vp, vd = bs.get("vs_passive"), bs.get("vs_default")
+            pp = vp["p_positive"] if vp else None
+            lv = "ok" if (pp is not None and pp >= 0.9) else ("warn" if (pp is not None and pp >= 0.7) else "bad")
+            txt = []
+            if vp:
+                txt.append(f"نسبت به شاخص هم‌وزن صندوق‌ها: {vp['excess_pct']:+.2f}٪ (بازهٔ ۹۰٪: {vp['lo_pct']:+.1f} تا {vp['hi_pct']:+.1f})، "
+                           f"احتمال برتری واقعی {vp['p_positive'] * 100:.0f}٪")
+            if vd:
+                txt.append(f"نسبت به مقدار فرم: {vd['excess_pct']:+.2f}٪ (بازهٔ ۹۰٪: {vd['lo_pct']:+.1f} تا {vd['hi_pct']:+.1f})، "
+                           f"احتمال برتری {vd['p_positive'] * 100:.0f}٪")
+            light("معناداری برتری در آزمون (بوت‌استرپ روزانه)", lv,
+                  "؛ ".join(txt) + f" — روی {(vp or vd)['days']} روزِ آزمون، با حفظ وابستگی روزها. "
+                  + ("برتری از نوسان قابل‌تشخیص است." if lv == "ok" else "برتری با نوسانِ عادی قابل توضیح است."))
+        cv = reli.get("convergence") or {}
+        if cv:
+            lv = "ok" if cv.get("local_optimum") and cv.get("plateaued") else "warn"
+            light("یافتن بهینه (همگرایی جستجو)", lv,
+                  f"بهترین امتیاز در نیمهٔ اول نمونه‌های تصادفی {cv['best_first_half']:+.2f} و در کل {cv['best_random']:+.2f}؛ "
+                  f"پالایش محلی {cv['refine_gain']:+.2f} افزود؛ {cv['neighbours_checked']} همسایهٔ یک‌گامی برنده ارزیابی شد و "
+                  + (f"هیچ‌کدام بهتر نبود (بهینهٔ محلی تأییدشده)." if cv.get("local_optimum") else
+                     f"{cv['better_neighbours']} همسایه بهتر بود (برنده بهینهٔ محلی نیست).")
+                  + (" جستجو به سقف رسیده است." if cv.get("plateaued") else " جستجوی بیشتر ممکن است بهتر پیدا کند."))
         levels = [l["level"] for l in lights]
         overall = "bad" if levels.count("bad") >= 2 else \
             ("ok" if levels.count("bad") == 0 and levels.count("ok") >= len(levels) - 1 else "warn")
+        no_edge = any(l["title"].startswith("معناداری برتری") and l["level"] == "bad" for l in lights)
+        if no_edge and overall == "ok":
+            overall = "warn"                          # without a significant edge the result is never "reliable"
         headline = {"ok": "نتیجهٔ بهینه‌سازی قابل‌اعتناست: چند آزمونِ مستقل هم‌جهت‌اند.",
                     "warn": "نتیجه نیمه‌معتبر است؛ فقط با احتیاط و پس از اعتبارسنجی کامل از آن استفاده کنید.",
                     "bad": "بهینه‌سازی نشانهٔ برازش بر نویز دارد؛ «بهترین ترکیب» را اعمال نکنید."}[overall]
+        if no_edge:
+            headline += " برتری بر خرید و نگه‌داری در دورهٔ آزمون از نظر آماری اثبات نشده است."
 
         # --- plain-language findings -----------------------------------------------------------------------
         findings = []
@@ -1288,6 +1439,8 @@ class Study:
             "neighbours": {"rows": nb, "plateau_pct": _num(plateau, 1)},
             "walk_forward": {"rows": wf, "stats": wf_stats},
             "sensitivity": sens, "scatter": scatter, "findings": findings, "passive": self.passive,
+            "reliability": reli,
+            "recommended": reli.get("recommended"),
         }
 
 
@@ -1337,6 +1490,59 @@ def _window(acc: list, marks: list, lo: int, hi: int, p: D.DiscountParams, with_
         sd = _std(rets) * math.sqrt(n / (n - 1)) if n > 2 else 0.0
         s["t_stat"] = (_mean(rets) / (sd / math.sqrt(n))) if n >= 5 and sd > 1e-12 else None
     return s
+
+
+def _pbo(recs: list, robust: bool = True) -> dict | None:
+    """Probability of backtest overfitting by combinatorially symmetric cross-validation (Bailey, Borwein, López de
+    Prado & Zhu): the period's blocks are split into two halves in every possible way; the configuration that is
+    best on one half (same kind of score as the search) is ranked among all configurations on the other half.
+    PBO = share of splits where that winner lands in the bottom half — 0 = the ranking carries over, 0.5 = luck."""
+    rows = [[b["ret"] for b in r["blocks"]] for r in recs]
+    if len(rows) < 10:
+        return None
+    B = min(len(x) for x in rows)
+    if B < 4:
+        return None
+    rows = [x[:B] for x in rows]
+
+    def sc(x, idx):
+        v = [x[j] for j in idx]
+        return _mean(v) - 0.5 * _std(v) if robust else _mean(v)
+    ws, losses = [], 0
+    for IS in itertools.combinations(range(B), B // 2):
+        OOS = [j for j in range(B) if j not in IS]
+        win = max(range(len(rows)), key=lambda i: sc(rows[i], IS))
+        oos = [_mean([x[j] for j in OOS]) for x in rows]
+        y = oos[win]
+        w = (sum(1 for z in oos if z < y) + 0.5 * sum(1 for z in oos if z == y)) / len(oos)
+        ws.append(w)
+        losses += y <= 0
+    n = len(ws)
+    return {"pbo": sum(1 for w in ws if w < 0.5) / n, "splits": n, "blocks": B, "configs": len(rows),
+            "oos_pct_median": _median(ws) * 100, "oos_pct_mean": _mean(ws) * 100, "p_oos_loss": losses / n}
+
+
+def _boot_excess(a: list, b: list, n: int = 2000, mean_block: float = 5.0, seed: int = 7) -> dict | None:
+    """Stationary block bootstrap (Politis & Romano) of the period excess of daily returns ``a`` over ``b`` (same
+    days): P(excess > 0) and a 90% interval, keeping the days' serial dependence (blocks of ~``mean_block`` days)."""
+    m = min(len(a), len(b))
+    if m < 15:
+        return None
+    x = [math.log1p(a[i]) - math.log1p(b[i]) for i in range(m)]
+    rng = random.Random(seed)
+    p_new = 1.0 / mean_block
+    stats = []
+    for _ in range(n):
+        tot, i = 0.0, rng.randrange(m)
+        for _k in range(m):
+            tot += x[i]
+            i = rng.randrange(m) if rng.random() < p_new else (i + 1) % m
+        stats.append(tot)
+    stats.sort()
+    obs = sum(x)
+    return {"excess_pct": (math.exp(obs) - 1) * 100, "p_positive": sum(1 for v in stats if v > 0) / n,
+            "lo_pct": (math.exp(stats[int(0.05 * n)]) - 1) * 100, "hi_pct": (math.exp(stats[int(0.95 * n) - 1]) - 1) * 100,
+            "days": m}
 
 
 def _auto_workers() -> int:
