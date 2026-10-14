@@ -1,5 +1,5 @@
 {
- "exported_at": "2026-10-14 07:47:23",
+ "exported_at": "2026-10-14 07:54:30",
  "code": {
   "commit": "76f50f57911a24343ca1bb5d62697f8c6aedf1f7",
   "branch": "claude/zen-keller-4iqcqz",
@@ -7,6 +7,7 @@
  },
  "contents": [
   "backtest",
-  "optimizer"
+  "optimizer",
+  "verify"
  ]
 }
