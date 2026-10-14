@@ -120,8 +120,8 @@ def load_universe(db, cats, symbols, start, end, p: DiscountParams) -> dict:
     D._compute_mr(db, loaded, p, start, end)
     items = [{"label": d["label"], "rows": d["rows"], "day_vol": d["day_vol"], "mr": d.get("mr"),
               "book": d.get("book")} for d in loaded]
-    if p.crash_drop_pct > 0 and loaded:
-        cr = D._crash_series([d["rows"] for d in loaded], D._crash_groups(db, loaded, p), p)
+    if D.market_on(p) and loaded:
+        cr = D._market_series([d["rows"] for d in loaded], D._crash_groups(db, loaded, p), p)
         for it, c in zip(items, cr):
             it["crash"] = c
     if p.entry_mode in ("index", "both") and items:

@@ -1758,6 +1758,7 @@ def create_app(db, scan_callback=None):
             fill_max_rel_pct=_f("fillmax", d.fill_max_rel_pct),
             fill_exit_rel_pct=_f("fillexit", d.fill_exit_rel_pct),
             crash_drop_pct=max(0.0, _f("crashdrop", d.crash_drop_pct)),
+            rally_rise_pct=max(0.0, _f("rallyrise", d.rally_rise_pct)),
             crash_window_min=max(1, int(_f("crashwin", d.crash_window_min))),
             crash_cooldown_min=max(0, int(_f("crashcool", d.crash_cooldown_min))),
             crash_scope=("all" if str(get("crashscope") or d.crash_scope) == "all" else "category"),

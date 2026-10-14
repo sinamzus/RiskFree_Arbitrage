@@ -54,7 +54,8 @@ DIMS: dict[str, dict] = {
     "index_exit_pct":     {"kind": "fast", "label": "خروج: شاخص ≥ −٪", "choices": [0.2, 0.1, 0.0, -0.1]},
     "max_hold_days":      {"kind": "fast", "label": "حداکثر نگه‌داری (روز)", "choices": [1, 2, 3, 5, 7, 10, 15, 30]},
     "crash_drop_pct":     {"kind": "fast", "label": "فیلتر ریزش بازار: افت گروه ≥ ٪ (۰ = خاموش)", "choices": [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]},
-    "crash_window_min":   {"kind": "slow", "label": "پنجرهٔ ریزش (دقیقه)", "choices": [30, 60, 120, 240]},
+    "rally_rise_pct":     {"kind": "fast", "label": "فیلتر صعود بازار: رشد گروه ≥ ٪ (۰ = خاموش)", "choices": [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]},
+    "crash_window_min":   {"kind": "slow", "label": "پنجرهٔ ریزش / صعود (دقیقه)", "choices": [30, 60, 120, 240]},
     "crash_cooldown_min": {"kind": "slow", "label": "مدت ممنوعیت پس از ریزش (دقیقه)", "choices": [0, 60, 120, 240]},
     "crash_scope":        {"kind": "slow", "label": "گروه ریزش", "choices": ["category", "all"]},
     "session_mode":       {"kind": "slow", "label": "ساعت جلسه (خودکار از حجم / ثابت)", "choices": ["auto", "fixed"]},
@@ -84,7 +85,7 @@ SLOW_ORDER = ["entry_mode", "baseline_days", "session_mode", "session_start", "s
               "index_min_share", "mr_center", "mr_window_days", "mr_horizon_days", "mr_lag",
               "crash_window_min", "crash_cooldown_min", "crash_scope"]
 FAST_ORDER = ["entry_discount_pct", "exit_discount_pct", "index_entry_pct", "index_exit_pct", "max_hold_days",
-              "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "require_fresh", "fill_mode", "fill_max_rel_pct", "fill_exit_rel_pct", "fill_switch_pct", "fill_min_hold_min", "fill_quote_age_min", "position_pct",
+              "stop_loss_pct", "stop_mode", "mr_min_score", "crash_drop_pct", "rally_rise_pct", "require_fresh", "fill_mode", "fill_max_rel_pct", "fill_exit_rel_pct", "fill_switch_pct", "fill_min_hold_min", "fill_quote_age_min", "position_pct",
               "participation_basis", "exec_delay_snaps", "participation_pct", "half_spread_pct", "buy_fee", "sell_fee"]
 ORDER = SLOW_ORDER + FAST_ORDER
 
@@ -164,7 +165,7 @@ def _active(dim: str, c: dict) -> bool:
     if dim in ("mr_window_days", "mr_horizon_days", "mr_min_score", "mr_lag"):
         return (c.get("mr_center") or "off") != "off"
     if dim in ("crash_window_min", "crash_cooldown_min", "crash_scope"):
-        return (c.get("crash_drop_pct") or 0) > 0
+        return (c.get("crash_drop_pct") or 0) > 0 or (c.get("rally_rise_pct") or 0) > 0
     if dim in ("session_start", "session_end"):
         return (c.get("session_mode") or "auto") == "fixed"
     if dim == "index_min_share":
@@ -368,7 +369,7 @@ class Study:
         self.auto_added: list[str] = []
         self.dropped: list[str] = []
         self._adapt_space()
-        self._crash_searched = "crash_drop_pct" in self.space and max(self.space["crash_drop_pct"]) > 0
+        self._crash_searched = any(d in self.space and max(self.space[d]) > 0 for d in ("crash_drop_pct", "rally_rise_pct"))
         self.cache_u: dict[tuple, dict] = {}
         self.cache_order: list[tuple] = []
         self.records: list[dict] = []
@@ -422,7 +423,8 @@ class Study:
             if d in self.space and not any(f in need for f in fills):
                 del self.space[d]
                 self.dropped.append(d)
-        drops = self.space.get("crash_drop_pct") or [self.base.crash_drop_pct]
+        drops = (self.space.get("crash_drop_pct") or [self.base.crash_drop_pct]) + \
+            (self.space.get("rally_rise_pct") or [self.base.rally_rise_pct])
         if all(float(x) == 0 for x in drops):
             for d in ("crash_window_min", "crash_cooldown_min", "crash_scope"):
                 if d in self.space:
@@ -473,7 +475,7 @@ class Study:
                 p.mr_lag if p.mr_center != "off" else 0,
                 # the crash series depend on window / cooldown / scope whenever the filter is on in ANY config
                 (p.crash_window_min, p.crash_cooldown_min, p.crash_scope)
-                if (self._crash_searched or p.crash_drop_pct > 0) else None,
+                if (self._crash_searched or D.market_on(p)) else None,
                 (p.session_mode, p.session_start, p.session_end) if p.session_mode == "fixed" else p.session_mode,
                 p.index_min_share if p.entry_mode != "fund" else None)
 
@@ -668,8 +670,9 @@ class Study:
         """Context for deciding whether a slow dimension is meaningful: a dimension that only matters when
         the fast threshold is on counts as active if that threshold is searched with any positive value."""
         ctx = {**self._base_cfg(), **c}
-        if "crash_drop_pct" in self.space:
-            ctx["crash_drop_pct"] = max(self.space["crash_drop_pct"])
+        for d in ("crash_drop_pct", "rally_rise_pct"):
+            if d in self.space:
+                ctx[d] = max(self.space[d])
         return ctx
 
     def _base_cfg(self) -> dict:
@@ -680,7 +683,8 @@ class Study:
                 "exit_discount_pct": b.exit_discount_pct, "index_entry_pct": b.index_entry_pct,
                 "index_exit_pct": b.index_exit_pct, "max_hold_days": b.max_hold_days,
                 "stop_loss_pct": b.stop_loss_pct, "stop_mode": b.stop_mode, "position_pct": b.position_pct,
-                "crash_drop_pct": b.crash_drop_pct, "crash_window_min": b.crash_window_min,
+                "crash_drop_pct": b.crash_drop_pct, "rally_rise_pct": b.rally_rise_pct,
+                "crash_window_min": b.crash_window_min,
                 "crash_cooldown_min": b.crash_cooldown_min, "crash_scope": b.crash_scope,
                 "session_mode": b.session_mode, "session_start": b.session_start, "session_end": b.session_end,
                 "index_min_share": b.index_min_share, "mr_lag": b.mr_lag, "require_fresh": b.require_fresh,

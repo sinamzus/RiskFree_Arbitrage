@@ -162,7 +162,7 @@ def _per_params(nb: dict, loaded: list[dict], crash, p) -> tuple:
     """Eligibility (except freshness) and volume caps per row — cached per the few parameters they depend on."""
     import discount_backtest as D
     key = (p.fill_max_rel_pct, p.mr_center != "off", p.mr_min_score, p.crash_drop_pct if crash is not None else 0.0,
-           p.participation_pct, p.participation_basis)
+           p.rally_rise_pct if crash is not None else 0.0, p.participation_pct, p.participation_basis)
     hit = nb["_per"].get(key)
     if hit is not None:
         return hit
@@ -170,7 +170,11 @@ def _per_params(nb: dict, loaded: list[dict], crash, p) -> tuple:
     if "mr" not in nb:
         nb["mr"] = _flat([l.get("mr") for l in loaded], nb)
         nb["mr_none"] = np.array([l.get("mr") is None for l in loaded], np.bool_)
-        nb["crash"] = _flat(crash, nb) if crash is not None else None
+        # crash[k][i] = (lowest, highest) group return within the cooldown (see discount_backtest.market_block)
+        nb["crash"] = _flat([None if c is None else [None if v is None else v[0] for v in c] for c in crash], nb) \
+            if crash is not None else None
+        nb["rally"] = _flat([None if c is None else [None if v is None else v[1] for v in c] for c in crash], nb) \
+            if crash is not None else None
     last_row = np.zeros(R, np.bool_)
     last_row[nb["base"] + nb["nrows"] - 1] = True
     ok = ~last_row.copy()                       # the bubble limit is checked in the kernel (depends on the size)
@@ -182,6 +186,9 @@ def _per_params(nb: dict, loaded: list[dict], crash, p) -> tuple:
         cr = nb["crash"]
         thr = -p.crash_drop_pct / 100.0
         ok &= ~(~np.isnan(cr) & (cr <= thr))
+    if crash is not None and p.rally_rise_pct > 0 and nb["rally"] is not None:
+        ra = nb["rally"]
+        ok &= ~(~np.isnan(ra) & (ra >= p.rally_rise_pct / 100.0))
     cap = np.zeros(R)
     for k, l in enumerate(loaded):
         dv = l["day_vol"]

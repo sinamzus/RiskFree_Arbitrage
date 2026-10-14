@@ -225,6 +225,8 @@ AUDIT = [
     ("فیلتر ریزش: پنجره", {"crash_drop_pct": 0.3, "crash_scope": "all"}, "crash_window_min", [10, 240], "change"),
     ("فیلتر ریزش: توقف موقت", {"crash_drop_pct": 0.3, "crash_scope": "all", "crash_window_min": 30}, "crash_cooldown_min", [0, 240], "change"),
     ("فیلتر ریزش: گروه", {"crash_drop_pct": 0.3}, "crash_scope", ["category", "all"], "change"),
+    ("فیلتر صعود: آستانه", {"crash_scope": "all"}, "rally_rise_pct", [0.0, 0.3], "change"),
+    ("فیلتر صعود: پنجره", {"rally_rise_pct": 0.3, "crash_scope": "all"}, "crash_window_min", [10, 240], "change"),
     ("حداقل سهم صندوق‌ها برای شاخص (حالت شاخص)", {"entry_mode": "index"}, "index_min_share", [0.3, 1.0], "change"),
     ("فاصلهٔ جفت‌های امتیاز بازگشت", {"mr_center": "zero"}, "mr_lag", [1, 8], "change"),
     ("پر کردن سرمایهٔ بیکار: روشن/خاموش", {}, "fill_mode", ["off", "best", "hold"], "change"),
@@ -242,8 +244,8 @@ AUDIT = [
     ("پنجرهٔ بازگشت وقتی فیلتر خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_window_days", [10, 40], "same"),
     ("حداقل امتیاز وقتی فیلتر خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_min_score", [30, 95], "same"),
     ("نوع حد ضرر وقتی حد ضرر صفر است بی‌اثر است", {"stop_loss_pct": 0.0}, "stop_mode", ["nav_widen", "price"], "same"),
-    ("پنجرهٔ ریزش وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0}, "crash_window_min", [10, 240], "same"),
-    ("توقف موقت وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0}, "crash_cooldown_min", [0, 240], "same"),
+    ("پنجرهٔ ریزش وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0, "rally_rise_pct": 0.0}, "crash_window_min", [10, 240], "same"),
+    ("توقف موقت وقتی فیلتر خاموش است بی‌اثر است", {"crash_drop_pct": 0.0, "rally_rise_pct": 0.0}, "crash_cooldown_min", [0, 240], "same"),
     ("حداقل سهم شاخص در حالت هر صندوق بی‌اثر است", {"entry_mode": "fund"}, "index_min_share", [0.3, 1.0], "same"),
     ("فاصلهٔ جفت‌ها وقتی فیلتر بازگشت خاموش است بی‌اثر است", {"mr_center": "off"}, "mr_lag", [1, 8], "same"),
     ("حداکثر حباب نسبی وقتی پر کردن خاموش است بی‌اثر است", {"fill_mode": "off"}, "fill_max_rel_pct", [-0.1, 0.5], "same"),
@@ -320,7 +322,7 @@ WEB_MAP = {
     "buyfee": ("buy_fee", "0.2", 0.002), "sellfee": ("sell_fee", "0.25", 0.0025), "navage": ("max_nav_age_days", "2", 2),
     "fresh": ("require_fresh", "0", False), "smode": ("session_mode", "fixed", "fixed"),
     "sstart": ("session_start", "10:15", 101500), "send": ("session_end", "17:45", 174500),
-    "crashdrop": ("crash_drop_pct", "0.8", 0.8), "crashwin": ("crash_window_min", "45", 45),
+    "crashdrop": ("crash_drop_pct", "0.8", 0.8), "rallyrise": ("rally_rise_pct", "1.3", 1.3), "crashwin": ("crash_window_min", "45", 45),
     "crashcool": ("crash_cooldown_min", "90", 90), "crashscope": ("crash_scope", "category", "category"),
     "imin": ("index_min_share", "60", 0.6), "mrlag": ("mr_lag", "6", 6),
     "navmin": ("max_nav_age_min", "17", 17), "fillswitch": ("fill_switch_pct", "0.9", 0.9),
@@ -400,7 +402,7 @@ UI_ID = {  # query key -> element id
     "ientry": "disc-ientry", "iexit": "disc-iexit", "mrcenter": "disc-mrcenter", "mrwin": "disc-mrwin",
     "mrmin": "disc-mrmin", "mrhor": "disc-mrhor", "spread": "disc-spread", "part": "disc-part", "buyfee": "disc-buyfee",
     "sellfee": "disc-sellfee", "navage": "disc-navage", "fresh": "disc-fresh", "smode": "disc-smode",
-    "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "crashwin": "disc-crashwin",
+    "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "rallyrise": "disc-rallyrise", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
     "navmin": "disc-navmin", "ds": "disc-dataset", "grid": "disc-grid", "fillswitch": "disc-fillswitch", "fillminhold": "disc-fillminhold", "fillage": "disc-fillage", "partbasis": "disc-partbasis", "delay": "disc-delay", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
 }
@@ -767,7 +769,7 @@ def test_invariants(R: Results, db, n: int = 24):
 #  5b) Market-fall filter                                                      #
 # --------------------------------------------------------------------------- #
 
-def _brute_crash(rows_by_fund, groups, W, C):
+def _brute_crash(rows_by_fund, groups, W, C, agg=min):
     """Naive O(n^2) re-implementation of discount_backtest._crash_series (independent check)."""
     mins = [[D._minutes(r[1], r[2]) for r in rows] for rows in rows_by_fund]
     ret = []
@@ -803,7 +805,7 @@ def _brute_crash(rows_by_fund, groups, W, C):
         for i in range(len(rows)):
             T = mins[k][i]
             cand = [gret[(groups[k], t)] for t in stamps if T - C <= t <= T and gret[(groups[k], t)] is not None]
-            ok.append(min(cand) if cand else None)
+            ok.append(agg(cand) if cand else None)
         out.append(ok)
     return out
 
@@ -858,6 +860,43 @@ def test_crash_filter(R: Results, db):
     a = _sig(_run(db, _base(crash_drop_pct=80.0)))
     b = _sig(_run(db, _base()))
     R.add(g, "آستانهٔ بی‌نهایت بزرگ = فیلتر خاموش", a == b, "")
+    # the rally filter: the highest group return within the cooldown, the mirror of the fall filter
+    p = _base(rally_rise_pct=0.4, crash_window_min=30, crash_cooldown_min=60, crash_scope="all")
+    loaded = []
+    for sid, sym, _c in FUNDS:
+        d = D._load_ex(db, sid, start, end, p)
+        d["label"] = sym
+        loaded.append(d)
+    both = D._market_series([l["rows"] for l in loaded], ["all"] * len(loaded), p)
+    hi = _brute_crash([l["rows"] for l in loaded], ["all"] * len(loaded), 30, 60, agg=max)
+    lo = _brute_crash([l["rows"] for l in loaded], ["all"] * len(loaded), 30, 60)
+    bad = sum(1 for fb, fh, fl in zip(both, hi, lo) for v, h, l_ in zip(fb, fh, fl)
+              if (v is None) != (h is None) or (v is not None and (abs(v[1] - h) > 1e-12 or abs(v[0] - l_) > 1e-12)))
+    R.add(g, "سری صعود (بیشترین رشد گروه در مدت توقف) = پیاده‌سازی ساده و مستقل", bad == 0, f"{bad} اختلاف" if bad else "یکسان")
+    for fm in ("off", "hold"):
+        pr = _base(rally_rise_pct=0.3, crash_window_min=30, crash_cooldown_min=45, crash_scope="all", fill_mode=fm,
+                   fill_max_rel_pct=0.3, position_pct=50)
+        res = _run(db, pr)
+        loaded = []
+        for sid, sym, _c in FUNDS:
+            d = D._load_ex(db, sid, None, None, pr)
+            d["label"] = sym
+            loaded.append(d)
+        ms = D._market_series([l["rows"] for l in loaded], ["all"] * len(loaded), pr)
+        pos = {l["label"]: {(r[1], r[2]): i for i, r in enumerate(l["rows"])} for l in loaded}
+        bad = []
+        for t in res["trades"]:
+            k = next(j for j, l in enumerate(loaded) if l["label"] == t["symbol"])
+            i = pos[t["symbol"]].get((t["entry_date"], t["entry_time"]))
+            if i is not None and D.market_block(ms[k][i], pr) == "rally":
+                bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {ms[k][i]}")
+        off = _run(db, replace(pr, rally_rise_pct=0.0))
+        ci = res.get("crash_info") or {}
+        R.add(g, f"هیچ ورود/جابه‌جایی وسط صعود سریع گروه انجام نمی‌شود (حالت «{fm}»؛ {len(res['trades'])} معامله)",
+              not bad and _sig(res) != _sig(off) and (ci.get("rally_share_pct") or 0) > 0 and not ci.get("fall_share_pct"),
+              "؛ ".join(bad[:3]) or f"سهم لحظه‌های ممنوع {ci.get('rally_share_pct')}%")
+    R.add(g, "آستانهٔ صعود بی‌نهایت بزرگ = فیلتر خاموش",
+          _sig(_run(db, _base(rally_rise_pct=80.0))) == _sig(_run(db, _base())), "")
     # exits and open positions are never touched: the filter only gates NEW entries
     r_on = _run(db, _base(crash_drop_pct=0.4, crash_scope="all"))
     R.add(g, "پوزیشن‌هایی که باز شده‌اند همیشه بسته می‌شوند (فیلتر فقط ورود را می‌بندد)",
@@ -1554,7 +1593,9 @@ def test_fast_replay(R: Results, db_path: str):
              "fill_min_hold_min": 0},
             # ranking against each fund's own norm + the mean-reversion filter
             {"baseline_days": 10, "mr_center": "self", "mr_window_days": 10, "mr_min_score": 50.0},
-            {"baseline_days": 6, "mr_center": "zero", "mr_window_days": 10, "mr_min_score": 60.0}]
+            {"baseline_days": 6, "mr_center": "zero", "mr_window_days": 10, "mr_min_score": 60.0},
+            # the market filters: fall and rally together, rally alone
+            {"crash_drop_pct": 0.5, "rally_rise_pct": 0.5, "crash_scope": "all"}, {"rally_rise_pct": 0.3}]
     bad, n, ntr = [], 0, 0
     for ds in ("dump", "hybrid"):
         for c in cfgs:

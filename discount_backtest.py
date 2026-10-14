@@ -128,6 +128,8 @@ class DiscountParams:
     crash_window_min: int = 30          # look-back (minutes) over which the group's price change is measured
     crash_cooldown_min: int = 120       # temporary stop: entries stay blocked this many minutes after the last trigger
     crash_scope: str = "category"       # category = funds of the same category | all = every selected fund
+    rally_rise_pct: float = 0.0         # 0 = off. Market-rally filter: no NEW entry / switch while the group's average
+                                        # price ROSE ≥ this % (same window, cooldown and group as the fall filter)
     stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
     baseline_days: int = 0              # per-fund typical discount window (trading days); 0 = off
@@ -879,7 +881,31 @@ def _minutes(d: int, t: int) -> int:
     return _ord(d) * 1440 + (t // 10000) * 60 + (t // 100 % 100)
 
 
-def _crash_series(rows_by_fund: list[list[tuple]], groups: list, p: DiscountParams) -> list[list]:
+def market_on(p: DiscountParams) -> bool:
+    """Is a market filter (fall or rally) on?"""
+    return p.crash_drop_pct > 0 or p.rally_rise_pct > 0
+
+
+def market_block(v, p: DiscountParams) -> str | None:
+    """Why a row's market state ``v`` = (lowest, highest group return within the cooldown) blocks a new entry:
+    "crash" (the group fell ≥ crash_drop_pct), "rally" (it rose ≥ rally_rise_pct) or None."""
+    if v is None:
+        return None
+    lo, hi = v
+    if p.crash_drop_pct > 0 and lo is not None and lo <= -p.crash_drop_pct / 100.0:
+        return "crash"
+    if p.rally_rise_pct > 0 and hi is not None and hi >= p.rally_rise_pct / 100.0:
+        return "rally"
+    return None
+
+
+def _market_series(rows_by_fund: list[list[tuple]], groups: list, p: DiscountParams) -> list[list]:
+    """For every row of every fund: (lowest, highest) group return seen in the last ``crash_cooldown_min`` minutes,
+    or None while the group is not measurable — see ``_crash_series`` (the lowest) for the definition."""
+    return _crash_series(rows_by_fund, groups, p, both=True)
+
+
+def _crash_series(rows_by_fund: list[list[tuple]], groups: list, p: DiscountParams, both: bool = False) -> list[list]:
     """For every row of every fund: the LOWEST group return seen in the last ``crash_cooldown_min``
     minutes (None while the group is not measurable).  Causal: only prices up to that instant.
 
@@ -928,7 +954,10 @@ def _crash_series(rows_by_fund: list[list[tuple]], groups: list, p: DiscountPara
                 lst.pop(0)
         for _m, k, i in events[a:b]:
             lst = recent[groups[k]]
-            out[k][i] = min(v for _t, v in lst) if lst else None
+            if both:                         # (lowest, highest): the fall and the rally filter
+                out[k][i] = (min(v for _t, v in lst), max(v for _t, v in lst)) if lst else None
+            else:
+                out[k][i] = min(v for _t, v in lst) if lst else None
         a = b
     return out
 
@@ -980,8 +1009,7 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
     e_idx = None
     mr_on = p.mr_center != "off" and mr is not None
     e_mr = None
-    crash_thr = -p.crash_drop_pct / 100.0
-    crash_on = p.crash_drop_pct > 0 and crash is not None
+    crash_on = market_on(p) and crash is not None       # crash[i] = (lowest, highest) group return (see market_block)
 
     used = {"d": None, "u": 0}                # units this fund already traded today (entry + exit chunks share it)
 
@@ -1070,10 +1098,11 @@ def _simulate(label: str, rows: list[tuple], day_vol: dict, p: DiscountParams,
                 if diag is not None:
                     diag["mr"] = diag.get("mr", 0) + 1
                 continue                      # not mean-reverting enough lately: not tradable today
-            if crash_on and crash[i] is not None and crash[i] <= crash_thr:
+            why = market_block(crash[i], p) if crash_on else None
+            if why is not None:
                 if diag is not None:
-                    diag["crash"] = diag.get("crash", 0) + 1
-                continue                      # the group is falling fast (or just did): no new entry
+                    diag[why] = diag.get(why, 0) + 1
+                continue                      # the group is falling / rising fast (or just did): no new entry
             ix = idx[i] if idx is not None else None
             r_in = r
             lim_n = _INF                      # units that keep the average buy price within the entry threshold
@@ -1832,7 +1861,7 @@ class _Parker:
         hs, bf = p.half_spread_pct / 100.0, p.buy_fee
         stop_s = p.stop_loss_pct / 100.0
         mr_on = p.mr_center != "off"
-        crash_thr = -p.crash_drop_pct / 100.0
+        mkt_on = self.crash is not None and market_on(p)
         for k, i in group:
             self.cur_i[k] = i
             self.cur_ts[k] = T
@@ -1888,8 +1917,7 @@ class _Parker:
             self.cand_lim[k] = lim
             ok = (i != len(self.rows[k]) - 1 and self.blocked_day.get(k) != d and okp
                   and not (mr_on and (self.mr[k] is None or self.mr[k][i] is None or self.mr[k][i] < p.mr_min_score))
-                  and not (self.crash is not None and p.crash_drop_pct > 0 and self.crash[k][i] is not None
-                           and self.crash[k][i] <= crash_thr))
+                  and not (mkt_on and market_block(self.crash[k][i], p) is not None))
             self.cand[k] = (T, self.rank[k][i] + xa) if ok else None
         # entries: the lowest bubble first, only if it is also the best among recently seen candidates
         for k, i in sorted(group, key=lambda g: (self.cand.get(g[0]) or (0, self.rank[g[0]][g[1]]))[1]):
@@ -2404,6 +2432,7 @@ _IDLE_LABELS = {
     "stale": "قیمت تازه نبود (حجم بالا نرفته بود)",
     "mr": "فیلتر بازگشت به میانگین صندوق را حذف کرد",
     "crash": "فیلتر ریزش بازار ورود را بست",
+    "rally": "فیلتر صعود بازار ورود را بست",
     "same_day": "بلوک ورود مجدد در همان روزِ فروش",
     "last_snapshot": "آخرین اسنپ‌شات داده",
     "liquidity": "سیگنال بود ولی حجم روز اجازهٔ معامله نداد",
@@ -2427,7 +2456,7 @@ def _idle_info(loaded: list[dict], diags: list[dict], summary: dict, p: Discount
     tot["nav_days"], tot["nav_min"] = ps["stale_days"], ps["stale_min"]
     flat_all = flat + ps["stale_days"] + ps["stale_min"]          # NAV-stale snapshots never reach the simulator
     reasons = []
-    for k in ("no_signal", "nav_days", "nav_min", "stale", "mr", "crash", "same_day", "last_snapshot", "liquidity"):
+    for k in ("no_signal", "nav_days", "nav_min", "stale", "mr", "crash", "rally", "same_day", "last_snapshot", "liquidity"):
         v = tot.get(k, 0)
         reasons.append({"code": k, "label": _IDLE_LABELS[k], "count": v,
                         "pct": round(v / flat_all * 100, 1) if flat_all else 0.0})
@@ -2486,16 +2515,18 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
     _compute_mr(db, loaded, p, start, end)
     crash_all = None
     crash_info = None
-    if p.crash_drop_pct > 0 and loaded:
-        crash_all = _crash_series([l["rows"] for l in loaded], _crash_groups(db, loaded, p), p)
-        thr = -p.crash_drop_pct / 100.0
+    if market_on(p) and loaded:
+        crash_all = _market_series([l["rows"] for l in loaded], _crash_groups(db, loaded, p), p)
         tot = sum(len(c) for c in crash_all)
-        blocked = sum(1 for c in crash_all for v in c if v is not None and v <= thr)
+        whys = [[market_block(v, p) for v in c] for c in crash_all]
+        blocked = sum(1 for w in whys for x in w if x)
         crash_info = {"blocked_share_pct": round(blocked / tot * 100, 1) if tot else 0.0,
                       "blocked_snapshots": blocked, "snapshots": tot,
+                      "fall_share_pct": round(sum(1 for w in whys for x in w if x == "crash") / tot * 100, 1) if tot else 0.0,
+                      "rally_share_pct": round(sum(1 for w in whys for x in w if x == "rally") / tot * 100, 1) if tot else 0.0,
                       "per_fund": [{"symbol": l["label"], "blocked_pct": round(
-                          sum(1 for v in c if v is not None and v <= thr) / len(c) * 100, 1) if c else 0.0}
-                          for l, c in zip(loaded, crash_all)]}
+                          sum(1 for x in w if x) / len(w) * 100, 1) if w else 0.0}
+                          for l, w in zip(loaded, whys)]}
     diags: list[dict] = [{} for _ in loaded]
     mr_info = None
     if p.mr_center != "off":

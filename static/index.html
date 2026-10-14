@@ -2455,6 +2455,8 @@ td.disc-obc { cursor: help; }
         <input id="disc-fillexit" type="number" step="0.1" value="0.3" style="width:70px"></div>
       <div class="bbt-field" title="فیلتر ریزش بازار: اگر میانگین قیمتِ صندوق‌های گروه در «پنجرهٔ ریزش» بیش از این‌قدر درصد افت کرده باشد، ورودِ جدید موقتاً متوقف می‌شود (خروج‌ها و پوزیشن‌های باز دست نمی‌خورند). در ریزش، «تخفیف از NAV» اغلب ظاهری است (قیمت زودتر از NAV می‌افتد). ۰ = خاموش. برای داده‌ای با اسنپ‌شات‌های کم، مقدار را بزرگ‌تر از نوسان عادی بگذارید."><label>فیلتر ریزش: افت گروه ≥ ٪</label>
         <input id="disc-crashdrop" type="number" step="0.1" min="0" value="1.5" style="width:70px"></div>
+      <div class="bbt-field" title="فیلتر صعود بازار (قرینهٔ فیلتر ریزش، با همان پنجره، توقف موقت و گروه): اگر میانگین قیمتِ صندوق‌های گروه در «پنجره» بیش از این‌قدر درصد رشد کرده باشد، ورود و جابه‌جاییِ جدید موقتاً متوقف می‌شود (پوزیشن‌های باز دست نمی‌خورند). در رالی، حبابِ صندوق‌های پرطرفدار باز می‌شود و «تخفیف» صندوقِ ارزان اغلب واقعی نیست. ۰ = خاموش."><label>فیلتر صعود: رشد گروه ≥ ٪</label>
+        <input id="disc-rallyrise" type="number" step="0.1" min="0" value="0" style="width:70px"></div>
       <div class="bbt-field" title="افت قیمتِ گروه در این‌قدر دقیقهٔ اخیر سنجیده می‌شود (نسبت به آخرین قیمتِ ثبت‌شده در/قبل از آن لحظه؛ اگر در همین روز نباشد، آخرین قیمت روز قبل). مثلاً ۳۰ = «در نیم‌ساعت اخیر ریزش سریع نباشد»."><label>پنجرهٔ ریزش (دقیقه)</label>
         <input id="disc-crashwin" type="number" step="5" min="1" value="30" style="width:70px"></div>
       <div class="bbt-field" title="توقف موقت: پس از دیده شدن ریزش، ورودِ جدید تا این‌قدر دقیقه ممنوع می‌ماند؛ ۰ = فقط در همان لحظهٔ ریزش."><label>توقف موقت پس از ریزش (دقیقه)</label>
@@ -6717,7 +6719,7 @@ function discParams() {
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
     imin: v('disc-imin'), mrlag: v('disc-mrlag'),
     fillmode: v('disc-fillmode'), fillswitch: v('disc-fillswitch'), fillminhold: v('disc-fillminhold'), fillage: v('disc-fillage'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
-    crashdrop: v('disc-crashdrop'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
+    crashdrop: v('disc-crashdrop'), rallyrise: v('disc-rallyrise'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'), partbasis: v('disc-partbasis'), delay: v('disc-delay'),
     buyfee: v('disc-buyfee'), sellfee: v('disc-sellfee'),
@@ -7788,7 +7790,7 @@ function discCrashHtml(res) {
   if (!c) return '';
   const top = (c.per_fund || []).filter(x => x.blocked_pct > 0).sort((a, b) => b.blocked_pct - a.blocked_pct).slice(0, 6)
     .map(x => `${x.symbol} ${discLtr(x.blocked_pct + '%')}`).join(' · ');
-  return `<div class="dv-note" style="font-size:11px;color:var(--sub);margin-top:6px" title="سهمی از لحظه‌ها که به‌خاطر ریزش گروه، ورودِ جدید ممنوع بود">🛑 فیلتر ریزش بازار: ${discLtr(c.blocked_share_pct + '%')} از لحظه‌ها ورود ممنوع بود (${discLtr(c.blocked_snapshots + ' از ' + c.snapshots)})${top ? ' — بیشتر: ' + top : ''}. اگر عدد خیلی کم است، آستانه را کمتر یا پنجره را کوتاه‌تر کنید؛ اگر خیلی زیاد است، آستانه را بالاتر ببرید.</div>`;
+  return `<div class="dv-note" style="font-size:11px;color:var(--sub);margin-top:6px" title="سهمی از لحظه‌ها که به‌خاطر ریزش یا صعود سریع گروه، ورودِ جدید ممنوع بود">🛑 فیلتر بازار: ${discLtr(c.blocked_share_pct + '%')} از لحظه‌ها ورود ممنوع بود (${discLtr(c.blocked_snapshots + ' از ' + c.snapshots)}${c.rally_share_pct != null ? '؛ ریزش ' + discLtr(c.fall_share_pct + '%') + '، صعود ' + discLtr(c.rally_share_pct + '%') : ''})${top ? ' — بیشتر: ' + top : ''}. اگر عدد خیلی کم است، آستانه را کمتر یا پنجره را کوتاه‌تر کنید؛ اگر خیلی زیاد است، آستانه را بالاتر ببرید.</div>`;
 }
 
 // where did the profit come from: NAV moves vs price/NAV convergence, minus spread and fees
@@ -8341,7 +8343,7 @@ const DS_VAL = {
 const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_age_days: 'سن NAV', max_nav_age_min: 'سن NAV (دقیقه)', mr_center: 'مرکز', mr_window_days: 'پنجره',
   mr_horizon_days: 'افق', mr_min_score: 'امتیاز≥', entry_discount_pct: 'ورود', exit_discount_pct: 'خروج', index_entry_pct: 'ورود شاخص',
   index_exit_pct: 'خروج شاخص', max_hold_days: 'نگه‌داری', stop_loss_pct: 'حد ضرر', stop_mode: 'نوع حد', position_pct: 'سهم پوزیشن',
-  crash_drop_pct: 'ریزش≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
+  crash_drop_pct: 'ریزش≥', rally_rise_pct: 'صعود≥', crash_window_min: 'پنجرهٔ ریزش', crash_cooldown_min: 'توقف', crash_scope: 'گروه ریزش',
   session_mode: 'جلسه', session_start: 'شروع جلسه', session_end: 'پایان جلسه', index_min_share: 'حداقل سهم شاخص', mr_lag: 'فاصلهٔ جفت',
   fill_mode: 'پر کردن', fill_switch_pct: 'نگه‌داری: برتری≥', fill_min_hold_min: 'نگه‌داری: حداقل زمان', fill_quote_age_min: 'عمر قیمت', fill_max_rel_pct: 'پر کردن: حباب≤', fill_exit_rel_pct: 'پر کردن: فروش≥',
   require_fresh: 'قیمت تازه', participation_pct: 'سقف حجم', participation_basis: 'مبنای حجم', exec_delay_snaps: 'تأخیر اجرا', half_spread_pct: 'نیم‌اسپرد', buy_fee: 'کارمزد خرید', sell_fee: 'کارمزد فروش'};
@@ -8349,7 +8351,7 @@ const DS_SHORT = {entry_mode: 'حالت', baseline_days: 'تعدیل', max_nav_a
 const DS_QKEY = {entry_mode: 'entrymode', baseline_days: 'base', max_nav_age_days: 'navage', max_nav_age_min: 'navmin', mr_center: 'mrcenter',
   mr_window_days: 'mrwin', mr_horizon_days: 'mrhor', mr_min_score: 'mrmin', entry_discount_pct: 'entry', exit_discount_pct: 'exit',
   index_entry_pct: 'ientry', index_exit_pct: 'iexit', max_hold_days: 'hold', stop_loss_pct: 'stop', stop_mode: 'stopmode', position_pct: 'pos',
-  crash_drop_pct: 'crashdrop', crash_window_min: 'crashwin', crash_cooldown_min: 'crashcool', crash_scope: 'crashscope',
+  crash_drop_pct: 'crashdrop', rally_rise_pct: 'rallyrise', crash_window_min: 'crashwin', crash_cooldown_min: 'crashcool', crash_scope: 'crashscope',
   session_mode: 'smode', session_start: 'sstart', session_end: 'send', index_min_share: 'imin', mr_lag: 'mrlag', require_fresh: 'fresh',
   participation_pct: 'part', participation_basis: 'partbasis', exec_delay_snaps: 'delay', half_spread_pct: 'spread', buy_fee: 'buyfee', sell_fee: 'sellfee', fill_mode: 'fillmode',
   fill_switch_pct: 'fillswitch', fill_min_hold_min: 'fillminhold', fill_quote_age_min: 'fillage', fill_max_rel_pct: 'fillmax', fill_exit_rel_pct: 'fillexit'};
@@ -8357,7 +8359,7 @@ const DS_FORM = {entry_mode: 'disc-entrymode', baseline_days: 'disc-base', mr_ce
   mr_window_days: 'disc-mrwin', mr_horizon_days: 'disc-mrhor', mr_min_score: 'disc-mrmin', entry_discount_pct: 'disc-entry',
   exit_discount_pct: 'disc-exit', index_entry_pct: 'disc-ientry', index_exit_pct: 'disc-iexit', max_hold_days: 'disc-hold',
   stop_loss_pct: 'disc-stop', stop_mode: 'disc-stopmode', position_pct: 'disc-pos',
-  crash_drop_pct: 'disc-crashdrop', crash_window_min: 'disc-crashwin', crash_cooldown_min: 'disc-crashcool',
+  crash_drop_pct: 'disc-crashdrop', rally_rise_pct: 'disc-rallyrise', crash_window_min: 'disc-crashwin', crash_cooldown_min: 'disc-crashcool',
   crash_scope: 'disc-crashscope', session_mode: 'disc-smode', session_start: 'disc-sstart', session_end: 'disc-send',
   index_min_share: 'disc-imin', mr_lag: 'disc-mrlag', require_fresh: 'disc-fresh', participation_pct: 'disc-part', participation_basis: 'disc-partbasis', exec_delay_snaps: 'disc-delay',
   half_spread_pct: 'disc-spread', buy_fee: 'disc-buyfee', sell_fee: 'disc-sellfee',
@@ -8641,7 +8643,7 @@ function discRelevance() {
   if (!['best', 'hold'].includes(fill)) why(['disc-fillage', 'disc-fillmax'], 'پر کردن سرمایهٔ بیکار خاموش است');
   if (fill !== 'best') why(['disc-fillexit'], 'فقط برای «پر کردن با بهترین صندوق»');
   if (val('disc-mrcenter') === 'off') why(['disc-mrwin', 'disc-mrhor', 'disc-mrmin', 'disc-mrlag'], 'فیلتر بازگشت به میانگین خاموش است');
-  if (!(+val('disc-crashdrop') > 0)) why(['disc-crashwin', 'disc-crashcool', 'disc-crashscope'], 'فیلتر ریزش خاموش است (آستانه ۰)');
+  if (!(+val('disc-crashdrop') > 0) && !(+val('disc-rallyrise') > 0)) why(['disc-crashwin', 'disc-crashcool', 'disc-crashscope'], 'فیلترهای ریزش و صعود خاموش‌اند (آستانه ۰)');
   if (val('disc-smode') !== 'fixed') why(['disc-sstart', 'disc-send'], 'ساعت جلسه خودکار است');
   if (!(+val('disc-part') > 0)) why(['disc-partbasis'], 'سقف حجم نامحدود (۰) است');
   DISC_REL_IDS.forEach(id => {
@@ -8658,7 +8660,7 @@ function discRelevance() {
   });
 }
 document.addEventListener('change', e => { if (e.target && e.target.id && e.target.id.startsWith('disc-')) discRelevance(); });
-document.addEventListener('input', e => { if (e.target && e.target.id && /^disc-(stop|crashdrop|part)$/.test(e.target.id)) discRelevance(); });
+document.addEventListener('input', e => { if (e.target && e.target.id && /^disc-(stop|crashdrop|rallyrise|part)$/.test(e.target.id)) discRelevance(); });
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(discRelevance, 0));
 else setTimeout(discRelevance, 0);
 
