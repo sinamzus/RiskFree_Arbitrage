@@ -8,7 +8,7 @@ are known.
 
 Steps (from the project folder):
 
-    python tools/import_nav_feed.py --inspect "C:\\...\\NAV data\\etf_nav_all.csv"
+    python tools/import_nav_feed.py --inspect "C:\\...\\NAV data\\etf_nav_all.csv.gz"   (.csv or .csv.gz)
         shows the columns found and a few parsed rows — nothing is written.
     python tools/import_nav_feed.py "C:\\...\\NAV data\\etf_nav_all.csv"
         imports into the table ``nav_feed`` of data/arbitrage.db: one row per NAV change of a fund (the first report
@@ -27,6 +27,7 @@ import bisect
 import calendar
 import collections
 import csv
+import gzip
 import re
 import sqlite3
 import sys
@@ -111,8 +112,15 @@ def _ts(d: int, t: int) -> int:
     return _ord(d) * 86400 + _secs(t)
 
 
+def _open(path: Path):
+    """The CSV as text — plain or gzip-compressed (.gz), read as a stream (the file is never unpacked to disk)."""
+    if path.suffix.lower() == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8-sig", newline="")
+    return open(path, encoding="utf-8-sig", newline="")
+
+
 def inspect(path: Path, n: int = 8) -> None:
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with _open(path) as f:
         rd = csv.reader(f)
         header = next(rd)
         cols = _columns(header)
@@ -140,11 +148,13 @@ def import_feed(path: Path, db_path: Path) -> None:
         pass
     known = {int(r[0]) for r in conn.execute("SELECT DISTINCT symbol_id FROM nav_intraday")} \
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name='nav_intraday'").fetchone() else set()
-    by_sid: dict[int, list] = collections.defaultdict(list)
+    # per fund: (nav, nav_date, nav_time) -> earliest (report date, report time, event). Only the distinct NAV
+    # changes are held in memory, so a full-year file of every snapshot fits easily.
+    by_sid: dict[int, dict] = collections.defaultdict(dict)
     total = bad = unmatched = 0
     unmatched_names = collections.Counter()
     t0 = time.time()
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with _open(path) as f:
         rd = csv.reader(f)
         header = next(rd)
         cols = _columns(header)
@@ -176,20 +186,20 @@ def import_feed(path: Path, db_path: Path) -> None:
                     unmatched_names[row[cols["symbol"]]] += 1
                 continue
             ev = row[cols["event"]] if "event" in cols else ""
-            by_sid[sid].append((rep[0], rep[1], nav, nt[0], nt[1], ev))
+            key = (nav, nt[0], nt[1])
+            seen = by_sid[sid].get(key)
+            if seen is None or (rep[0], rep[1]) < (seen[0], seen[1]):
+                by_sid[sid][key] = (rep[0], rep[1], ev)
             if total % 500_000 == 0:
                 print(f"  {total:,} rows read ({time.time() - t0:.0f}s)", flush=True)
     kept = 0
     conn.execute("DELETE FROM nav_feed WHERE symbol_id IN (%s)" % ",".join(str(s) for s in by_sid) if by_sid else
                  "SELECT 1")
-    for sid, rows in by_sid.items():
-        rows.sort(key=lambda r: (r[0], r[1]))
-        out, prev = [], None
-        for r in rows:
-            key = (r[2], r[3], r[4])
-            if key != prev:                   # first report of each (nav, nav_time): when it became known
-                out.append((sid,) + r)
-                prev = key
+    for sid, firsts in by_sid.items():
+        # first report of each (nav, nav_time): the moment it became known (later repeats — MW snapshots that
+        # re-send an older NAV — are not new information)
+        out = sorted(((sid, rd_, rt_, nav, nd, nt, ev) for (nav, nd, nt), (rd_, rt_, ev) in firsts.items()),
+                     key=lambda r: (r[1], r[2]))
         conn.executemany("INSERT INTO nav_feed VALUES (?,?,?,?,?,?,?)", out)
         kept += len(out)
     conn.commit()
@@ -260,7 +270,7 @@ def compare(db_path: Path, max_examples: int = 8) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("csv", nargs="?", help="etf_nav_all.csv or etf_nav_changes.csv")
+    ap.add_argument("csv", nargs="?", help="etf_nav_all.csv(.gz) or etf_nav_changes.csv(.gz)")
     ap.add_argument("--db", default=str(DEFAULT_DB))
     ap.add_argument("--inspect", action="store_true", help="show the columns and a few parsed rows only")
     ap.add_argument("--compare", action="store_true", help="compare the old NAV dump with the imported feed")
