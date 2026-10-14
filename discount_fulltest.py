@@ -1652,6 +1652,66 @@ def test_warmup(R: Results, db):
           st2.dates[0] == all_dates[0] and not st2.warmup["shifted"], f"{st2.dates[0]} vs {all_dates[0]}")
 
 
+def test_nav_feed(R: Results, db_path: str):
+    """With the fine-grained NAV feed imported, every NAV the backtest sees is the one RECEIVED by that instant (not
+    the dump's sampled copy); the independent verifier reads the feed the same way, on its own."""
+    import shutil as _sh
+    import json as _js
+    import nav_feed as NF
+    import verify_independent as VI
+    g = "NAV ریزدانه (feed)"
+    p2 = db_path + ".feed.db"
+    _sh.copyfile(db_path, p2)
+    db = _db(p2)
+    _fake_tse_from_dump(db, n_days=40)
+    p = _base(fill_mode="hold", dataset="hybrid", fill_max_rel_pct=0.3, position_pct=50, participation_pct=0.0,
+              fill_min_hold_min=0)
+    r0 = _js.loads(_js.dumps(_run(db, p), default=str))              # before the feed: the dump's NAVs
+    # the feed: every dump NAV (+0.1 %) RECEIVED 20 s after the dump shows it, so at a dump instant only the
+    # previous one is known; plus an MW re-send of a stale NAV that must never win over a newer one
+    with db._conn() as conn:
+        conn.executescript(__import__("tools.import_nav_feed", fromlist=["SCHEMA"]).SCHEMA)
+        rows = conn.execute("SELECT symbol_id, date, time, nav FROM nav_intraday WHERE nav>0").fetchall()
+        feed = []
+        for sid, d, t, nav in rows:
+            s = (t // 10000) * 3600 + (t // 100 % 100) * 60 + t % 100 + 20
+            feed.append((sid, d, (s // 3600) * 10000 + (s // 60 % 60) * 100 + s % 60, nav * 1.001, d, t, "N2"))
+        conn.executemany("INSERT INTO nav_feed VALUES (?,?,?,?,?,?,?)", feed)
+        sid0, d0, t0 = rows[len(rows) // 2][:3]
+        conn.execute("INSERT INTO nav_feed VALUES (?,?,?,?,?,?,?)", (sid0, d0, t0, 1.0, 20000101, 90000, "MW"))
+    NF._VER.clear()                           # (the 2-second memo of the feed's fingerprint)
+    r1 = _js.loads(_js.dumps(_run(db, p), default=str))
+    ns = r1.get("nav_source") or {}
+    bad, n = [], 0
+    for t in r1["trades"]:
+        sid = next(f[0] for f in FUNDS if f[1] == t["symbol"])
+        k = NF.known_at(db, sid, t["entry_date"], t["entry_time"])
+        n += 1
+        if k is None or abs(k[0] - t["nav_entry"]) > 1e-6 * k[0]:
+            bad.append(f"{t['symbol']} {t['entry_date']} {t['entry_time']}: {t['nav_entry']} ≠ {k}")
+    R.add(g, "با feed، NAV هر معامله همان NAV دریافت‌شده تا آن لحظه است (نه نمونهٔ دادهٔ قبلی)",
+          ns.get("source") == "feed" and not bad and n > 0 and ns.get("nav_changed_pct", 0) > 50,
+          "؛ ".join(bad[:2]) or f"{n} معامله؛ {ns.get('nav_changed_pct')}% سطرها NAV دیگری گرفتند")
+    k = NF.known_at(db, sid0, d0, t0)
+    R.add(g, "NAV کهنه‌ای که دوباره فرستاده شود جای NAV جدیدتر را نمی‌گیرد؛ NAV دریافت‌نشده دیده نمی‌شود",
+          k is not None and k[0] != 1.0 and k[1] != 20000101, f"{k}")
+    rep1, rep0 = VI.verify(p2, r1), VI.verify(p2, r0)
+    fails0 = [c["name"] for c in rep0["checks"] if c["status"] == "fail"]
+    R.add(g, "بررسی مستقل feed را خودش می‌خواند: نتیجهٔ با feed درست است و نتیجهٔ با NAV قدیمی رد می‌شود",
+          rep1["ok"] and not rep0["ok"] and any("NAV" in x for x in fails0),
+          "؛ ".join(f"{c['name']}: {c['examples'][:1]}" for c in rep1["checks"] if c["status"] == "fail") or str(fails0))
+    with db._conn() as conn:                  # a re-import (even one correcting values in place) must be picked up
+        conn.execute("UPDATE nav_feed SET nav = nav * 1.01")
+    NF._VER.clear()                           # (the 2-second memo of the fingerprint)
+    r2 = _run(db, p)
+    R.add(g, "ورود دوبارهٔ feed بدون پاک کردن کش اعمال می‌شود", _sig(r2) != _sig(r1), "")
+    for ext in ("", "-wal", "-shm"):
+        try:
+            os.remove(p2 + ext)
+        except OSError:
+            pass
+
+
 def _run_range(db, p: D.DiscountParams, start=None, end=None) -> dict:
     return D.run_discount_backtest(db, None, None, start, end, p)
 
@@ -2335,6 +2395,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),
              ("NAV به‌روز", lambda: test_stale_nav_no_trade(R, db)),
              ("گرم‌شدن", lambda: test_warmup(R, db)),
+             ("NAV ریزدانه (feed)", lambda: test_nav_feed(R, path)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: (test_tse_dataset(R, path), test_same_instant_sales(R))),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),

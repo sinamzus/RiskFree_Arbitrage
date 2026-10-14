@@ -292,13 +292,44 @@ def _raw_for(db, sid: int, start: int | None, end: int | None, p: "DiscountParam
             raw, book = TD.load_raw(real, sid, None, None, p.tse_grid_sec)
         else:
             raw, book = TD.load_hybrid(real, sid, None, None)
+        raw = _feed_nav(real, sid, raw, (p.dataset, p.tse_grid_sec if p.dataset == "tse" else 0))
         if start or end:
             ds = [r[0] for r in raw]
             a = _bs.bisect_left(ds, start) if start else 0
             b = _bs.bisect_right(ds, end) if end else len(raw)
             raw = raw[a:b]
         return _dedupe(raw), book
-    return _dedupe(db.get_nav_intraday(sid, start, end)), None
+    return _dedupe(_feed_nav(db, sid, db.get_nav_intraday(sid, start, end), ("dump", start, end))), None
+
+
+NAV_SOURCE: dict = {}       # fund -> statistics of the NAV source of its latest load (see nav_feed.overlay)
+
+
+def _feed_nav(db, sid: int, raw: list, key: tuple) -> list:
+    """The NAV known at each row's instant from the fine-grained feed (``nav_feed``) when it has the fund — it
+    carries the moment every NAV was RECEIVED, so no row can show a NAV before it was known. Else the dump's."""
+    import nav_feed as NF
+    k = key + (len(raw), tuple(raw[0][:2]) if raw else None, tuple(raw[-1][:2]) if raw else None)
+    out, st = NF.overlay(db, sid, raw, k)
+    NAV_SOURCE[sid] = st
+    return out
+
+
+def _nav_source_info(loaded: list[dict]) -> dict:
+    """Where the backtest's NAVs came from: the feed (NAV known at each instant) or the sampled dump."""
+    per = []
+    for l in loaded:
+        st = NAV_SOURCE.get(l["sid"]) or {}
+        per.append({"symbol": l.get("label"), "feed": bool(st.get("feed")), "first_report": st.get("first_report"),
+                    "rows_feed": st.get("rows_feed", 0), "rows_before_feed": st.get("rows_before_feed", 0),
+                    "rows_nav_changed": st.get("rows_nav_changed", 0)})
+    n_feed = sum(x["rows_feed"] for x in per)
+    return {"source": "feed" if per and all(x["feed"] for x in per) else ("mixed" if any(x["feed"] for x in per)
+                                                                          else "dump"),
+            "funds_feed": sum(1 for x in per if x["feed"]), "funds": len(per),
+            "rows_feed": n_feed, "rows_before_feed": sum(x["rows_before_feed"] for x in per),
+            "nav_changed_pct": round(sum(x["rows_nav_changed"] for x in per) / n_feed * 100, 2) if n_feed else 0.0,
+            "per_fund": per}
 
 
 def _dedupe(raw: list) -> list:
@@ -2545,6 +2576,7 @@ def run_discount_backtest(db, cats: list[str] | None = None, symbols: list[str] 
         "params": asdict(p),
         "period": [d0, d1],
         "warmup": warm_info,
+        "nav_source": _nav_source_info(loaded),
         "signals": len({(t.symbol, t.entry_date, t.entry_time) for t in raw_trades}),
         "trades": trade_dicts,
         "loss_causes": loss_causes,

@@ -83,15 +83,48 @@ class _Raw:
         return with_tse or sids
 
     def nav_rows(self, sid: int):
-        """(timestamps, rows) of the NAV dump: rows = (date, time, nav, nav_date, nav_time, last, vol)."""
+        """(timestamps, rows) of the NAV dump: rows = (date, time, nav, nav_date, nav_time, last, vol) — with the NAV
+        (and its date / time) the fine-grained feed had RECEIVED by that instant when the feed has the fund."""
         hit = self._nav.get(sid)
         if hit is None:
             rows = self.conn.execute(
                 "SELECT date, time, nav, nav_date, nav_time, last, vol FROM nav_intraday WHERE symbol_id=? "
                 "ORDER BY date, time", (sid,)).fetchall()
+            feed = self.feed(sid)
+            if feed:
+                frep, fbest = feed
+                out = []
+                for r in rows:
+                    j = bisect.bisect_right(frep, _ts(r[0], r[1])) - 1
+                    if r[2] and r[2] > 0:
+                        if j >= 0:
+                            nav, nd, nt = fbest[j]
+                            r = (r[0], r[1], nav, nd, nt, r[5], r[6])
+                        else:                 # before the fund's first feed report: no NAV known yet
+                            r = (r[0], r[1], 0.0, r[3], r[4], r[5], r[6])
+                    out.append(r)
+                rows = out
             hit = ([_ts(r[0], r[1]) for r in rows], rows)
             self._nav[sid] = hit
         return hit
+
+    def feed(self, sid: int):
+        """(report instants, NAV known after each report) of the feed, None without one. Known = the reported NAV
+        that refers to the LATEST moment (nav_time) among everything received so far."""
+        if not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='nav_feed'").fetchone():
+            return None
+        rows = self.conn.execute("SELECT rdate, rtime, nav, nav_date, nav_time FROM nav_feed WHERE symbol_id=? "
+                                 "AND nav>0 ORDER BY rdate, rtime", (sid,)).fetchall()
+        if not rows:
+            return None
+        rep, best, cur, ck = [], [], None, None
+        for rd, rt, nav, nd, nt in rows:
+            k = _ts(nd, nt) if nd else -1
+            if cur is None or k >= ck:
+                cur, ck = (float(nav), int(nd or 0), int(nt or 0)), k
+            rep.append(_ts(rd, rt))
+            best.append(cur)
+        return rep, best
 
     def _blob(self, sid: int, date: int, kind: str) -> list:
         if not self.has_tse:
@@ -196,7 +229,7 @@ def verify(db_path: str, res: dict) -> dict:
         ("buy_depth", "units bought ≤ visible asks", hybrid),
         ("sell", "sale price = walking the bids at the sale instant", hybrid),
         ("sell_depth", "units sold ≤ visible bids (except the final liquidation)", hybrid),
-        ("nav_in", "NAV at entry = NAV-dump row at that instant, within the age limit", True),
+        ("nav_in", "NAV at entry = the NAV known at that instant (feed if imported, else dump), within the age limit", True),
         ("nav_out", "NAV at sale = that of the fund's latest tradable quote, and current", True),
         ("limit", "entry average price within the entry limit (vs NAV)", float(p.get("baseline_days", 0)) == 0),
         ("window", "trade instants inside the market window", hybrid),

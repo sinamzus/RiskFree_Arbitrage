@@ -8253,10 +8253,12 @@ function renderDiscBacktest(res, p) {
   const rs = s.exit_reasons || {};
   const reasonTxt = Object.keys(rs).map(k => ({signal:'خروج سیگنال', time:'زمان', stop:'حد ضرر', end:'پایان داده'}[k] || k) + ' ' + rs[k]).join(' · ') || '—';
   const per = res.period ? `${gregIntToJalaliStr(res.period[0])} تا ${gregIntToJalaliStr(res.period[1])} (${s.period_days || 0} روز)` : '';
+  const ns = res.nav_source || {};
+  const navSrcTxt = ns.source ? ` · <span title="${ns.source === 'dump' ? 'NAV از دادهٔ نمونه‌برداری‌شدهٔ قبلی (nav_intraday) خوانده شد؛ دادهٔ ریزدانهٔ NAV برای این صندوق‌ها وارد نشده است.' : 'NAV هر لحظه همان NAV دریافت‌شده تا آن لحظه از دادهٔ ریزدانه (nav_feed) است؛ ' + (ns.nav_changed_pct || 0) + '٪ لحظه‌ها NAVی متفاوت با دادهٔ قبلی گرفتند' + (ns.rows_before_feed ? '؛ ' + ns.rows_before_feed + ' لحظه پیش از اولین NAV دریافت‌شده بود و معامله‌پذیر نبود' : '') + '.'}">NAV: ${ns.source === 'feed' ? 'ریزدانه ✓' : ns.source === 'mixed' ? 'ریزدانه برای ' + ns.funds_feed + ' از ' + ns.funds + ' صندوق' : 'دادهٔ قبلی'}</span>` : '';
   const wu = res.warmup || {};
   const warmTxt = wu.shifted ? ` · <span title="معمولِ صندوق‌ها و امتیاز بازگشت به ${wu.days} روز معاملاتی تاریخچه نیاز دارند؛ بازده و معیارهای مقایسه از پایان گرم‌شدن سنجیده می‌شوند (در عمل واقعی این تاریخچه از قبل موجود است).">⏳ ${wu.days} روز اول گرم‌شدن کنار گذاشته شد</span>` : '';
   document.getElementById('disc-cards').innerHTML = `
-    <div class="disc-h">نتیجه — ${discScopeText(p.cats, p.symbols)} · ${res.funds_tested} صندوق دارای داده${res.funds_skipped ? ' (' + res.funds_skipped + ' بدون داده)' : ''} · ${per}${warmTxt}</div>
+    <div class="disc-h">نتیجه — ${discScopeText(p.cats, p.symbols)} · ${res.funds_tested} صندوق دارای داده${res.funds_skipped ? ' (' + res.funds_skipped + ' بدون داده)' : ''} · ${per}${warmTxt}${navSrcTxt}</div>
     <div class="opt-metric-row">
     ${discCard('سرمایهٔ اولیه', discM(s.initial_capital) + ' میلیون ﷼')}
     ${discCard('💰 سرمایهٔ نهایی', discM(s.final_capital) + ' میلیون ﷼', cls)}
