@@ -2075,6 +2075,16 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
             R.add("مرورگر", "بستن یک تب فقط همان را حذف می‌کند", pg.locator("#disc-res-bar .dres-tab").count() == 1
                   and pg.locator("#disc-cards .opt-mc").count() > 0, "")
+            # the independent verification opens its own result tab (the backtest tab stays)
+            pg.click("#disc-verify-btn"); pg.wait_for_selector("#disc-verify .disc-tbl tbody tr", timeout=90000)
+            vt = pg.locator("#disc-res-bar .dres-tab").count()
+            vtitle = pg.locator("#disc-res-bar .dres-tab.active .dres-t").inner_text()
+            vrows = pg.locator("#disc-verify .disc-tbl tbody tr").count()
+            pg.locator("#disc-res-bar .dres-tab").first.click(); pg.wait_for_selector("#disc-cards .opt-mc")
+            R.add("مرورگر", "بررسی مستقل در تب جدید خودش نمایش داده می‌شود و تب بک‌تست سر جایش می‌ماند",
+                  vt == 2 and "بررسی مستقل ✅" in vtitle and vrows >= 10 and pg.locator("#disc-verify .disc-tbl").count() == 0,
+                  f"{vt} تب، عنوان «{vtitle}»، {vrows} ردیف")
+            pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
             pg.click("#disc-tse-btn"); pg.wait_for_selector("#disc-tse .disc-tbl tbody tr")
             R.add("مرورگر", "پنل دادهٔ TSE باز می‌شود و صندوق‌های طلا را با روزهای NAV نشان می‌دهد",
                   pg.locator("#disc-tse .disc-tbl tbody tr").count() == 4, pg.locator("#disc-tse").inner_text()[:120])

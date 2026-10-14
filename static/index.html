@@ -6621,7 +6621,7 @@ async function discLoadCats(force) {
 //  so element ids stay unique. A long-running job keeps writing into ITS tab's (detached) panels and
 //  activates that tab when it finishes.
 // ---------------------------------------------------------------------------
-const DISC_RES_PANELS = [['disc-tse', 1], ['disc-stats', 1], ['disc-opt', 1], ['disc-ft', 1], ['disc-val', 1], ['disc-bub', 1],
+const DISC_RES_PANELS = [['disc-tse', 1], ['disc-stats', 1], ['disc-opt', 1], ['disc-ft', 1], ['disc-val', 1], ['disc-verify', 1], ['disc-bub', 1],
   ['disc-cards', 0], ['disc-persym', 1], ['disc-trades', 0]];
 let _discTabs = [], _discTabActive = null, _discTabSeq = 0;
 
@@ -6649,7 +6649,7 @@ function discTabShow(t) {
   discTabsRender();
 }
 
-// kind: 'backtest' | 'stats' | 'optimize' | 'validation' | 'selftest' | 'fulltest' | 'bubble'; opts.reuse: one tab per kind
+// kind: 'backtest' | 'stats' | 'optimize' | 'validation' | 'verify' | 'selftest' | 'fulltest' | 'bubble'; opts.reuse: one tab per kind
 function discNewTab(kind, title, opts) {
   opts = opts || {};
   if (opts.reuse) {
@@ -8528,8 +8528,12 @@ async function discStudyPayload() {
 }
 
 async function discVerify() {
-  const btn = document.getElementById('disc-verify-btn'), panel = document.getElementById('disc-push');
+  const btn = document.getElementById('disc-verify-btn');
   btn.disabled = true; const old = btn.textContent; btn.textContent = '⏳ در حال بررسی ...';
+  // its own result tab (the panel object of THAT tab: written even if another tab is shown meanwhile)
+  const tab = discNewTab('verify', 'بررسی مستقل');
+  discTabSet(tab, 'بررسی مستقل', true);
+  const panel = tab.panels['disc-verify'];
   panel.style.display = 'block'; panel.innerHTML = '<div class="ob-p">⏳ بازسازی اردربوک و NAV هر معامله از دادهٔ خام ...</div>';
   const FA = {
     'buy price = walking the asks at the entry instant (book rebuilt from raw events)': 'قیمت خرید = پیمودن صف فروش در لحظهٔ ورود (اردربوک بازسازی‌شده از رویدادهای خام)',
@@ -8559,9 +8563,12 @@ async function discVerify() {
         ${bh}${(j.notes || []).map(n => `<div class="dv-note">${discLtr(n)}</div>`).join('')}
         <div class="dv-note">این بررسی با کدی جدا انجام می‌شود که هیچ بخشی از موتور بک‌تست را به کار نمی‌برد؛ گزارش آن هم با «ارسال نتایج» فرستاده می‌شود.</div>`;
     }
+    discTabSet(tab, j.error ? 'بررسی مستقل ❌' : (j.ok ? 'بررسی مستقل ✅' : 'بررسی مستقل ❌'), false);
   } catch (e) {
     panel.innerHTML = `<div class="dv-head bad">❌ بررسی ناموفق: ${e.message}</div>`;
+    discTabSet(tab, 'بررسی مستقل ❌', false);
   }
+  if (discTabExists(tab.id) && tab.id !== _discTabActive) discTabActivate(tab.id);
   btn.disabled = false; btn.textContent = old;
 }
 

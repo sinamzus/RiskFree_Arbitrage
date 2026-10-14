@@ -67,6 +67,8 @@ class _Raw:
 
     def __init__(self, path: str):
         self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        self.has_tse = self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tse_raw'"
+                                         ).fetchone() is not None
         self._nav: dict[int, tuple] = {}
         self._events: dict[tuple, list] = {}
         self._wins: dict[int, tuple | None] = {}
@@ -74,6 +76,8 @@ class _Raw:
     def sids_of(self, label: str) -> list[int]:
         rows = self.conn.execute("SELECT symbol_id FROM nav_symbol_map WHERE symbol=?", (label,)).fetchall()
         sids = [int(r[0]) for r in rows]
+        if not self.has_tse:
+            return sids
         with_tse = [s for s in sids if self.conn.execute(
             "SELECT 1 FROM tse_raw WHERE symbol_id=? LIMIT 1", (s,)).fetchone()]
         return with_tse or sids
@@ -90,6 +94,8 @@ class _Raw:
         return hit
 
     def _blob(self, sid: int, date: int, kind: str) -> list:
+        if not self.has_tse:
+            return []
         r = self.conn.execute("SELECT data FROM tse_raw WHERE symbol_id=? AND date=? AND kind=?",
                               (sid, date, kind)).fetchone()
         if r is None or not r[0]:
@@ -118,6 +124,8 @@ class _Raw:
 
     def window(self, date: int) -> tuple[int, int] | None:
         """(first, last) second of the day at which any collected fund traded (non-cancelled TSE trades)."""
+        if date not in self._wins and not self.has_tse:
+            self._wins[date] = None
         if date not in self._wins:
             lo = hi = None
             for (blob,) in self.conn.execute("SELECT data FROM tse_raw WHERE date=? AND kind='trades' AND n>0",
@@ -135,6 +143,8 @@ class _Raw:
     def closes(self, sid: int) -> dict[int, float]:
         """{date: last non-cancelled TSE trade price of the day}."""
         out = {}
+        if not self.has_tse:
+            return out
         for d, blob in self.conn.execute(
                 "SELECT date, data FROM tse_raw WHERE symbol_id=? AND kind='trades' AND n>0 ORDER BY date", (sid,)):
             rows = [r for r in (json.loads(zlib.decompress(blob).decode("utf-8")) if blob else [])
@@ -395,9 +405,11 @@ def verify(db_path: str, res: dict) -> dict:
             cash += v
             low = min(low, cash)
         fin = (res.get("summary") or {}).get("final_capital")
-        if low < -max(1.0, 1e-9 * cash):
+        # the records carry notionals rounded to the rial: up to ~1 rial of rounding per record adds up
+        tol = len(trades) + 1e-9 * float(p.get("initial_capital", 0))
+        if low < -tol:
             C["cash"].bad(f"cash goes down to {low:,.0f}")
-        elif fin is not None and abs(cash - fin) > max(5.0, 1e-9 * fin):
+        elif fin is not None and abs(cash - fin) > tol + 1e-9 * fin:
             C["cash"].bad(f"final capital {fin:,.0f} ≠ initial + records {cash:,.0f}", abs(cash - fin))
         else:
             C["cash"].ok()
@@ -407,7 +419,7 @@ def verify(db_path: str, res: dict) -> dict:
     try:
         d0, d1 = (res.get("period") or [None, None])
         funds = [s for s in (raw.sids_of(lab) for lab in (res.get("fund_labels") or [])) if s]
-        if not funds:
+        if not funds and raw.has_tse:
             funds = [[int(r[0])] for r in raw.conn.execute("SELECT DISTINCT symbol_id FROM tse_raw")]
         series = {s[0]: {d: v for d, v in raw.closes(s[0]).items() if d0 <= d <= d1} for s in funds}
         series = {k: v for k, v in series.items() if v}
