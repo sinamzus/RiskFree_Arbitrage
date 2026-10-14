@@ -53,7 +53,8 @@ CREATE INDEX IF NOT EXISTS ix_navfeed ON nav_feed(symbol_id, rdate, rtime);
 # column names accepted for each field (lower-case; the first found is used)
 CANDIDATES = {
     "symbol_id": ("symbol_id", "symbolid", "sid", "id_symbol"),
-    "symbol": ("symbol", "ticker", "name", "symbol_name", "نماد", "symbol_fa"),
+    "symbol": ("code_fa", "symbol", "ticker", "name", "symbol_name", "نماد", "symbol_fa"),
+    "isin": ("isin",),
     "report": ("report_time",),
     "nav": ("nav",),
     "nav_time": ("nav_time",),
@@ -68,6 +69,12 @@ def parse_ts(s: str):
     """'2026-09-23 09:15:30[.123][+03:30]' -> (YYYYMMDD, HHMMSS) Tehran time, or None (Jalali columns are ignored)."""
     if not s:
         return None
+    if len(s) == 19 and s[4] == "-" and s[10] == " ":          # fast path: 'YYYY-MM-DD HH:MM:SS' (Tehran)
+        try:
+            return (int(s[0:4]) * 10000 + int(s[5:7]) * 100 + int(s[8:10]),
+                    int(s[11:13]) * 10000 + int(s[14:16]) * 100 + int(s[17:19]))
+        except ValueError:
+            pass
     m = _TS.match(s)
     if not m:
         return None
@@ -138,20 +145,24 @@ def inspect(path: Path, n: int = 8) -> None:
 
 
 def import_feed(path: Path, db_path: Path) -> None:
+    """Stream the file (23 M rows are never held in memory): drop each fund's consecutive repeats on the fly into a
+    temporary table, then keep the FIRST report of every (nav, nav_time) of every fund — the moment it became known."""
     conn = sqlite3.connect(db_path, timeout=60)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    conn.execute("CREATE TEMP TABLE stage (symbol_id INTEGER, rk INTEGER, nav REAL, nav_date INTEGER, "
+                 "nav_time INTEGER, event TEXT)")
     names = {}
     try:
         names = {_norm(s): int(i) for i, s in conn.execute("SELECT symbol_id, symbol FROM nav_symbol_map")}
     except sqlite3.Error:
         pass
-    known = {int(r[0]) for r in conn.execute("SELECT DISTINCT symbol_id FROM nav_intraday")} \
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='nav_intraday'").fetchone() else set()
-    # per fund: (nav, nav_date, nav_time) -> earliest (report date, report time, event). Only the distinct NAV
-    # changes are held in memory, so a full-year file of every snapshot fits easily.
-    by_sid: dict[int, dict] = collections.defaultdict(dict)
-    total = bad = unmatched = 0
+    has_dump = bool(conn.execute("SELECT 1 FROM sqlite_master WHERE name='nav_intraday'").fetchone())
+    known = {int(r[0]) for r in conn.execute("SELECT DISTINCT symbol_id FROM nav_intraday")} if has_dump else set()
+    last_key: dict[int, tuple] = {}
+    span: dict[int, list] = {}
+    buf: list = []
+    total = bad = unmatched = staged = 0
     unmatched_names = collections.Counter()
     t0 = time.time()
     with _open(path) as f:
@@ -160,12 +171,16 @@ def import_feed(path: Path, db_path: Path) -> None:
         cols = _columns(header)
         if not {"report", "nav", "nav_time"} <= set(cols) or not ({"symbol_id", "symbol"} & set(cols)):
             sys.exit(f"required columns not found in {header} — run with --inspect")
+        c_nav, c_rep, c_nt = cols["nav"], cols["report"], cols["nav_time"]
+        c_sid, c_sym = cols.get("symbol_id"), cols.get("symbol")
+        c_ev = cols.get("event")
+        sid_of: dict[str, int | None] = {}
         for row in rd:
             total += 1
             try:
-                nav = float(row[cols["nav"]] or 0)
-                rep = parse_ts(row[cols["report"]])
-                nt = parse_ts(row[cols["nav_time"]]) or (0, 0)
+                nav = float(row[c_nav] or 0)
+                rep = parse_ts(row[c_rep])
+                nt = parse_ts(row[c_nt]) or (0, 0)
             except (ValueError, IndexError):
                 bad += 1
                 continue
@@ -173,42 +188,71 @@ def import_feed(path: Path, db_path: Path) -> None:
                 bad += 1
                 continue
             sid = None
-            if "symbol_id" in cols and row[cols["symbol_id"]].strip():
+            if c_sid is not None and row[c_sid].strip():
                 try:
-                    sid = int(float(row[cols["symbol_id"]]))
+                    sid = int(float(row[c_sid]))
                 except ValueError:
                     sid = None
-            if sid is None and "symbol" in cols:
-                sid = names.get(_norm(row[cols["symbol"]]))
+            if sid is None and c_sym is not None:
+                nm = row[c_sym]
+                if nm not in sid_of:
+                    sid_of[nm] = names.get(_norm(nm))
+                sid = sid_of[nm]
             if sid is None:
                 unmatched += 1
-                if "symbol" in cols:
-                    unmatched_names[row[cols["symbol"]]] += 1
+                if c_sym is not None:
+                    unmatched_names[row[c_sym]] += 1
                 continue
-            ev = row[cols["event"]] if "event" in cols else ""
             key = (nav, nt[0], nt[1])
-            seen = by_sid[sid].get(key)
-            if seen is None or (rep[0], rep[1]) < (seen[0], seen[1]):
-                by_sid[sid][key] = (rep[0], rep[1], ev)
-            if total % 500_000 == 0:
+            if last_key.get(sid) == key:      # an MW snapshot repeating the NAV it already showed
+                continue
+            last_key[sid] = key
+            sp = span.get(sid)
+            if sp is None:
+                span[sid] = [rep[0], rep[0]]
+            else:
+                sp[0], sp[1] = min(sp[0], rep[0]), max(sp[1], rep[0])
+            buf.append((sid, rep[0] * 1000000 + rep[1], nav, nt[0], nt[1], row[c_ev] if c_ev is not None else ""))
+            if len(buf) >= 200_000:
+                conn.executemany("INSERT INTO stage VALUES (?,?,?,?,?,?)", buf)
+                staged += len(buf)
+                buf.clear()
+            if total % 1_000_000 == 0:
                 print(f"  {total:,} rows read ({time.time() - t0:.0f}s)", flush=True)
-    kept = 0
-    conn.execute("DELETE FROM nav_feed WHERE symbol_id IN (%s)" % ",".join(str(s) for s in by_sid) if by_sid else
-                 "SELECT 1")
-    for sid, firsts in by_sid.items():
-        # first report of each (nav, nav_time): the moment it became known (later repeats — MW snapshots that
-        # re-send an older NAV — are not new information)
-        out = sorted(((sid, rd_, rt_, nav, nd, nt, ev) for (nav, nd, nt), (rd_, rt_, ev) in firsts.items()),
-                     key=lambda r: (r[1], r[2]))
-        conn.executemany("INSERT INTO nav_feed VALUES (?,?,?,?,?,?,?)", out)
-        kept += len(out)
+    if buf:
+        conn.executemany("INSERT INTO stage VALUES (?,?,?,?,?,?)", buf)
+        staged += len(buf)
+    sids = sorted(span)
+    if sids:
+        conn.execute("DELETE FROM nav_feed WHERE symbol_id IN (%s)" % ",".join(str(s) for s in sids))
+    # first report of each (nav, nav_time): later repeats (MW snapshots re-sending an older NAV) are no news
+    conn.execute("INSERT INTO nav_feed SELECT symbol_id, rk / 1000000, rk % 1000000, nav, nav_date, nav_time, event "
+                 "FROM (SELECT symbol_id, MIN(rk) AS rk, nav, nav_date, nav_time, event FROM stage "
+                 "GROUP BY symbol_id, nav, nav_date, nav_time) ORDER BY symbol_id, rk")
+    kept = conn.execute("SELECT COUNT(*) FROM nav_feed WHERE symbol_id IN (%s)" % (",".join(str(s) for s in sids) or "NULL")).fetchone()[0]
+    conn.execute("DROP TABLE stage")
     conn.commit()
-    print(f"read {total:,} rows ({bad:,} without NAV / unreadable), {unmatched:,} of unknown funds; "
-          f"{len(by_sid)} funds, {kept:,} NAV changes stored in nav_feed ({time.time() - t0:.0f}s)")
+    print(f"read {total:,} rows ({bad:,} without NAV / unreadable), {unmatched:,} rows of funds not in nav_symbol_map; "
+          f"{len(sids)} funds, {kept:,} NAV changes stored in nav_feed ({time.time() - t0:.0f}s)")
+    if sids:
+        print(f"period: {min(v[0] for v in span.values())} .. {max(v[1] for v in span.values())}")
     if known:
-        print(f"funds also in the old dump: {len(set(by_sid) & known)} of {len(by_sid)}")
+        print(f"funds also in the old dump: {len(set(sids) & known)} of {len(sids)}")
+    try:
+        cat = {int(a): b for a, b in conn.execute("SELECT symbol_id, category FROM nav_symbol_category")}
+        inv = {v: k for k, v in names.items()}
+        gold = sorted(s for s, c in cat.items() if c == "gold")
+        if gold:
+            got = [s for s in gold if s in span]
+            print(f"gold funds matched: {len(got)} of {len(gold)}")
+            for s in gold:
+                sp = span.get(s)
+                print(f"   {inv.get(s, s)}: " + (f"{sp[0]} .. {sp[1]}" if sp else "NOT IN THE FILE"))
+    except sqlite3.Error:
+        pass
     if unmatched_names:
-        print("unknown names (most frequent):", unmatched_names.most_common(15))
+        print(f"funds in the file but not in nav_symbol_map ({len(unmatched_names)}), most rows first:",
+              unmatched_names.most_common(25))
 
 
 def compare(db_path: Path, max_examples: int = 8) -> None:
