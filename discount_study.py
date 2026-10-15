@@ -73,7 +73,7 @@ DIMS: dict[str, dict] = {
     "fill_mode":          {"kind": "fast", "label": "سرمایهٔ بیکار (خاموش / پر کردن با بهترین صندوق / همیشه سرمایه‌گذاری و فروش فقط با کاندیدای بهتر)", "choices": ["off", "best", "hold"]},
     "fill_max_rel_pct":   {"kind": "fast", "label": "پر کردن/نگه‌داری: حداکثر حباب نسبی برای خرید ٪", "choices": [-0.3, -0.1, 0.0, 0.1, 0.3, 1.0]},
     "fill_switch_pct":    {"kind": "fast", "label": "نگه‌داری: حداقل برتری کاندیدا برای جابه‌جایی (نقطهٔ درصد)", "choices": [0.3, 0.5, 0.8, 1.2, 2.0]},
-    "fill_min_hold_min":  {"kind": "fast", "label": "نگه‌داری: حداقل زمان پیش از جابه‌جایی (دقیقه)", "choices": [0, 60, 240, 1440, 2880]},
+    "fill_min_hold_min":  {"kind": "fast", "label": "نگه‌داری: حداقل زمان پیش از جابه‌جایی (دقیقه)", "choices": [0, 60, 240, 1440, 2880, 7200, 10080]},
     "fill_quote_age_min": {"kind": "fast", "label": "عمر قیمتِ جاری برای کاندیدا/فروش جابه‌جایی (دقیقه)", "choices": [15, 30, 60, 90], "assumption": True},
     "fill_exit_rel_pct":  {"kind": "fast", "label": "پر کردن: فروش وقتی حباب نسبی ≥ ٪", "choices": [0.1, 0.2, 0.3, 0.5, 1.0]},
     "stop_loss_pct":      {"kind": "fast", "label": "حد ضرر", "choices": [0.0, 1.0, 2.0, 3.0, 5.0]},

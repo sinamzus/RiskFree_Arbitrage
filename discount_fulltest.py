@@ -2394,8 +2394,8 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             pg.click("#disc-sig-btn"); pg.wait_for_selector("#disc-val .disc-tbl tbody tr", timeout=120000)
             srows = pg.locator("#disc-val .disc-tbl").first.locator("tbody tr").count()
             stitle = pg.locator("#disc-res-bar .dres-tab.active .dres-t").inner_text()
-            R.add("مرورگر", "قدرت پیش‌بینی سیگنال در تب خودش: ۳ سیگنال × ۳ افق",
-                  srows == 9 and "قدرت پیش‌بینی" in stitle, f"{srows} ردیف، «{stitle}»")
+            R.add("مرورگر", "قدرت پیش‌بینی سیگنال در تب خودش: ۳ سیگنال × ۴ افق",
+                  srows == 12 and "قدرت پیش‌بینی" in stitle, f"{srows} ردیف، «{stitle}»")
             pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
             grp = pg.locator(".disc-toolbar .dt-grp").count()
             R.add("مرورگر", "دکمه‌ها در گروه‌های اجرا / تحلیل / داده / آزمون / تنظیمات",
