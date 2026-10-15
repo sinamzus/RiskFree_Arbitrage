@@ -2052,6 +2052,26 @@ def test_parallel_study(R: Results, db):
     R.add("بهینه‌سازی موازی", "نتیجهٔ موازی (۲ هسته) دقیقاً همان نتیجهٔ تک‌هسته‌ای است",
           top[1] == top[2] and tm.get("workers") == 2 and not tm.get("parallel_error"),
           f"{len(top[1])} ترکیب برتر؛ timing={tm}")
+    # automatic workers: never more than the free memory holds (each worker holds a copy of the data)
+    st = S.Study(db, None, None, None, None, hp, space, workers=None)
+    o_mem = S._sys_mem
+    try:
+        S._sys_mem = lambda: (2 * 2 ** 30, 1300 * 2 ** 20)          # 2 GB free, this process grew by 1 GB
+        st._rss0 = 300 * 2 ** 20
+        st.workers = 8
+        st._fit_workers()
+        small = (st.workers, st.workers_note)
+        S._sys_mem = lambda: (64 * 2 ** 30, 400 * 2 ** 20)          # plenty of memory
+        st2 = S.Study(db, None, None, None, None, hp, space, workers=None)
+        st2._rss0, st2.workers = 300 * 2 ** 20, 8
+        st2._fit_workers()
+        fixed = S.Study(db, None, None, None, None, hp, space, workers=6)
+        fixed._rss0 = 300 * 2 ** 20
+        fixed._fit_workers()
+    finally:
+        S._sys_mem = o_mem
+    R.add("بهینه‌سازی موازی", "تعداد هستهٔ خودکار به حافظهٔ آزاد محدود می‌شود (عدد دستی دست نمی‌خورد)",
+          small[0] == 1 and small[1] and st2.workers == 8 and fixed.workers == 6, f"{small} / {st2.workers} / {fixed.workers}")
 
 
 def test_validation_hold(R: Results, db):

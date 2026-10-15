@@ -2256,10 +2256,19 @@ def create_app(db, scan_callback=None):
                             "progress": _disc_opt_state["progress"]}), 409
 
         space = clean_space(_get("space") if isinstance(_get("space"), dict) else None)
-        n_samples = _num("n_samples", 400, 20, 5000, int)
+        n_samples = _num("n_samples", 400, 20, 200000, int)
         blocks = _num("blocks", 6, 4, 12, int)
-        max_seconds = _num("max_seconds", 300, 20, 3600)
-        max_universes = _num("max_universes", 20, 1, 200, int)
+        max_seconds = _num("max_seconds", 300, 20, 7 * 86400)
+        max_universes = _num("max_universes", 20, 1, 2000, int)
+        if mode == "study" and body:
+            try:                                   # so tools/run_study.py can repeat it headless (bigger, longer)
+                from pathlib import Path as _P
+                d = _P(__file__).resolve().parent / "analysis_results"
+                d.mkdir(exist_ok=True)
+                (d / "last_study_request.json").write_text(json.dumps(body, ensure_ascii=False, indent=1),
+                                                           encoding="utf-8")
+            except Exception:
+                pass
         objective = str(_get("objective", "robust"))
         seed = _num("seed", 7, 0, 10**6, int)
         workers = _num("workers", 0, 0, 64, int) or None      # 0 = automatic (every core)

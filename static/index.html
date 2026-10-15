@@ -8524,14 +8524,14 @@ async function discStudyBuild() {
       <div class="bbt-field" title="ملاک انتخاب برنده روی دورهٔ آموزش. «پایدار» میانگین بازدهِ بلوک‌ها منهای نصف انحراف معیارشان است تا ترکیبی که فقط در یک بلوک خوب بوده برنده نشود."><label>معیار انتخاب</label>
         <select id="ds-objective" onchange="discStudyCollect()">${Object.entries(sp.objectives).map(([k, l]) => `<option value="${k}" ${k === o.objective ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="bbt-field" title="تعداد ترکیب‌های تصادفیِ متوازن که از کل فضا نمونه‌گیری می‌شود؛ بیشتر = مطالعهٔ دقیق‌تر ولی کندتر"><label>تعداد نمونه</label>
-        <input id="ds-n" type="number" min="20" max="5000" step="50" value="${o.n_samples}" style="width:80px" onchange="discStudyCollect()"></div>
+        <input id="ds-n" type="number" min="20" max="200000" step="50" value="${o.n_samples}" style="width:80px" onchange="discStudyCollect()"></div>
       <div class="bbt-field" title="کل بازه به این تعداد بلوک زمانیِ مساوی تقسیم می‌شود؛ بلوک‌های آخر (طبق «آزمون خارج از نمونه») فقط برای ارزیابی‌اند و هرگز در انتخاب دخالت ندارند. هر بلوک حداقل ۳ روز معاملاتی لازم دارد."><label>تعداد بلوک زمانی</label>
         <input id="ds-blocks" type="number" min="4" max="12" value="${o.blocks}" style="width:64px" onchange="discStudyCollect()"></div>
       <div class="bbt-field" title="سقف زمان اجرا؛ پس از آن جستجو متوقف و تحلیل روی نمونه‌های انجام‌شده ساخته می‌شود"><label>سقف زمان (ثانیه)</label>
-        <input id="ds-sec" type="number" min="20" max="3600" step="30" value="${o.max_seconds}" style="width:80px" onchange="discStudyCollect()"></div>
+        <input id="ds-sec" type="number" min="20" max="604800" step="30" value="${o.max_seconds}" style="width:80px" onchange="discStudyCollect()"></div>
       <div class="bbt-field" title="پارامترهای ساختاری (تعدیل حباب، فیلتر بازگشت، حالت ورود، سن NAV) هر ترکیبشان داده را از نو می‌سازد؛ حداکثر این‌قدر ترکیبِ ساختاری نمونه‌گیری می‌شود."><label>حداکثر ترکیب ساختاری</label>
-        <input id="ds-univ" type="number" min="1" max="200" value="${o.max_universes}" style="width:64px" onchange="discStudyCollect()"></div>
-      <div class="bbt-field" title="چند ترکیب هم‌زمان روی چند هستهٔ پردازنده آزمایش شوند. ۰ = خودکار (حداکثر: همهٔ هسته‌های پردازنده). ۱ = بدون موازی‌سازی. هر هسته یک نسخه از داده را در حافظه نگه می‌دارد؛ اگر حافظه کم است عدد کمتری بدهید. برای اجراهای کوتاه‌تر از ۴۵ ثانیه موازی‌سازی خاموش است."><label>هستهٔ موازی (۰=خودکار)</label>
+        <input id="ds-univ" type="number" min="1" max="2000" value="${o.max_universes}" style="width:64px" onchange="discStudyCollect()"></div>
+      <div class="bbt-field" title="چند ترکیب هم‌زمان روی چند هستهٔ پردازنده آزمایش شوند. ۰ = خودکار: همهٔ هسته‌ها منهای یکی، ولی نه بیش از آنچه حافظهٔ آزاد جا دارد (هر هسته یک نسخه از داده را نگه می‌دارد). هسته‌ها با اولویت پایین اجرا می‌شوند تا لپ‌تاپ قابل‌استفاده بماند. ۱ = بدون موازی‌سازی. برای اجراهای کوتاه‌تر از ۴۵ ثانیه موازی‌سازی خاموش است."><label>هستهٔ موازی (۰=خودکار)</label>
         <input id="ds-workers" type="number" min="0" max="64" value="${o.workers ?? 0}" style="width:64px" onchange="discStudyCollect()"></div>
     </div>
     <div class="dv-note">پارامترهایی که تیک نخورده‌اند روی «مقدار ثابت» همان سطر می‌مانند؛ اگر آن را خالی بگذارید، مقدار فعلیِ فرم (خاکستری در همان ستون) استفاده می‌شود. فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) عمداً جستجو نمی‌شوند؛ حساسیتِ برنده به آن‌ها جداگانه گزارش می‌شود.</div>`;
@@ -9027,7 +9027,7 @@ function renderDiscStudy(res, p) {
     ['داده‌سازی ساختاری', S.n_universes + ' بار'], ['زمان', S.seconds + ' ثانیه'],
     ...(res.timing ? [['آماده‌سازی داده', `${res.timing.load_s} ث (${res.timing.loads} بار)`],
                       ['شبیه‌سازی', `${res.timing.eval_s} ث · ${res.timing.evals} اجرا · هر اجرا ${res.timing.eval_avg_s} ث`],
-                      ['هستهٔ موازی', res.timing.parallel_error ? `۱ (خطا: ${res.timing.parallel_error})` : res.timing.workers],
+                      ['هستهٔ موازی', res.timing.parallel_error ? `۱ (خطا: ${res.timing.parallel_error})` : res.timing.workers + (res.timing.workers_note ? ' — ' + res.timing.workers_note : '')],
                       ['شبیه‌سازی کامپایل‌شده', res.timing.compiled ? 'فعال (numba)' : 'غیرفعال — pip install numba'],
                       ...(res.timing.cache ? [['منبع داده (حافظه/مشترک/دیسک/ساخت)', `${res.timing.cache.mem || 0} / ${res.timing.cache.shared || 0} (${res.timing.cache.shared_s || 0} ث) / ${res.timing.cache.disk || 0} (${res.timing.cache.disk_s || 0} ث) / ${res.timing.cache.build || 0} (${res.timing.cache.build_s || 0} ث)`]] : [])] : []),
     ['بلوک آموزش / آزمون', `${S.train_blocks} / ${S.hold_blocks}`]].map(([k, x]) => discCard(k, String(x))).join('');

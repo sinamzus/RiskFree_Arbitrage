@@ -342,7 +342,9 @@ class Study:
         self.base = base
         self.space = {k: [v for v in vs] for k, vs in space.items() if k in DIMS and vs}
         self.tm = {"load_s": 0.0, "loads": 0, "eval_s": 0.0, "evals": 0}
+        self.auto_workers = workers is None
         self.workers = _auto_workers() if workers is None else max(1, int(workers))
+        self.workers_note = None
         try:                                   # compiled replay of the "hold" strategy (numba), if installed
             import discount_fast as _X
             self.fast = _X.available()
@@ -767,6 +769,26 @@ class Study:
         self.db_raw = _RawCache(db, D._warmup_start(self.start, warm_p) if self.start else None)
         self._setup()
 
+    def _fit_workers(self, shared_bytes: int = 0) -> None:
+        """Automatic worker count: every core but one, but no more than the free memory holds. A worker's memory is
+        estimated from what this process grew by while preparing the data (a worker holds that and up to a few
+        structural universes more), plus the interpreter itself."""
+        if not self.auto_workers:
+            return
+        avail, rss = _sys_mem()
+        base = getattr(self, "_rss0", None)
+        if avail is None or rss is None or base is None:
+            return
+        # what this process grew by preparing the data — or, when it already held the data from an earlier run, the
+        # pickled order-book data every worker loads (about a third of its size in memory)
+        data = max(rss - base, 3 * shared_bytes)
+        per = 2 * data + 300 * 2 ** 20
+        fit = max(1, int(avail * 0.6 // per))
+        if fit < self.workers:
+            self.workers_note = (f"به‌خاطر حافظه {fit} هسته (هر هسته حدود {per / 2 ** 30:.1f} گیگابایت؛ "
+                                 f"حافظهٔ آزاد {avail / 2 ** 30:.1f} گیگابایت)")
+            self.workers = fit
+
     def _start_pool(self, db):
         """Worker processes that evaluate configurations in parallel (each with its own copy of the data).
         None when parallelism is off, impossible (no database file) or not worth it (a very short run)."""
@@ -791,6 +813,9 @@ class Study:
         except Exception:
             shared = None
         self._shared_file = shared
+        self._fit_workers(os.path.getsize(shared) if shared and os.path.exists(shared) else 0)
+        if self.workers <= 1:
+            return None
         try:
             import multiprocessing as mp
             from concurrent.futures import ProcessPoolExecutor
@@ -862,6 +887,7 @@ class Study:
 
     def run(self, db) -> dict:
         self._c0 = _cache_stats()
+        self._rss0 = _sys_mem()[1]
         self._prog(phase="setup", done=0, total=1)
         self._open(db)
 
@@ -1428,6 +1454,7 @@ class Study:
         return {
             "verdict": {"overall": overall, "headline": headline, "lights": lights},
             "timing": {"workers": self.workers if self.parallel and not getattr(self, "parallel_error", None) else 1,
+                       "workers_note": self.workers_note,
                        "compiled": bool(self.fast and self.tm.get("fast")),
                        "parallel_error": getattr(self, "parallel_error", None),
                        "load_s": round(self.tm["load_s"], 1), "loads": self.tm["loads"],
@@ -1566,11 +1593,75 @@ def _boot_excess(a: list, b: list, n: int = 2000, mean_block: float = 5.0, seed:
 
 
 def _auto_workers() -> int:
-    """Parallel worker processes by default: every core of the machine (the parent process only waits for the
-    workers while they run). Each worker holds its own copy of the data — give a smaller number when memory is
-    short."""
+    """Upper bound of the parallel worker processes by default: every core but one (the machine stays usable).
+    The real number is then limited by the free memory (see ``Study._fit_workers``): each worker holds its own
+    copy of the data."""
     import os
-    return max(1, os.cpu_count() or 1)
+    return max(1, (os.cpu_count() or 2) - 1)
+
+
+def _sys_mem() -> tuple[int | None, int | None]:
+    """(available physical memory, this process's resident memory) in bytes; None where unknown."""
+    import os
+    try:
+        import psutil
+        return int(psutil.virtual_memory().available), int(psutil.Process().memory_info().rss)
+    except Exception:
+        pass
+    avail = rss = None
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            ms = MS()
+            ms.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+                avail = int(ms.ullAvailPhys)
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(PMC)
+            if ctypes.windll.psapi.GetProcessMemoryInfo(ctypes.windll.kernel32.GetCurrentProcess(),
+                                                        ctypes.byref(pmc), pmc.cb):
+                rss = int(pmc.WorkingSetSize)
+        except Exception:
+            pass
+        return avail, rss
+    try:
+        with open("/proc/meminfo") as f:
+            for ln in f:
+                if ln.startswith("MemAvailable:"):
+                    avail = int(ln.split()[1]) * 1024
+        with open("/proc/self/statm") as f:
+            rss = int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except Exception:
+        pass
+    return avail, rss
+
+
+def _lower_priority() -> None:
+    """Run this (worker) process below normal priority: the machine stays responsive while a study runs."""
+    import os
+    try:
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x4000)
+        else:
+            os.nice(10)
+    except Exception:
+        pass
 
 
 _W = None                      # the study replica of a worker process
@@ -1580,6 +1671,7 @@ def _w_init(path: str, args: dict, shared: str | None = None) -> None:
     global _W
     from pathlib import Path
     from database import Database
+    _lower_priority()
     db = Database(Path(path))
     if shared:
         try:                                   # the parent's prepared order-book data: one file, read once
