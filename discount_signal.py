@@ -13,8 +13,10 @@ Measured per signal and horizon:
   * IC: the rank correlation, within each cross-section, between "cheapness" (−signal) and the future relative price
     return, averaged; its t-statistic from the daily means (divided by the horizon's overlap). IC > 0 = cheap funds
     really did better;
-  * the cheapest-minus-dearest spread: future relative return of the cheapest fifth minus the dearest fifth (%),
-    compared with the round-trip fees of a switch;
+  * the cheapest-minus-dearest spread: future relative return of the cheapest fifth minus the dearest fifth (%, mid);
+  * the executable switch: sell the dearest fifth at the bid, buy the cheapest fifth at the ask, pay both fees, and
+    compare at the horizon (both valued at the bid) — the only number a trader can bank. A signal "predicts" only
+    when this is positive and significant; mid-price reversion smaller than the spread does not count;
   * the same IC on the future relative NAV change: a strongly NEGATIVE NAV IC with no price IC means the "discount"
     closes because the NAV catches up with the price (NAV lag), not because the price rises.
 Only the data known at each instant is used for the signal; the future only enters the measured outcome.
@@ -89,7 +91,8 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
     data = []
     for i, (sid, lab) in enumerate(funds):
         prog(phase=f"خواندن داده: {lab}", done=i, total=len(funds))
-        rows = D._load_ex(db, sid, start, end, pl)["rows"]
+        ld = D._load_ex(db, sid, start, end, pl)
+        rows = ld["rows"]
         if not rows:
             continue
         keys = [(r[1], r[2]) for r in rows]
@@ -105,7 +108,7 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
             w = med[max(0, j - norm_days):j]
             if len(w) >= max(3, norm_days // 3):
                 norm[d] = statistics.median(w)
-        data.append({"label": lab, "rows": rows, "keys": keys, "norm": norm})
+        data.append({"label": lab, "rows": rows, "keys": keys, "norm": norm, "book": ld.get("book")})
     if len(data) < 3:
         raise ValueError(f"دست‌کم ۳ صندوق با داده لازم است (داریم {len(data)}).")
     min_funds = max(3, min(min_funds, len(data)))         # a cross-section needs this many funds
@@ -123,10 +126,23 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
             return None
         return r
 
+    hs = p.half_spread_pct / 100.0
+
+    def quotes(f, r):
+        """(best bid, best ask) at the row: the real book, else the price ∓ the assumed half spread."""
+        b = D._best(f["book"], r[1], r[2], 0, 0.0) if f["book"] else 0.0
+        a = D._best(f["book"], r[1], r[2], 1, 0.0) if f["book"] else 0.0
+        if not (b > 0 and a > b):
+            b, a = r[4] * (1 - hs), r[4] * (1 + hs)
+        return b, a
+
     inst = [(d, _hms(s)) for d in all_days for s in range(9 * 3600, 18 * 3600 + 1, step_min * 60)]
     fees = (p.buy_fee + p.sell_fee) * 100
     # per signal / horizon: lists of per-cross-section (day, IC, spread, NAV IC, NAV spread)
     acc = {(s, h): [] for s, _l in SIGNALS for h, *_r in HORIZONS}
+    # executable: switching from the dearest fifth to the cheapest fifth NOW (sell at the bid, buy at the ask, pay both
+    # fees) and comparing, at the horizon, the cheap funds' bid with the dear funds' bid — the real gain of a switch
+    sw = {(s, h): [] for s, _l in SIGNALS for h, *_r in HORIZONS}
     decomp = {h: {"cheap_price": [], "cheap_nav": [], "dear_price": [], "dear_nav": []} for h, *_r in HORIZONS}
     n_cs = 0
     for k, (d, t) in enumerate(inst):
@@ -166,23 +182,27 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
                 r1 = at(f, d1, t1)
                 if r1 is None or not r1[6] or r1 is r:
                     continue
-                fut.append((sig, r1[4] / r[4] - 1.0, r1[6] / r[6] - 1.0))
+                b0, a0 = quotes(f, r)
+                b1, _a1 = quotes(f, r1)
+                fut.append((sig, r1[4] / r[4] - 1.0, r1[6] / r[6] - 1.0, b1 / a0 - 1.0, b1 / b0 - 1.0))
             if len(fut) < min_funds:
                 continue
             mp = sum(x[1] for x in fut) / len(fut)
             mn = sum(x[2] for x in fut) / len(fut)
             for s, _l in SIGNALS:
-                pts = [(x[0][s], x[1] - mp, x[2] - mn) for x in fut if s in x[0]]
+                pts = [(x[0][s], x[1] - mp, x[2] - mn, x[3], x[4]) for x in fut if s in x[0]]
                 if len(pts) < min_funds:
                     continue
-                cheap = [-a for a, _b, _c in pts]
-                ic = _spearman(cheap, [b for _a, b, _c in pts])
-                nic = _spearman(cheap, [c for _a, _b, c in pts])
+                cheap = [-x[0] for x in pts]
+                ic = _spearman(cheap, [x[1] for x in pts])
+                nic = _spearman(cheap, [x[2] for x in pts])
                 srt = sorted(pts, key=lambda x: x[0])
                 q = max(1, len(srt) // 5)
                 sp = (sum(x[1] for x in srt[:q]) / q - sum(x[1] for x in srt[-q:]) / q) * 100
                 nsp = (sum(x[2] for x in srt[:q]) / q - sum(x[2] for x in srt[-q:]) / q) * 100
                 acc[(s, h)].append((d, ic, sp, nic, nsp))
+                gain = (sum(x[3] for x in srt[:q]) / q - sum(x[4] for x in srt[-q:]) / q) * 100 - fees
+                sw[(s, h)].append((d, gain))
                 if s == "raw":
                     dc = decomp[h]
                     dc["cheap_price"].append(sum(x[1] for x in srt[:q]) / q * 100)
@@ -217,14 +237,23 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
             nics = [x[3] for x in L if x[3] is not None]
             nic = statistics.mean(nics) if nics else None
             nsp = statistics.mean(x[4] for x in L)
-            verdict = ("predicts" if ic_t is not None and ic_t >= 2 and ic > 0 and sp > fees else
+            g_day: dict[int, list] = {}
+            for d, gv in sw[(s, h)]:
+                g_day.setdefault(d, []).append(gv)
+            gd = [statistics.mean(v) for v in g_day.values()]
+            sw_mean = statistics.mean(x[1] for x in sw[(s, h)]) if sw[(s, h)] else None
+            sw_t = tstat(gd, ndays or 1)
+            pays = sw_mean is not None and sw_mean > 0 and sw_t is not None and sw_t >= 2
+            verdict = ("predicts" if ic_t is not None and ic_t >= 2 and ic > 0 and pays else
                        "weak" if ic_t is not None and ic_t >= 2 and ic > 0 else
                        "reverse" if ic_t is not None and ic_t <= -2 else "none")
             rows_out.append({"h": h, "label": hl, "n_cs": len(L), "days": len(by_day),
                              "ic": round(ic, 4), "ic_t": round(ic_t, 2) if ic_t is not None else None,
                              "hit_pct": round(sum(1 for x in L if x[1] > 0) / len(L) * 100, 1),
                              "spread_pct": round(sp, 3), "nav_ic": round(nic, 4) if nic is not None else None,
-                             "nav_spread_pct": round(nsp, 3), "verdict": verdict})
+                             "nav_spread_pct": round(nsp, 3),
+                             "switch_net_pct": round(sw_mean, 3) if sw_mean is not None else None,
+                             "switch_t": round(sw_t, 2) if sw_t is not None else None, "verdict": verdict})
         out_sig.append({"key": s, "label": sl, "rows": rows_out})
     dec = {}
     for h, hl, *_r in HORIZONS:
@@ -237,12 +266,14 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
     if good:
         g = max(good, key=lambda x: x[0])
         head = (f"✔ «{g[1]}» در افق {g[2]} بازده نسبی آینده را پیش‌بینی می‌کند (IC {g[3]['ic']:+.3f}، t={g[3]['ic_t']}) "
-                f"و فاصلهٔ ارزان‌ترین‌ها با گران‌ترین‌ها ({g[3]['spread_pct']:+.2f}٪) از کارمزد رفت‌وبرگشت ({fees:.2f}٪) بیشتر است.")
+                f"و جابه‌جایی از گران‌ترین‌ها به ارزان‌ترین‌ها با قیمت‌های قابل‌اجرا (صف خرید و فروش) و کارمزد "
+                f"{g[3]['switch_net_pct']:+.2f}٪ خالص می‌دهد (t={g[3]['switch_t']}).")
         overall = "ok"
     elif weak:
         g = max(weak, key=lambda x: x[0])
-        head = (f"~ «{g[1]}» در افق {g[2]} معنادار است (t={g[3]['ic_t']}) ولی فاصلهٔ ارزان‌ترین‌ها و گران‌ترین‌ها "
-                f"({g[3]['spread_pct']:+.2f}٪) به کارمزد رفت‌وبرگشت ({fees:.2f}٪) نمی‌رسد.")
+        head = (f"~ «{g[1]}» در افق {g[2]} معنادار است (IC {g[3]['ic']:+.3f}، t={g[3]['ic_t']}) ولی جابه‌جایی از "
+                f"گران‌ترین‌ها به ارزان‌ترین‌ها با قیمت‌های قابل‌اجرا و کارمزد {g[3]['switch_net_pct']:+.2f}٪ می‌دهد: "
+                f"اثر واقعی است ولی از هزینهٔ معامله کوچک‌تر.")
         overall = "warn"
     else:
         head = "✖ هیچ‌کدام از تعریف‌های حباب بازده نسبی آیندهٔ قیمت را به‌طور معنادار پیش‌بینی نمی‌کند."

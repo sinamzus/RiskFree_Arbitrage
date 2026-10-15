@@ -1826,6 +1826,9 @@ def _signal_world(path: str, kind: str, seed: int = 21, n_funds: int = 8, days: 
                     nav *= 1 + rng.gauss(0, 0.002)
                     rel = 0.75 * rel + rng.gauss(0, 0.004)
                     last = nav * (1 + rel)
+                elif kind == "bounce":                     # quote noise around NAV, much smaller than the spread
+                    nav *= 1 + rng.gauss(0, 0.002)
+                    last = nav * (1 + rng.gauss(0, 0.0012))
                 else:
                     px *= 1 + rng.gauss(0, 0.003)
                     hist.append(px)
@@ -1845,9 +1848,10 @@ def test_signal_study(R: Results, workdir: str):
     import discount_signal as SG
     g = "قدرت پیش‌بینی سیگنال"
     out = {}
-    for kind in ("revert", "lag"):
+    for kind in ("revert", "lag", "bounce"):
         db = _db(_signal_world(os.path.join(workdir, f"sig_{kind}.db"), kind))
-        out[kind] = SG.run_signal_study(db, None, None, None, None, _base(max_nav_age_min=30), min_funds=5)
+        out[kind] = SG.run_signal_study(db, None, None, None, None,
+                                        _base(max_nav_age_min=30, half_spread_pct=0.3), min_funds=5)
     rv, lg = out["revert"], out["lag"]
     raw = lambda r, h: next(x for s in r["signals"] if s["key"] == "raw" for x in s["rows"] if x["h"] == h)
     R.add(g, "در دنیایی که قیمت به NAV برمی‌گردد، حباب بازده نسبی آینده را پیش‌بینی می‌کند",
@@ -1856,6 +1860,10 @@ def test_signal_study(R: Results, workdir: str):
     R.add(g, "در دنیایی که «تخفیف» فقط عقب‌ماندن NAV است، سیگنالی گزارش نمی‌شود و عقب‌ماندن NAV تشخیص داده می‌شود",
           lg["verdict"]["overall"] == "bad" and lg["nav_lag"] is True and abs(raw(lg, "1d")["ic_t"] or 0) < 2,
           f"{lg['verdict']['headline']} · {raw(lg, '1d')}")
+    bn = out["bounce"]
+    R.add(g, "نوسان قیمت حول NAV که از اسپرد کوچک‌تر است: IC معنادار ولی «پیش‌بینی قابل‌معامله» گزارش نمی‌شود",
+          bn["verdict"]["overall"] != "ok" and (raw(bn, "1h")["ic_t"] or 0) > 2 and (raw(bn, "1h")["switch_net_pct"] or 0) < 0,
+          f"{bn['verdict']['headline']} · {raw(bn, '1h')}")
 
 
 def _run_range(db, p: D.DiscountParams, start=None, end=None) -> dict:

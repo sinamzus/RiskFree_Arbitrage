@@ -6946,7 +6946,7 @@ function renderDiscSignal(r) {
   const rows = (r.signals || []).map(s => s.rows.map((x, i) => `<tr>
       ${i === 0 ? `<td rowspan="${s.rows.length}" style="text-align:start"><b>${s.label}</b></td>` : ''}
       <td>${x.label}</td><td>${x.n_cs || 0}</td><td><b>${f(x.ic)}</b></td><td>${f(x.ic_t, 2)}</td><td>${x.hit_pct ?? '—'}%</td>
-      <td>${pc(x.spread_pct)}</td><td>${f(x.nav_ic)}</td><td>${pc(x.nav_spread_pct)}</td>
+      <td>${pc(x.spread_pct)}</td><td><b>${pc(x.switch_net_pct)}</b></td><td>${f(x.switch_t, 2)}</td><td>${f(x.nav_ic)}</td><td>${pc(x.nav_spread_pct)}</td>
       <td style="color:${{ok: 'var(--green)', warn: 'var(--yellow, #e0a800)', bad: 'var(--red)'}[(vb[x.verdict] || [''])[0]] || 'inherit'}">${(vb[x.verdict] || ['', '—'])[1]}</td></tr>`).join('')).join('');
   const dec = Object.values(r.decomposition || {}).map(d => `<tr><td>${d.label}</td><td>${pc(d.cheap_price)}</td><td>${pc(d.cheap_nav)}</td>
       <td>${pc(d.dear_price)}</td><td>${pc(d.dear_nav)}</td></tr>`).join('');
@@ -6960,7 +6960,9 @@ function renderDiscSignal(r) {
       <th title="همبستگی رتبه‌ای «ارزانی» (منفیِ سیگنال) با بازده نسبی آیندهٔ قیمت در هر مقطع، میانگین. مثبت = ارزان‌ترها بعداً بهتر عمل کردند">IC قیمت</th>
       <th title="آمارهٔ t از میانگین روزانهٔ IC (با در نظر گرفتن هم‌پوشانی افق). بالای ۲ = معنادار">t</th>
       <th title="سهم مقطع‌هایی که IC مثبت داشتند">مقطعِ درست</th>
-      <th title="بازده نسبی آیندهٔ یک‌پنجمِ ارزان‌ترین منهای یک‌پنجمِ گران‌ترین (بدون کارمزد)">ارزان − گران</th>
+      <th title="بازده نسبی آیندهٔ یک‌پنجمِ ارزان‌ترین منهای یک‌پنجمِ گران‌ترین، با قیمت میانه (بدون کارمزد و اسپرد)">ارزان − گران (میانه)</th>
+      <th title="سودِ قابل‌برداشتِ جابه‌جایی: فروش گران‌ترین‌ها به صف خرید، خرید ارزان‌ترین‌ها از صف فروش، هر دو کارمزد؛ در پایان افق هر دو با صف خرید ارزش‌گذاری می‌شوند. فقط اگر این مثبت و معنادار باشد سیگنال قابل‌معامله است">جابه‌جایی خالص</th>
+      <th title="آمارهٔ t جابه‌جایی خالص (از میانگین‌های روزانه)">t</th>
       <th title="همان IC روی تغییر نسبی NAV. منفیِ بزرگ = تخفیف با پایین آمدن NAV بسته می‌شود (NAV عقب مانده بود)">IC NAV</th>
       <th title="تغییر نسبی NAV یک‌پنجمِ ارزان‌ترین منهای گران‌ترین">ارزان − گران (NAV)</th>
       <th>نتیجه</th></tr></thead><tbody>${rows}</tbody></table></div>
