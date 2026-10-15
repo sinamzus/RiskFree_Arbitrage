@@ -1346,6 +1346,12 @@ tr:hover td { background: rgba(255,255,255,.025); cursor: pointer; }
               min-height:30px; }
 .bbt-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
 .bbt-actions .bbt-metric { width:150px; }
+.disc-toolbar { flex-direction:column; align-items:stretch; gap:6px; }
+.disc-toolbar .dt-grp { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; padding:6px 8px;
+  border:1px solid var(--brd); border-radius:6px; }
+.disc-toolbar .dt-h { font-size:11px; font-weight:700; color:var(--sub); min-width:84px; align-self:center; }
+.disc-toolbar .dt-run #disc-run { background:var(--green); font-size:var(--fs-md, 13px); padding:6px 22px; }
+.disc-toolbar .dt-set { opacity:.9; }
 #bbt-opt-btn, #bbt-run { height:32px; align-self:flex-end; }
 #bbt-cards { display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0; }
 #bbt-table-wrap { overflow:auto; min-height:200px; }
@@ -2526,33 +2532,44 @@ td.disc-obc { cursor: help; }
         </div>
       </div>
     </div>
-    <div class="bbt-actions">
-      <div class="bbt-field bbt-metric"><label>معیار بهینه‌ساز</label>
-        <select id="disc-optmetric">
-          <option value="portfolio_return_pct">بازده کل پرتفوی (سرمایهٔ نهایی)</option>
-          <option value="cagr_pct">بازده سالانهٔ مرکب</option>
-          <option value="net_profit">سود خالص</option>
-          <option value="annualized_pct">بازده سالانهٔ سرمایهٔ درگیر</option>
-          <option value="profit_factor">Profit Factor</option></select></div>
-      <div class="bbt-field" title="ترکیب‌هایی که در بازهٔ آموزش کمتر از این‌قدر معامله دارند رد می‌شوند"><label>حداقل معامله</label>
-        <input id="disc-mintrades" type="number" step="5" value="30" style="width:64px"></div>
-      <div class="bbt-field" title="این کسر از آخرِ تاریخ‌ها فقط برای آزمون خارج از نمونه کنار گذاشته می‌شود"><label>آزمون خارج از نمونه</label>
-        <input id="disc-testfrac" type="number" step="0.05" value="0.3" style="width:64px"></div>
-      <button class="scan-btn" id="disc-tse-btn" onclick="discTseOpen()" title="جمع‌آوری دادهٔ واقعی بورس (TSETMC) برای صندوق‌های طلا: همهٔ معاملات (تیک) و جریان کامل تغییرات اردربوک، برای همان روزهایی که دادهٔ NAV دارید. ادامه‌پذیر است: هر روزی که گرفته شده دوباره گرفته نمی‌شود.">📥 دادهٔ TSE (تیک و اردربوک)</button>
-      <button class="scan-btn" id="disc-funds-btn" onclick="discToggleFunds()" title="فهرست همهٔ صندوق‌ها، نمادِ مچ‌شده و دسته‌شان — قابل‌ویرایش">📋 فهرست صندوق‌ها</button>
-      <button class="scan-btn" id="disc-bub-btn" onclick="discBubToggle()" title="نمودار حباب هر صندوق و شاخص میانگین ساده بر حسب تاریخ و ساعت">📈 نمودار حباب</button>
-      <button class="scan-btn" id="disc-stats-btn" onclick="discStats()" title="توزیع تخفیف و تازگی NAV هر صندوق — برای انتخاب آستانه‌ها">📊 آمار تخفیف</button>
-      <div class="bbt-field" title="تعداد دنیاهای جایگشتی برای p-value (بیشتر = دقیق‌تر ولی کندتر؛ سقف زمان ۶۰ ثانیه)"><label>جایگشت‌ها</label>
-        <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
-      <button class="scan-btn" id="disc-vol-btn" onclick="discVolume()" title="مطالعهٔ حجم: همین بک‌تست با چند اندازهٔ سرمایه (همهٔ پارامترهای دیگر همان فرم). نشان می‌دهد تا چه حجمی از سرمایه، عمق ۵ سطر اردربوک و سقف حجم اجازه می‌دهد بازده حفظ شود.">📏 مطالعهٔ حجم</button>
-      <span class="bbt-field" title="مقادیر سرمایه برای مطالعهٔ حجم، به میلیارد ریال، با کاما جدا"><input id="disc-volcaps" type="text" value="1, 5, 10, 20, 50, 100" style="width:150px;direction:ltr" placeholder="میلیارد ریال"></span>
-      <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
-      <button class="scan-btn" id="disc-ft-btn" onclick="discFullTest()" title="تست سراسری روی دنیای ساختگی: پارامتر مرده، سیم‌کشی فرم↔سرور↔موتور، پیش‌فرض‌ها، بهینه‌ساز، ناوردایی‌های حسابداری و آزمونِ خودِ آزمون‌ها (حدود ۲ دقیقه)">🧪 تست سراسری برنامه</button>
-      <button class="scan-btn" id="disc-push-btn" onclick="discPushResults()" title="آخرین نتایج (بک‌تست، بهینه‌سازی، اعتبارسنجی، آمار) را در پوشهٔ analysis_results ذخیره می‌کند و روی شاخهٔ analysis-results در GitHub پوش می‌کند تا تحلیل و پیشنهاد بهبود بگیرید. فقط نتایج ارسال می‌شود، نه دادهٔ خام. پوشهٔ کاری و شاخهٔ فعلی شما دست نمی‌خورد.">📤 ارسال آخرین نتایج برای تحلیل</button>
-      <button class="scan-btn" id="disc-verify-btn" onclick="discVerify()" title="بررسی مستقل آخرین بک‌تست با دادهٔ خام، با کدی جدا که هیچ بخشی از موتور بک‌تست را به کار نمی‌برد: قیمت هر خرید و فروش از روی رویدادهای خام اردربوک، NAV و سن آن، عمق صف، سقف حجم، پنجرهٔ بازار، کارمزد و مسیر نقد">🔍 بررسی مستقل بک‌تست</button>
-      <button class="scan-btn" id="disc-self-btn" onclick="discSelfTest()" title="آزمون خودِ شبیه‌ساز: دنیای با پاسخ معلوم، حسابداری، نگاه به آینده، کالیبراسیون">🧪 آزمون سلامت شبیه‌ساز</button>
-      <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="مطالعهٔ جامعِ همهٔ پارامترهای مدل: جستجوی متوازن، اهمیت و رفتار هر پارامتر، آزمون خارج از نمونه، پایداری اطراف برنده، walk-forward و حساسیت به فرض‌های اجرایی">🔧 بهینه‌سازی و مطالعهٔ جامع</button>
-      <button class="scan-btn" id="disc-run" onclick="discBacktest()">🧪 اجرای بک‌تست</button>
+    <div class="bbt-actions disc-toolbar">
+      <div class="dt-grp dt-run"><span class="dt-h">اجرا</span>
+        <button class="scan-btn" id="disc-run" onclick="discBacktest()" title="بک‌تست با همهٔ تنظیمات همین فرم">▶ اجرای بک‌تست</button>
+        <button class="scan-btn" id="disc-verify-btn" onclick="discVerify()" title="بررسی مستقل آخرین بک‌تست با دادهٔ خام، با کدی جدا که هیچ بخشی از موتور بک‌تست را به کار نمی‌برد: قیمت هر خرید و فروش از روی رویدادهای خام اردربوک، NAV و سن آن، عمق صف، سقف حجم، پنجرهٔ بازار، کارمزد و مسیر نقد">🔍 بررسی مستقل بک‌تست</button>
+        <button class="scan-btn" id="disc-push-btn" onclick="discPushResults()" title="آخرین نتایج (بک‌تست، بهینه‌سازی، اعتبارسنجی، آمار) را در پوشهٔ analysis_results ذخیره می‌کند و روی شاخهٔ analysis-results در GitHub پوش می‌کند تا تحلیل و پیشنهاد بهبود بگیرید. فقط نتایج ارسال می‌شود، نه دادهٔ خام. پوشهٔ کاری و شاخهٔ فعلی شما دست نمی‌خورد.">📤 ارسال آخرین نتایج برای تحلیل</button>
+      </div>
+      <div class="dt-grp "><span class="dt-h">تحلیل</span>
+        <button class="scan-btn" id="disc-sig-btn" onclick="discSignal()" title="مطالعهٔ مستقل از استراتژی: آیا حباب (خام، نسبت به معمولِ خود صندوق، تغییر آن) بازده نسبی آیندهٔ قیمت را در افق ۱ ساعت، ۱ روز و ۵ روز پیش‌بینی می‌کند؟ و آیا تخفیف با بالا رفتن قیمت بسته می‌شود یا با پایین آمدن NAV؟">🎯 قدرت پیش‌بینی سیگنال</button>
+        <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="مطالعهٔ جامعِ همهٔ پارامترهای مدل: جستجوی متوازن، اهمیت و رفتار هر پارامتر، آزمون خارج از نمونه، پایداری اطراف برنده، walk-forward و حساسیت به فرض‌های اجرایی">🔧 بهینه‌سازی و مطالعهٔ جامع</button>
+        <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
+        <div class="bbt-field" title="تعداد دنیاهای جایگشتی برای p-value (بیشتر = دقیق‌تر ولی کندتر؛ سقف زمان ۶۰ ثانیه)"><label>جایگشت‌های اعتبارسنجی</label>
+          <input id="disc-nperm" type="number" step="50" min="30" value="300" style="width:70px"></div>
+        <button class="scan-btn" id="disc-vol-btn" onclick="discVolume()" title="مطالعهٔ حجم: همین بک‌تست با چند اندازهٔ سرمایه (همهٔ پارامترهای دیگر همان فرم). نشان می‌دهد تا چه حجمی از سرمایه، عمق ۵ سطر اردربوک و سقف حجم اجازه می‌دهد بازده حفظ شود.">📏 مطالعهٔ حجم</button>
+        <span class="bbt-field" title="مقادیر سرمایه برای مطالعهٔ حجم، به میلیارد ریال، با کاما جدا"><label>سرمایه‌ها (میلیارد ﷼)</label><input id="disc-volcaps" type="text" value="1, 5, 10, 20, 50, 100" style="width:150px;direction:ltr" placeholder="میلیارد ریال"></span>
+      </div>
+      <div class="dt-grp "><span class="dt-h">داده</span>
+        <button class="scan-btn" id="disc-stats-btn" onclick="discStats()" title="توزیع تخفیف و تازگی NAV هر صندوق — برای انتخاب آستانه‌ها">📊 آمار تخفیف</button>
+        <button class="scan-btn" id="disc-bub-btn" onclick="discBubToggle()" title="نمودار حباب هر صندوق و شاخص میانگین ساده بر حسب تاریخ و ساعت">📈 نمودار حباب</button>
+        <button class="scan-btn" id="disc-tse-btn" onclick="discTseOpen()" title="جمع‌آوری دادهٔ واقعی بورس (TSETMC) برای صندوق‌های طلا: همهٔ معاملات (تیک) و جریان کامل تغییرات اردربوک، برای همان روزهایی که دادهٔ NAV دارید. ادامه‌پذیر است: هر روزی که گرفته شده دوباره گرفته نمی‌شود.">📥 دادهٔ TSE (تیک و اردربوک)</button>
+        <button class="scan-btn" id="disc-funds-btn" onclick="discToggleFunds()" title="فهرست همهٔ صندوق‌ها، نمادِ مچ‌شده و دسته‌شان — قابل‌ویرایش">📋 فهرست صندوق‌ها</button>
+      </div>
+      <div class="dt-grp "><span class="dt-h">آزمون برنامه</span>
+        <button class="scan-btn" id="disc-self-btn" onclick="discSelfTest()" title="آزمون خودِ شبیه‌ساز: دنیای با پاسخ معلوم، حسابداری، نگاه به آینده، کالیبراسیون">🧪 آزمون سلامت شبیه‌ساز</button>
+        <button class="scan-btn" id="disc-ft-btn" onclick="discFullTest()" title="تست سراسری روی دنیای ساختگی: پارامتر مرده، سیم‌کشی فرم↔سرور↔موتور، پیش‌فرض‌ها، بهینه‌ساز، ناوردایی‌های حسابداری و آزمونِ خودِ آزمون‌ها (حدود ۲ دقیقه)">🧪 تست سراسری برنامه</button>
+      </div>
+      <div class="dt-grp dt-set"><span class="dt-h">تنظیمات بهینه‌ساز و اعتبارسنجی</span>
+        <div class="bbt-field bbt-metric"><label>معیار بهینه‌ساز</label>
+          <select id="disc-optmetric">
+            <option value="portfolio_return_pct">بازده کل پرتفوی (سرمایهٔ نهایی)</option>
+            <option value="cagr_pct">بازده سالانهٔ مرکب</option>
+            <option value="net_profit">سود خالص</option>
+            <option value="annualized_pct">بازده سالانهٔ سرمایهٔ درگیر</option>
+            <option value="profit_factor">Profit Factor</option></select></div>
+        <div class="bbt-field" title="ترکیب‌هایی که در بازهٔ آموزش کمتر از این‌قدر معامله دارند رد می‌شوند"><label>حداقل معامله</label>
+          <input id="disc-mintrades" type="number" step="5" value="30" style="width:64px"></div>
+        <div class="bbt-field" title="این کسر از آخرِ تاریخ‌ها فقط برای آزمون خارج از نمونه کنار گذاشته می‌شود"><label>آزمون خارج از نمونه</label>
+          <input id="disc-testfrac" type="number" step="0.05" value="0.3" style="width:64px"></div>
+      </div>
     </div>
     <div id="disc-note"></div>
   </div>
@@ -6611,10 +6628,10 @@ async function discLoadCats(force) {
     discSelFunds.forEach(f => { if (f.symbol_id in keep.funds) discSel.funds[f.symbol_id] = keep.funds[f.symbol_id]; });
   }
   discRenderCats();
-  if (!discDatesInit) {                          // default period: 1 Mehr 1404 → today
+  if (!discDatesInit) {                          // default period: 1 Mehr 1404 → 1 Mehr 1405 (one full year)
     discDatesInit = true;
     discSetDate('disc-start', 1404, 7, 1);
-    const t = jalaliToday(); discSetDate('disc-end', t[0], t[1], t[2]);
+    discSetDate('disc-end', 1405, 7, 1);
   }
 }
 
@@ -6880,6 +6897,79 @@ async function discValidate() {
 }
 
 let discVolTimer = null;
+let discSigTimer = null;
+
+async function discSignal() {
+  const p = discCheckSel(); if (!p) return;
+  const btn = document.getElementById('disc-sig-btn');
+  const r = await fetch('/api/disc/signal', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(p)
+  }).catch(() => null);
+  if (!r?.ok) { showError('مطالعهٔ سیگنال شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
+  btn.disabled = true; btn.textContent = '⏳ قدرت پیش‌بینی ...';
+  const tab = discNewTab('signal', 'قدرت پیش‌بینی سیگنال');
+  discTabSet(tab, 'قدرت پیش‌بینی سیگنال', true);
+  const panel = document.getElementById('disc-val');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">⏳ شروع ...</div>';
+  if (discSigTimer) clearInterval(discSigTimer);
+  const poll = async () => {
+    const st = await fetch('/api/disc/signal/status').catch(() => null);
+    if (!st?.ok) return;
+    const j = await st.json();
+    const pr = j.progress || {};
+    if (j.running) {
+      if (discTabCur() && discTabCur().id === tab.id)
+        panel.innerHTML = `<div class="ob-p">⏳ ${pr.phase || ''} ${pr.total ? '— ' + (pr.done || 0) + '/' + pr.total : ''}</div>`;
+      return;
+    }
+    clearInterval(discSigTimer); discSigTimer = null;
+    btn.disabled = false; btn.textContent = '🎯 قدرت پیش‌بینی سیگنال';
+    discTabSet(tab, 'قدرت پیش‌بینی سیگنال', false);
+    if (!discTabExists(tab.id)) return;
+    discTabActivate(tab.id);
+    if (!j.result || j.result.error) { panel.innerHTML = `<div class="dv-head bad">خطا: ${(j.result || {}).error || 'نامشخص'}</div>`; return; }
+    renderDiscSignal(j.result);
+  };
+  discSigTimer = setInterval(poll, 1500);
+  poll();
+}
+
+function renderDiscSignal(r) {
+  const panel = document.getElementById('disc-val');
+  panel.style.display = 'block';
+  const S = r.setup || {}, v = r.verdict || {};
+  const f = (x, d = 3) => x == null ? '—' : discLtr((x >= 0 ? '+' : '') + (+x).toFixed(d));
+  const pc = x => x == null ? '—' : discLtr((x >= 0 ? '+' : '') + (+x).toFixed(2) + '%');
+  const vb = {predicts: ['ok', '✔ پیش‌بینی می‌کند'], weak: ['warn', '~ معنادار، کمتر از کارمزد'],
+              reverse: ['bad', '↺ برعکس'], none: ['bad', '✖ نه']};
+  const rows = (r.signals || []).map(s => s.rows.map((x, i) => `<tr>
+      ${i === 0 ? `<td rowspan="${s.rows.length}" style="text-align:start"><b>${s.label}</b></td>` : ''}
+      <td>${x.label}</td><td>${x.n_cs || 0}</td><td><b>${f(x.ic)}</b></td><td>${f(x.ic_t, 2)}</td><td>${x.hit_pct ?? '—'}%</td>
+      <td>${pc(x.spread_pct)}</td><td>${f(x.nav_ic)}</td><td>${pc(x.nav_spread_pct)}</td>
+      <td style="color:${{ok: 'var(--green)', warn: 'var(--yellow, #e0a800)', bad: 'var(--red)'}[(vb[x.verdict] || [''])[0]] || 'inherit'}">${(vb[x.verdict] || ['', '—'])[1]}</td></tr>`).join('')).join('');
+  const dec = Object.values(r.decomposition || {}).map(d => `<tr><td>${d.label}</td><td>${pc(d.cheap_price)}</td><td>${pc(d.cheap_nav)}</td>
+      <td>${pc(d.dear_price)}</td><td>${pc(d.dear_nav)}</td></tr>`).join('');
+  const lag = r.nav_lag ? `<div class="dv-note" style="margin-top:6px">⚠ <b>عقب‌ماندن NAV:</b> در افق یک روز، صندوقِ ارزان‌تر بعداً <b>NAVش</b> نسبت به بقیه پایین می‌آید، ولی قیمتش نسبت به بقیه بالا نمی‌رود. یعنی «تخفیف» بیشتر از این است که NAV هنوز به قیمت بازار نرسیده، نه اینکه صندوق واقعاً ارزان باشد.</div>` : '';
+  panel.innerHTML = `<div class="dv-head ${v.overall}">🎯 قدرت پیش‌بینی سیگنال — ${v.headline || ''}</div>
+    <div class="dv-note">${S.funds} صندوق · ${S.days} روز (${gregIntToJalaliStr((S.period || [])[0])} تا ${gregIntToJalaliStr((S.period || [])[1])})
+      · هر ${S.step_min} دقیقه یک مقطع (${S.cross_sections} مقطع با دست‌کم ${S.min_funds} صندوق) · معمولِ خود صندوق: میانهٔ ${S.norm_days} روز قبل
+      · کارمزد رفت‌وبرگشت ${pc(S.fees_round_trip_pct)} · دیتاست ${S.dataset}${S.grid_sec ? ' (' + S.grid_sec + ' ثانیه)' : ''}</div>
+    <div class="disc-tblwrap" style="max-height:none;margin-top:6px"><table class="disc-tbl"><thead><tr>
+      <th style="text-align:start">سیگنال</th><th>افق</th><th title="تعداد مقطع‌های سنجیده">مقطع</th>
+      <th title="همبستگی رتبه‌ای «ارزانی» (منفیِ سیگنال) با بازده نسبی آیندهٔ قیمت در هر مقطع، میانگین. مثبت = ارزان‌ترها بعداً بهتر عمل کردند">IC قیمت</th>
+      <th title="آمارهٔ t از میانگین روزانهٔ IC (با در نظر گرفتن هم‌پوشانی افق). بالای ۲ = معنادار">t</th>
+      <th title="سهم مقطع‌هایی که IC مثبت داشتند">مقطعِ درست</th>
+      <th title="بازده نسبی آیندهٔ یک‌پنجمِ ارزان‌ترین منهای یک‌پنجمِ گران‌ترین (بدون کارمزد)">ارزان − گران</th>
+      <th title="همان IC روی تغییر نسبی NAV. منفیِ بزرگ = تخفیف با پایین آمدن NAV بسته می‌شود (NAV عقب مانده بود)">IC NAV</th>
+      <th title="تغییر نسبی NAV یک‌پنجمِ ارزان‌ترین منهای گران‌ترین">ارزان − گران (NAV)</th>
+      <th>نتیجه</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${dec ? `<div class="disc-h" style="margin-top:10px">حباب خام: تخفیف چطور بسته می‌شود؟ (تغییر نسبت به میانگین صندوق‌ها)</div>
+    <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th>افق</th><th>ارزان‌ترین‌ها: قیمت</th><th>ارزان‌ترین‌ها: NAV</th>
+      <th>گران‌ترین‌ها: قیمت</th><th>گران‌ترین‌ها: NAV</th></tr></thead><tbody>${dec}</tbody></table></div>` : ''}${lag}
+    <div class="dv-note" style="margin-top:6px">هر مقطع فقط با داده‌ای ساخته شده که در همان لحظه معلوم بود؛ آینده فقط در نتیجهٔ سنجیده‌شده وارد می‌شود. «حباب خام» در هر مقطع همان رتبه‌بندیِ «حباب نسبت به میانگین صندوق‌ها» را می‌دهد، چون بازده‌ها هم نسبت به میانگین سنجیده می‌شوند.</div>`;
+}
+
 async function discVolume() {
   const p = discCheckSel(); if (!p) return;
   const btn = document.getElementById('disc-vol-btn');
@@ -7076,7 +7166,7 @@ async function discBacktest() {
   const btn = document.getElementById('disc-run');
   btn.disabled = true; btn.textContent = '⏳ در حال اجرا ...';
   const r = await fetch('/api/disc/backtest?' + new URLSearchParams(p)).catch(() => null);
-  btn.disabled = false; btn.textContent = '🧪 اجرای بک‌تست';
+  btn.disabled = false; btn.textContent = '▶ اجرای بک‌تست';
   if (!r) { showError('بک‌تست ناموفق (سرور در دسترس نیست)'); return; }
   const res = await r.json();
   if (res.error) { showError('خطا: ' + res.error); return; }
@@ -7666,7 +7756,7 @@ async function discShowOb(cell, ev) {
   let m = _discMomCache[key];
   if (!m) {
     const q = new URLSearchParams({focus: t.symbol, date, time, cats: (res.cats || []).join(','), symbols: syms.join(','),
-                                   base: t.base_pct || 0});
+                                   base: t.base_pct || 0, params: JSON.stringify(res.params || {})});
     const r = await fetch('/api/disc/trade_moment?' + q).catch(() => null);
     m = r && r.ok ? await r.json() : {error: 'خطا در دریافت'};
     if (!m.error) _discMomCache[key] = m;
@@ -7677,6 +7767,12 @@ async function discShowOb(cell, ev) {
   const me = (m.funds || []).find(f => f.symbol === t.symbol) || {};
   const pc = v => v == null ? '—' : `<b dir="ltr">${(v >= 0 ? '+' : '') + (+v).toFixed(2)}%</b>`;
   const hm = x => String(x).padStart(6, '0').replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2:$3');
+  // the fund against its OWN norm (median daily bubble of the previous N trading days) and against the group now
+  const normLine = me.norm_pct == null ? (me.bubble_raw_pct == null ? '' : `<br>حباب خام ${pc(me.bubble_raw_pct)} · معمولِ خودِ صندوق هنوز معلوم نیست (تاریخچهٔ کمتر از ${Math.max(3, Math.floor((m.norm_days || 20) / 3))} روز معاملاتی قبل از این روز)
+      · میانگین حباب صندوق‌ها در همین لحظه ${pc(m.group_bubble_pct)}`) : `<br>حباب خام ${pc(me.bubble_raw_pct)} · معمولِ خودِ صندوق (${m.norm_days} روز قبل) ${pc(me.norm_pct)}
+      → <b style="color:${me.vs_norm_pct <= 0 ? 'var(--green)' : 'var(--red)'}">${Math.abs(me.vs_norm_pct).toFixed(2)} نقطه ${me.vs_norm_pct <= 0 ? 'پایین‌تر' : 'بالاتر'} از معمول خودش</b>
+      · میانگین حباب صندوق‌ها در همین لحظه ${pc(m.group_bubble_pct)} (این صندوق ${pc(me.vs_group_pct)} نسبت به آن)
+      <br><span style="color:var(--muted)">${m.signal === 'norm' ? 'سیگنال این بک‌تست همین «فاصله از معمول خود» است.' : 'سیگنال این بک‌تست حباب نسبت به خود NAV است (تعدیل حباب دائمی خاموش)؛ فاصله از معمول فقط برای مقایسه نشان داده شده.'}</span>`;
   let sig = '';
   if (buy) {
     const thr = p.fill_mode === 'hold' || p.fill_mode === 'best' ? p.fill_max_rel_pct : -p.entry_discount_pct;
@@ -7706,12 +7802,12 @@ async function discShowOb(cell, ev) {
     (buy ? (a.bubble_ask_pct ?? a.bubble_last_pct ?? 99) - (b.bubble_ask_pct ?? b.bubble_last_pct ?? 99)
          : (b.bubble_bid_pct ?? b.bubble_last_pct ?? -99) - (a.bubble_bid_pct ?? a.bubble_last_pct ?? -99))).slice(0, 8);
   if (!others.some(f => f.symbol === t.symbol) && me.symbol) others.push(me);
-  const tbl = `<table class="dm-tbl"><thead><tr><th>صندوق</th><th>حباب (آخرین)</th><th>حباب (${buy ? 'سر صف فروش' : 'سر صف خرید'})</th><th>سن قیمت</th></tr></thead><tbody>
-    ${others.map(f => `<tr class="${f.symbol === t.symbol ? 'dm-me' : ''}"><td>${f.symbol}</td><td>${pc(f.bubble_last_pct)}</td>
-      <td>${pc(buy ? f.bubble_ask_pct : f.bubble_bid_pct)}</td><td>${f.age_min} د</td></tr>`).join('')}</tbody></table>`;
+  const tbl = `<table class="dm-tbl"><thead><tr><th>صندوق</th><th title="قیمت ÷ NAV − ۱">حباب خام</th><th title="میانهٔ حباب روزانهٔ همین صندوق در روزهای قبل">معمول خودش</th><th title="حباب خام منهای معمول خود صندوق: منفی = ارزان‌تر از معمولش">فاصله از معمول</th><th title="سیگنالی که بک‌تست با آستانه‌ها مقایسه کرد (با ${buy ? 'سر صف فروش' : 'سر صف خرید'})">سیگنال (${buy ? 'سر صف فروش' : 'سر صف خرید'})</th><th>سن قیمت</th></tr></thead><tbody>
+    ${others.map(f => `<tr class="${f.symbol === t.symbol ? 'dm-me' : ''}"><td>${f.symbol}</td><td>${pc(f.bubble_raw_pct)}</td><td>${pc(f.norm_pct)}</td>
+      <td>${pc(f.vs_norm_pct)}</td><td>${pc(buy ? f.bubble_ask_pct : f.bubble_bid_pct)}</td><td>${f.age_min} د</td></tr>`).join('')}</tbody></table>`;
   const col = buy ? 'var(--green)' : 'var(--red)';
   pop.innerHTML = `<div class="bt-pop-h" style="color:${col}">${t.symbol} · ${buy ? 'خرید ← از صف فروش' : 'فروش ← به صف خرید'} · ${gregIntToJalaliStr(date)} ${hm(time)}</div>
-    <div class="dm-sig">NAV ${discFmt(me.nav)} (ساعت ${me.nav_time ? hm(me.nav_time) : '—'}) · آخرین قیمت ${discFmt(me.last)} · قیمت اجرا <b>${discFmt(buy ? t.entry_price : t.exit_price)}</b><br>${sig}</div>
+    <div class="dm-sig">NAV ${discFmt(me.nav)} (ساعت ${me.nav_time ? hm(me.nav_time) : '—'}${me.nav_age_min != null ? '، سن ' + me.nav_age_min + ' دقیقه' : ''}) · قیمت ${discFmt(me.last)} · قیمت اجرا <b>${discFmt(buy ? t.entry_price : t.exit_price)}</b><br>${sig}${normLine}</div>
     ${m.book ? bondOBTableHtml(_dmLevels(m.book), side, buy ? t.entry_price : t.exit_price)
              : '<div class="bt-pop-h" style="color:var(--muted)">اردربوکی برای این لحظه ثبت نشده (دادهٔ TSE این روز جمع نشده)</div>'}
     ${m.book_source === 'snapshots' ? '<div style="font-size:9px;color:var(--muted)">منبع: اسنپ‌شات‌های اردربوک خود برنامه</div>' : ''}

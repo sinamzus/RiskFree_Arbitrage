@@ -1892,6 +1892,53 @@ def create_app(db, scan_callback=None):
         threading.Thread(target=_run, daemon=True, name="disc-volume").start()
         return jsonify({"status": "started"})
 
+    _sig_state = {"running": False, "progress": {}, "result": None}
+    _sig_lock = threading.Lock()
+
+    @app.route("/api/disc/signal", methods=["GET", "POST"])
+    def api_disc_signal():
+        """Signal study: does the bubble (raw / vs own norm / its change) predict the funds' relative returns?"""
+        from discount_signal import run_signal_study
+        body = request.get_json(silent=True) or {}
+
+        def _get(name, default=None):
+            return body[name] if name in body else request.args.get(name, default)
+
+        cats, syms, start, end = _disc_sel(_get)
+        base = _disc_params_from(_get)
+        try:
+            step = max(5, min(120, int(float(_get("step_min", 30)))))
+            norm_days = max(5, min(120, int(float(_get("norm_days", base.baseline_days or 20)))))
+        except (TypeError, ValueError):
+            step, norm_days = 30, 20
+        if _sig_state["running"]:
+            return jsonify({"status": "already running", "progress": _sig_state["progress"]}), 409
+
+        def _run():
+            with _sig_lock:
+                _sig_state["running"] = True
+                _sig_state["progress"] = {"phase": "شروع", "done": 0, "total": 0}
+                _sig_state["result"] = None
+            try:
+                _sig_state["result"] = run_signal_study(db, cats, syms, start, end, base, _sig_state["progress"],
+                                                        step_min=step, norm_days=norm_days)
+            except ValueError as e:
+                _sig_state["result"] = {"error": str(e)}
+            except Exception:
+                logger.exception("signal study failed")
+                _sig_state["result"] = {"error": "signal study failed"}
+            finally:
+                with _sig_lock:
+                    _sig_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="disc-signal").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/disc/signal/status")
+    def api_disc_signal_status():
+        return jsonify({"running": _sig_state["running"], "progress": _sig_state["progress"],
+                        "result": _sig_state["result"]})
+
     @app.route("/api/disc/volume/status")
     def api_disc_volume_status():
         return jsonify({"running": _vol_state["running"], "progress": _vol_state["progress"],
@@ -2146,7 +2193,7 @@ def create_app(db, scan_callback=None):
         root = Path(__file__).resolve().parent
         state = {"backtest": _disc_last.get("backtest"), "stats": _disc_last.get("stats"),
                  "study": _disc_opt_state.get("result"), "validation": _val_state.get("result"),
-                 "verify": _disc_last.get("verify")}
+                 "verify": _disc_last.get("verify"), "signal": _sig_state.get("result")}
         state = {k: v for k, v in state.items() if v and not (isinstance(v, dict) and v.get("error"))}
         if not state:
             return jsonify({"ok": False, "message": "هنوز نتیجه‌ای نیست: ابتدا بک‌تست یا بهینه‌سازی را اجرا کنید."}), 400
@@ -2165,9 +2212,13 @@ def create_app(db, scan_callback=None):
         try:
             cats = [c for c in (request.args.get("cats") or "").split(",") if c]
             syms = [x for x in (request.args.get("symbols") or "").split(",") if x]
+            try:                                   # the backtest's own parameters (dataset, NAV rules, norm window)
+                params = json.loads(request.args.get("params") or "{}")
+            except ValueError:
+                params = {}
             res = trade_moment(db, cats or None, syms or None, request.args.get("focus", ""),
                                int(request.args.get("date")), int(request.args.get("time")),
-                               float(request.args.get("base", 0) or 0))
+                               float(request.args.get("base", 0) or 0), params if isinstance(params, dict) else None)
             return jsonify(res)
         except Exception as e:
             logger.exception("trade_moment failed")

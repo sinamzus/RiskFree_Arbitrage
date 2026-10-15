@@ -80,6 +80,8 @@ def build_files(state: dict, code_version: dict | None = None) -> dict[str, byte
         put("stats", state["stats"])
     if state.get("verify"):
         put("verify", state["verify"])
+    if state.get("signal"):
+        put("signal", state["signal"])
     files["results/meta.json"] = json.dumps(meta, ensure_ascii=False, indent=1).encode("utf-8")
     return files
 

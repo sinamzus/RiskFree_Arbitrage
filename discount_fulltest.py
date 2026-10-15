@@ -1277,6 +1277,29 @@ def test_tse_dataset(R: Results, db_path: str):
                 bad.append(f"{t['symbol']} {side}: حباب‌ها ناقص")
     R.add(g, "نمایش اردربوک و حباب در لحظهٔ هر خرید و فروش (hover): همان صف‌هایی که بک‌تست با آن معامله کرد",
           not bad and n > 0, "؛ ".join(bad[:3]) or f"{n} لحظه")
+    # ... and the signal logic: the hover reads the backtest's own rows (its parameters): NAV at the buy = the trade's,
+    # the fund's own norm = the baseline the trade used, the distance from the norm is shown for every fund
+    import json as _js
+    hpn = _base(fill_mode="hold", fill_max_rel_pct=0.3, position_pct=50, dataset="hybrid", baseline_days=10)
+    rn = _js.loads(_js.dumps(_run(db, hpn), default=str))
+    bad, n = [], 0
+    for t in rn["trades"][:10]:
+        q = {"focus": t["symbol"], "date": t["entry_date"], "time": t["entry_time"], "cats": "gold",
+             "params": _js.dumps(rn["params"])}
+        j = cl.get("/api/disc/trade_moment", query_string=q).get_json() or {}
+        me = next((f for f in j.get("funds", []) if f["symbol"] == t["symbol"]), None)
+        n += 1
+        if me is None or j.get("signal") != "norm" or j.get("norm_days") != 10:
+            bad.append(f"{t['symbol']}: {j.get('error') or 'بدون ردیف'}")
+            continue
+        if abs(me["nav"] - t["nav_entry"]) > 1e-6 * t["nav_entry"]:
+            bad.append(f"{t['symbol']} NAV {me['nav']} ≠ {t['nav_entry']}")
+        if me["norm_pct"] is None or abs(me["norm_pct"] - t["base_pct"]) > 1e-3:
+            bad.append(f"{t['symbol']} معمول {me['norm_pct']} ≠ {t['base_pct']}")
+        if any(f.get("vs_norm_pct") is None for f in j["funds"] if f.get("norm_pct") is not None):
+            bad.append("فاصله از معمول ناقص")
+    R.add(g, "hover: منطق سیگنال (حباب نسبت به معمولِ خود صندوق) با همان داده و پارامترهای بک‌تست",
+          not bad and n > 0, "؛ ".join(bad[:3]) or f"{n} خرید")
     # the signal is confirmed at the AVERAGE price of the whole order (all ask levels it walks), not only the best
     # ask: every hold-mode buy's real fill price (rel_entry_pct = fill vs fair) is within the entry limit
     bad, n, deep = [], 0, 0
@@ -1767,6 +1790,72 @@ def test_nav_feed(R: Results, db_path: str):
             os.remove(p2 + ext)
         except OSError:
             pass
+
+
+def _signal_world(path: str, kind: str, seed: int = 21, n_funds: int = 8, days: int = 70) -> str:
+    """Synthetic NAV dump for the signal study. "revert": the NAV is a random walk and the PRICE returns to it (the
+    discount predicts the price). "lag": the price is a random walk and the NAV follows it two snapshots late (the
+    discount is pure NAV lag: it closes through the NAV, the price is unpredictable)."""
+    from tools.import_nav_dump import _SCHEMA
+    rng = random.Random(seed)
+    if os.path.exists(path):
+        os.remove(path)
+    con = sqlite3.connect(path)
+    con.executescript(_SCHEMA)
+    con.execute("CREATE TABLE IF NOT EXISTS nav_symbol_map (symbol_id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, matches INTEGER DEFAULT 0)")
+    con.execute("CREATE TABLE IF NOT EXISTS nav_symbol_category (symbol_id INTEGER PRIMARY KEY, category TEXT NOT NULL, source TEXT DEFAULT 'auto', score REAL DEFAULT 0)")
+    rows = []
+    d = dt.date(2026, 1, 3)
+    day_list = []
+    while len(day_list) < days:
+        if d.weekday() not in (3, 4):
+            day_list.append(d)
+        d += dt.timedelta(days=1)
+    for sid in range(1, n_funds + 1):
+        con.execute("INSERT INTO nav_symbol_map VALUES (?,?,1)", (sid, f"F{sid}"))
+        con.execute("INSERT INTO nav_symbol_category VALUES (?,?,'manual',1)", (sid, "gold"))
+        nav = px = 1000.0 * (1 + sid / 10)
+        rel, hist, vol = 0.0, [], 0
+        for day in day_list:
+            di = day.year * 10000 + day.month * 100 + day.day
+            vol = 0
+            for j in range(13):
+                mins = 9 * 60 + j * 15
+                t = (mins // 60) * 10000 + (mins % 60) * 100
+                if kind == "revert":
+                    nav *= 1 + rng.gauss(0, 0.002)
+                    rel = 0.75 * rel + rng.gauss(0, 0.004)
+                    last = nav * (1 + rel)
+                else:
+                    px *= 1 + rng.gauss(0, 0.003)
+                    hist.append(px)
+                    nav = hist[-3] if len(hist) >= 3 else px
+                    last = px
+                vol += rng.randint(300, 3000)
+                rows.append((sid, di, t, nav, di, t, last, last, vol))
+    con.executemany("INSERT INTO nav_intraday (symbol_id,date,time,nav,nav_date,nav_time,last,close,vol) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    con.commit()
+    con.close()
+    return path
+
+
+def test_signal_study(R: Results, workdir: str):
+    """The signal study must find a real signal, and must NOT find one where the discount is only NAV lag."""
+    import discount_signal as SG
+    g = "قدرت پیش‌بینی سیگنال"
+    out = {}
+    for kind in ("revert", "lag"):
+        db = _db(_signal_world(os.path.join(workdir, f"sig_{kind}.db"), kind))
+        out[kind] = SG.run_signal_study(db, None, None, None, None, _base(max_nav_age_min=30), min_funds=5)
+    rv, lg = out["revert"], out["lag"]
+    raw = lambda r, h: next(x for s in r["signals"] if s["key"] == "raw" for x in s["rows"] if x["h"] == h)
+    R.add(g, "در دنیایی که قیمت به NAV برمی‌گردد، حباب بازده نسبی آینده را پیش‌بینی می‌کند",
+          rv["verdict"]["overall"] == "ok" and (raw(rv, "1h")["ic_t"] or 0) > 3 and raw(rv, "1h")["spread_pct"] > 0,
+          f"{rv['verdict']['headline']} · {raw(rv, '1h')}")
+    R.add(g, "در دنیایی که «تخفیف» فقط عقب‌ماندن NAV است، سیگنالی گزارش نمی‌شود و عقب‌ماندن NAV تشخیص داده می‌شود",
+          lg["verdict"]["overall"] == "bad" and lg["nav_lag"] is True and abs(raw(lg, "1d")["ic_t"] or 0) < 2,
+          f"{lg['verdict']['headline']} · {raw(lg, '1d')}")
 
 
 def _run_range(db, p: D.DiscountParams, start=None, end=None) -> dict:
@@ -2278,6 +2367,33 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
                   vt == 2 and "بررسی مستقل ✅" in vtitle and vrows >= 10 and pg.locator("#disc-verify .disc-tbl").count() == 0,
                   f"{vt} تب، عنوان «{vtitle}»، {vrows} ردیف")
             pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
+            # hover a buy price: the signal logic against the fund's own norm is shown
+            cell = pg.locator("td.disc-obc[data-side='buy']").last          # a later trade: the norm has history
+            hov = ""
+            if cell.count():
+                cell.hover()
+                try:
+                    pg.wait_for_function("document.getElementById('bt-ob-pop').innerText.includes('معمول')", timeout=60000)
+                except Exception:
+                    pass
+                hov = pg.locator("#bt-ob-pop").inner_text()
+                if os.environ.get("UI_SHOT"):
+                    pg.locator("#bt-ob-pop").screenshot(path=os.environ["UI_SHOT"].replace(".png", "_hover.png"))
+                pg.mouse.move(0, 0)
+            R.add("مرورگر", "hover روی خرید: حباب، معمولِ خود صندوق و فاصله از آن نمایش داده می‌شود",
+                  "معمولِ خودِ صندوق" in hov and "فاصله از معمول" in hov, hov[:160])
+            # the signal study opens its own tab with one row per signal and horizon
+            pg.click("#disc-sig-btn"); pg.wait_for_selector("#disc-val .disc-tbl tbody tr", timeout=120000)
+            srows = pg.locator("#disc-val .disc-tbl").first.locator("tbody tr").count()
+            stitle = pg.locator("#disc-res-bar .dres-tab.active .dres-t").inner_text()
+            R.add("مرورگر", "قدرت پیش‌بینی سیگنال در تب خودش: ۳ سیگنال × ۳ افق",
+                  srows == 9 and "قدرت پیش‌بینی" in stitle, f"{srows} ردیف، «{stitle}»")
+            pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
+            grp = pg.locator(".disc-toolbar .dt-grp").count()
+            R.add("مرورگر", "دکمه‌ها در گروه‌های اجرا / تحلیل / داده / آزمون / تنظیمات",
+                  grp == 5 and pg.locator(".disc-toolbar .dt-run #disc-run").count() == 1, f"{grp} گروه")
+            if os.environ.get("UI_SHOT"):
+                pg.locator(".disc-toolbar").screenshot(path=os.environ["UI_SHOT"])
             pg.click("#disc-tse-btn"); pg.wait_for_selector("#disc-tse .disc-tbl tbody tr")
             R.add("مرورگر", "پنل دادهٔ TSE باز می‌شود و صندوق‌های طلا را با روزهای NAV نشان می‌دهد",
                   pg.locator("#disc-tse .disc-tbl tbody tr").count() == 4, pg.locator("#disc-tse").inner_text()[:120])
@@ -2453,6 +2569,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("NAV به‌روز", lambda: test_stale_nav_no_trade(R, db)),
              ("گرم‌شدن", lambda: test_warmup(R, db)),
              ("NAV ریزدانه (feed)", lambda: test_nav_feed(R, path)),
+             ("قدرت پیش‌بینی سیگنال", lambda: test_signal_study(R, tmp)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: (test_tse_dataset(R, path), test_same_instant_sales(R))),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
