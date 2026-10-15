@@ -1390,14 +1390,19 @@ def test_tse_dataset(R: Results, db_path: str):
     import copy as _cp
     import verify_independent as VI
     bad, n_ok = [], 0
-    for cfg in ({"position_pct": 50, "fill_max_rel_pct": 0.1, "participation_pct": 10.0, "participation_basis": "sofar",
-                 "fill_min_hold_min": 60},
-                {"position_pct": 100, "fill_max_rel_pct": 0.0, "participation_pct": 0.0}):
-        rv = json.loads(json.dumps(_run(db, _base(fill_mode="hold", dataset="hybrid", **cfg)), default=str))
+    for ds, cfg in (("hybrid", {"position_pct": 50, "fill_max_rel_pct": 0.1, "participation_pct": 10.0,
+                                "participation_basis": "sofar", "fill_min_hold_min": 60}),
+                    ("hybrid", {"position_pct": 100, "fill_max_rel_pct": 0.0, "participation_pct": 0.0}),
+                    # the fixed-grid order-book dataset: NAV known at each grid instant, volume from the TSE tape
+                    ("tse", {"position_pct": 50, "fill_max_rel_pct": 0.1, "participation_pct": 10.0,
+                             "participation_basis": "sofar", "fill_min_hold_min": 60, "tse_grid_sec": 120})):
+        rv = json.loads(json.dumps(_run(db, _base(fill_mode="hold", dataset=ds, **cfg)), default=str))
         rep = VI.verify(p2, rv)
         if not rep["ok"]:
-            bad.append(f"{cfg}: " + "؛ ".join(f"{c['name']}: {c['examples'][:1]}" for c in rep["checks"] if c["status"] == "fail"))
+            bad.append(f"{ds} {cfg}: " + "؛ ".join(f"{c['name']}: {c['examples'][:1]}" for c in rep["checks"] if c["status"] == "fail"))
         n_ok += sum(c["checked"] for c in rep["checks"])
+        if ds == "tse" and not any(c["name"].startswith("buy price") and c["checked"] for c in rep["checks"]):
+            bad.append("tse: the book checks did not run")
     tamper = {"قیمت خرید": lambda t: t.update(entry_price=t["entry_price"] * 1.001),
               "مبلغ فروش": lambda t: t.update(sell_notional=t["sell_notional"] * 1.002),
               "NAV فروش": lambda t: t.update(nav_exit=t["nav_exit"] * 1.01),
@@ -1739,6 +1744,15 @@ def test_nav_feed(R: Results, db_path: str):
     R.add(g, "NAV کهنه‌ای که دوباره فرستاده شود جای NAV جدیدتر را نمی‌گیرد؛ NAV دریافت‌نشده دیده نمی‌شود",
           k is not None and k[0] != 1.0 and k[1] != 20000101, f"{k}")
     rep1, rep0 = VI.verify(p2, r1), VI.verify(p2, r0)
+    pt = replace(p, dataset="tse", tse_grid_sec=120)
+    rt = _js.loads(_js.dumps(_run(db, pt), default=str))
+    rept = VI.verify(p2, rt)
+    bad_t = [t for t in rt["trades"] if abs(NF.known_at(db, next(f[0] for f in FUNDS if f[1] == t["symbol"]),
+                                                     t["entry_date"], t["entry_time"])[0] - t["nav_entry"]) > 1e-6 * t["nav_entry"]]
+    R.add(g, "دیتاست شبکهٔ زمانی (TSE): NAV هر معامله همان NAV دریافت‌شده تا آن لحظه است و بررسی مستقل تأیید می‌کند",
+          rept["ok"] and not bad_t and len(rt["trades"]) > 0,
+          "؛ ".join(f"{c['name']}: {c['examples'][:1]}" for c in rept["checks"] if c["status"] == "fail")
+          or f"{len(bad_t)} معامله با NAV نادرست" if (not rept["ok"] or bad_t) else f"{len(rt['trades'])} معامله")
     fails0 = [c["name"] for c in rep0["checks"] if c["status"] == "fail"]
     R.add(g, "بررسی مستقل feed را خودش می‌خواند: نتیجهٔ با feed درست است و نتیجهٔ با NAV قدیمی رد می‌شود",
           rep1["ok"] and not rep0["ok"] and any("NAV" in x for x in fails0),

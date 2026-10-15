@@ -72,6 +72,7 @@ class _Raw:
         self._nav: dict[int, tuple] = {}
         self._events: dict[tuple, list] = {}
         self._wins: dict[int, tuple | None] = {}
+        self._feed: dict[int, tuple | None] = {}
 
     def sids_of(self, label: str) -> list[int]:
         rows = self.conn.execute("SELECT symbol_id FROM nav_symbol_map WHERE symbol=?", (label,)).fetchall()
@@ -108,9 +109,35 @@ class _Raw:
             self._nav[sid] = hit
         return hit
 
+    def nav_at(self, sid: int, d: int, t: int):
+        """(date, time, nav, nav_date, nav_time) known at (d, t): from the feed when imported, else the dump's
+        latest row at or before the instant."""
+        T = _ts(d, t)
+        f = self.feed(sid)
+        if f:
+            j = bisect.bisect_right(f[0], T) - 1
+            return (d, t) + f[1][j] if j >= 0 else None
+        tsx, rows = self.nav_rows(sid)
+        j = bisect.bisect_right(tsx, T) - 1
+        return (d, t, rows[j][2], rows[j][3], rows[j][4]) if j >= 0 else None
+
+    def navs_between(self, sid: int, a: int, b: int) -> list:
+        """Every NAV state known at some instant in [a, b] (seconds), as (date, time, nav, nav_date, nav_time)."""
+        f = self.feed(sid)
+        if f:
+            rep, best = f
+            i, k = bisect.bisect_right(rep, a) - 1, bisect.bisect_right(rep, b)
+            return [(0, 0) + best[x] for x in range(max(i, 0), k)]
+        tsx, rows = self.nav_rows(sid)
+        i, k = bisect.bisect_right(tsx, a) - 1, bisect.bisect_right(tsx, b)
+        return [(r[0], r[1], r[2], r[3], r[4]) for r in rows[max(i, 0):k]]
+
     def feed(self, sid: int):
         """(report instants, NAV known after each report) of the feed, None without one. Known = the reported NAV
         that refers to the LATEST moment (nav_time) among everything received so far."""
+        if sid in self._feed:
+            return self._feed[sid]
+        self._feed[sid] = None
         if not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='nav_feed'").fetchone():
             return None
         rows = self.conn.execute("SELECT rdate, rtime, nav, nav_date, nav_time FROM nav_feed WHERE symbol_id=? "
@@ -124,6 +151,7 @@ class _Raw:
                 cur, ck = (float(nav), int(nd or 0), int(nt or 0)), k
             rep.append(_ts(rd, rt))
             best.append(cur)
+        self._feed[sid] = (rep, best)
         return rep, best
 
     def _blob(self, sid: int, date: int, kind: str) -> list:
@@ -173,6 +201,17 @@ class _Raw:
             self._wins[date] = (lo, hi) if lo is not None else None
         return self._wins[date]
 
+    def tape_cum(self, sid: int, date: int) -> list:
+        """[(second, cumulative volume)] of the day's non-cancelled TSE trades, in trade order."""
+        rows = sorted((r for r in self._blob(sid, date, "trades") if not r[4] and r[2] > 0 and r[3] > 0),
+                      key=lambda r: r[0])
+        out, cum = [], 0
+        for r in rows:
+            cum += r[3]
+            out.append((_sec(r[1]), cum))
+        out.sort()
+        return out
+
     def closes(self, sid: int) -> dict[int, float]:
         """{date: last non-cancelled TSE trade price of the day}."""
         out = {}
@@ -213,7 +252,11 @@ def verify(db_path: str, res: dict) -> dict:
     p = res.get("params") or {}
     trades = res.get("trades") or []
     raw = _Raw(str(db_path))
-    hybrid = p.get("dataset") == "hybrid"
+    # order-book datasets: "hybrid" (decisions at the NAV dump's snapshot instants) and "tse" (decisions on a fixed
+    # time grid, NAV = the one known at each grid instant); both fill against the real book
+    hybrid = p.get("dataset") in ("hybrid", "tse")
+    grid = p.get("dataset") == "tse"
+    quote_age = int(p.get("fill_quote_age_min", 90)) * 60
     bf, sf = float(p.get("buy_fee", 0)), float(p.get("sell_fee", 0))
     hold_like = p.get("fill_mode") in ("hold", "best")
     lim = (float(p.get("fill_max_rel_pct", 0)) if hold_like else -float(p.get("entry_discount_pct", 0))) / 100.0
@@ -264,7 +307,9 @@ def verify(db_path: str, res: dict) -> dict:
         T = _ts(d, tm)
         j = bisect.bisect_right(tsx, T) - 1
         r = rows[j] if j >= 0 else None
-        if r is None or _ts(r[0], r[1]) != T:
+        if grid:                              # a grid instant: the NAV known at that very instant
+            r = raw.nav_at(sid, d, tm)
+        if r is None or (not grid and _ts(r[0], r[1]) != T):
             C["nav_in"].bad(f"{sym} {d} {tm}: no NAV-dump row at the entry instant")
         else:
             nav = float(r[2])
@@ -323,6 +368,7 @@ def verify(db_path: str, res: dict) -> dict:
         j = bisect.bisect_right(tsx, T) - 1
 
         def stale(r):
+            # r = (date, time, nav, nav_date, nav_time, ...) of the quote the sale is made on
             if nav_age:
                 return not (r[3] and r[4]) or T - _ts(r[3], r[4]) > nav_age or _ts(r[3], r[4]) > _ts(r[0], r[1]) + 60
             return bool(r[3]) and _day(r[0]) - _day(r[3]) > int(p.get("max_nav_age_days", 2))
@@ -341,6 +387,19 @@ def verify(db_path: str, res: dict) -> dict:
         # two-sided book). It must carry a current NAV — a later stale one forbids the sale — except for the
         # final liquidation, which uses the last row with a current NAV
         found, why = None, ""
+        if grid:
+            # the sale is made on the fund's latest grid quote within the quote age; its NAV is the one known at
+            # that quote's instant and must still be current at the sale instant
+            cands = raw.navs_between(sid, T - quote_age, T)
+            want = [t["nav_exit"] for t in ts]
+            hit = [c for c in cands if all(abs(c[2] - w) <= REL_TOL * c[2] for w in want)]
+            if not hit:
+                why = "no NAV known within the quote age matches"
+            elif not is_end and not any(not stale((d, tm) + c[2:]) for c in hit):
+                why = "the matching NAV was stale at the sale instant"
+            else:
+                found = hit[-1]
+            j = -1
         while j >= 0 and T - tsx[j] <= 3 * 86400:
             r = rows[j]
             j -= 1
@@ -398,10 +457,15 @@ def verify(db_path: str, res: dict) -> dict:
                 continue
             tsx, rows = raw.nav_rows(sid)
             day = [r for r in rows if r[0] == d]
+            tape = raw.tape_cum(sid, d) if grid else None     # the grid dataset's volume is the TSE trade tape's
             used = 0.0
             for s, kind, u in sorted(lst):                     # a sale at an instant comes before the buy it pays for
                 if kind == 1:
-                    if p.get("participation_basis") == "sofar":
+                    if tape is not None:
+                        k = bisect.bisect_right([x for x, _c in tape], s) if p.get("participation_basis") == "sofar" \
+                            else len(tape)
+                        cum = float(tape[k - 1][1]) if k > 0 else 0.0
+                    elif p.get("participation_basis") == "sofar":
                         cum = max([float(r[6] or 0) for r in day if _sec(r[1]) <= s] or [0.0])
                     else:
                         cum = max([float(r[6] or 0) for r in day] or [0.0])
