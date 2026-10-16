@@ -375,6 +375,7 @@ class Study:
         self.rng = random.Random(seed)
         self.progress, self.lock = progress, lock
         self.t0 = time.time()
+        self.tb0 = self.t0             # start of the time budget: after the data is built (see run)
         self.truncated = False
         self.auto_added: list[str] = []
         self.dropped: list[str] = []
@@ -455,7 +456,7 @@ class Study:
                 self.progress.update(kw)
 
     def _time_left(self) -> bool:
-        return time.time() - self.t0 < self.max_seconds
+        return time.time() - self.tb0 < self.max_seconds
 
     def _setup(self):
         funds = D._universe(self.db_raw, self.cats, self.symbols)
@@ -949,7 +950,11 @@ class Study:
         self.passive = self._passive(self._universe(_to_params(self.base, default_rec["cfg"]))) if default_rec else \
             {"blocks": [], "train": None, "hold": None}
         done = 0
-        search_end = self.t0 + self.max_seconds * 0.8        # keep 20% for refinement + analysis
+        # the time limit is for the SEARCH: preparing the data the first time (order-book grids, minutes on a large
+        # dataset, then cached) must not eat it
+        self.tm["prep_s"] = round(time.time() - self.t0, 1)
+        self.tb0 = time.time()
+        search_end = self.tb0 + self.max_seconds * 0.8        # keep 20% for refinement + analysis
         pool = self._start_pool(db)
         self.parallel = pool is not None
         try:
@@ -1047,6 +1052,11 @@ class Study:
                     r["ok"] = r["train"]["trade_count"] >= m
                 qual = [r for r in random_recs if r["ok"]]
         if len(random_recs) < 3:
+            if self.truncated or not self._time_left() or total >= 3:
+                raise ValueError(f"زمان جستجو تمام شد و فقط {len(random_recs)} ترکیب آزمایش شد (فضای جستجو {total} ترکیب داشت). "
+                                 f"ساختن داده {self.tm.get('prep_s', 0):.0f} ثانیه طول کشید و از سقف زمان کم نشد؛ "
+                                 f"آزمایش هر ترکیب کند است: «سقف زمان» را بیشتر کنید، شبکهٔ زمانی TSE را درشت‌تر "
+                                 f"(۱۰ یا ۱۵ دقیقه) یا «حداکثر ترکیب ساختاری» را کمتر کنید.")
             raise ValueError(f"فضای جستجو فقط {len(random_recs)} ترکیب متفاوت دارد؛ پارامتر یا مقدار بیشتری برای جستجو بدهید (پانل «۴) تنظیمات بهینه‌سازی»).")
         if len(qual) < 3:
             raise ValueError(f"فقط {len(qual)} ترکیب حتی {self.min_trades} معامله در آموزش داشتند (از {len(random_recs)} ترکیب). "
@@ -1142,7 +1152,7 @@ class Study:
         # 1) probability of overfitting over every split of the blocks into two halves
         out["pbo"] = _pbo(qual, robust=self.objective == "robust")
         # 2) plateau: the configuration whose one-step neighbourhood scores best on average (training only)
-        until = self.t0 + self.max_seconds * 1.15
+        until = self.tb0 + self.max_seconds * 1.15
         for r in sorted(qual, key=lambda r: -r["score"])[:5]:
             for cand in self._neighbours(r["cfg"]):
                 if time.time() > until:
