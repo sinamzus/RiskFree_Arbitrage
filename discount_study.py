@@ -123,6 +123,14 @@ for _d in SETTLED:
     if _d in DIMS:
         DIMS[_d]["settled"] = True
 PRESETS["full"] = [d for d in ORDER if not DIMS[d].get("assumption") and not DIMS[d].get("settled")]
+# settled by MEASUREMENT (on the data of the time) — the ones a new data set can overturn; the others are settled by
+# construction (inactive in "hold", only for a fixed session, a pure rescaling of another parameter)
+SETTLED_EMPIRICAL = ("fill_mode", "session_mode", "require_fresh", "crash_scope")
+# re-checking them: the measured ones plus what decides each fill mode (the normal rules for "off", the exit for
+# "best", the switch rules for "hold") so no mode is judged with untuned rules
+PRESETS["settled"] = list(SETTLED_EMPIRICAL) + ["session_start", "session_end", "entry_discount_pct", "exit_discount_pct", "max_hold_days",
+                                               "fill_exit_rel_pct", "fill_max_rel_pct", "fill_switch_pct",
+                                               "fill_min_hold_min", "baseline_days", "crash_drop_pct"]
 
 OBJECTIVES = {
     "robust": "پایدار: میانگین بازدهِ بلوک‌ها − ½ انحراف معیارشان (پیش‌فرض)",
@@ -769,6 +777,37 @@ class Study:
         self.db_raw = _RawCache(db, D._warmup_start(self.start, warm_p) if self.start else None)
         self._setup()
 
+    def _settled_check(self, marg: dict) -> list[dict]:
+        """For every settled parameter that was searched: is its settled value (the engine's default) still the
+        best? Compared on the marginal means of both the training score and the hold-out return; 0.5 point is the
+        margin within which values count as equal."""
+        dflt = D.DiscountParams()
+        out = []
+        for d in SETTLED_EMPIRICAL:              # (the others are settled by construction, not by a measurement)
+            rows = marg.get(d)
+            if not rows or d not in self.space:
+                continue
+            sv = getattr(dflt, d, None)
+            me = next((r for r in rows if r["value"] == sv), None)
+            if me is None:
+                continue
+            others = [r for r in rows if r is not me]
+            bt = max(others, key=lambda r: r["train_mean"] or -1e9)
+            bh = max(others, key=lambda r: r["hold_mean"] or -1e9)
+            gt = (bt["train_mean"] or 0) - (me["train_mean"] or 0)
+            gh = (bh["hold_mean"] or 0) - (me["hold_mean"] or 0)
+            if gt <= 0.5 and gh <= 0.5:
+                verdict, why = "kept", "مقدار مسجل در آموزش و آزمون بهترین است یا با فاصلهٔ کمتر از ۰٫۵ نقطه هم‌تراز"
+            elif gt > 0.5 and gh > 0.5:
+                better = bt["value"] if bt["value"] == bh["value"] else f"{bt['value']} / {bh['value']}"
+                verdict, why = "overturned", f"مقدار {better} در هر دو دوره بهتر است (آموزش +{gt:.2f}، آزمون +{gh:.2f})"
+            else:
+                verdict, why = "unclear", (f"در یک دوره مقدار دیگری بهتر است (آموزش {gt:+.2f}، آزمون {gh:+.2f} نقطه "
+                                           f"نسبت به مقدار مسجل)")
+            out.append({"dim": d, "label": DIMS[d]["label"], "settled_value": sv, "reason": SETTLED[d],
+                        "empirical": d in SETTLED_EMPIRICAL, "verdict": verdict, "why": why, "rows": rows})
+        return out
+
     def _fit_workers(self, shared_bytes: int = 0) -> None:
         """Automatic worker count: every core but one, but no more than the free memory holds. A worker's memory is
         estimated from what this process grew by while preparing the data (a worker holds that and up to a few
@@ -1203,6 +1242,7 @@ class Study:
                                  "hold_pos_pct": _num(sum(1 for x in gs_h[v] if x > 0) / len(gs_h[v]) * 100, 1)})
             marg[d] = rows
         imp.sort(key=lambda x: -((x["eta_train"] or 0) + (x["eta_hold"] or 0)))
+        settled_check = self._settled_check(marg)
 
         # --- pair heat maps for the three most important dims -------------------------------------
         pairs = []
@@ -1483,6 +1523,7 @@ class Study:
                                "share_hold_positive_pct": _num(pos_hold, 1), "top_decile_hold_mean": _num(top_hold, 2),
                                "hold_median_all": _num(_median(ho), 2), "n": len(qual)},
             "importance": imp, "marginals": {d: v for d, v in marg.items()}, "pairs": pairs,
+            "settled_check": settled_check,
             "neighbours": {"rows": nb, "plateau_pct": _num(plateau, 1)},
             "walk_forward": {"rows": wf, "stats": wf_stats},
             "sensitivity": sens, "scatter": scatter, "findings": findings, "passive": self.passive,

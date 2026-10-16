@@ -2074,6 +2074,19 @@ def test_parallel_study(R: Results, db):
           small[0] == 1 and small[1] and st2.workers == 8 and fixed.workers == 6, f"{small} / {st2.workers} / {fixed.workers}")
 
 
+def test_settled_check(R: Results, db):
+    """Re-checking the settled parameters: every measured settled parameter that was searched gets a verdict; the
+    ones settled by construction are not judged."""
+    space = {d: list(S.DIMS[d]["choices"]) for d in ("fill_mode", "require_fresh", "fill_switch_pct", "entry_discount_pct")}
+    out = S.run_study(db, None, None, None, None, base=_base(fill_mode="hold", fill_max_rel_pct=0.3), space=space,
+                      n_samples=60, blocks=4, max_seconds=40, min_trades=1, workers=1)
+    sc = {c["dim"]: c for c in out.get("settled_check") or []}
+    R.add("بهینه‌ساز", "بازبینی مسجل‌ها: هر پارامتر مسجلِ اندازه‌گیری‌شده که جستجو شد حکم «تأیید / رد / نامطمئن» می‌گیرد",
+          set(sc) == {"fill_mode", "require_fresh"} and all(c["verdict"] in ("kept", "overturned", "unclear") for c in sc.values())
+          and "settled" in S.PRESETS and all(d in S.DIMS for d in S.PRESETS["settled"]),
+          str({d: c["verdict"] for d, c in sc.items()}))
+
+
 def test_validation_hold(R: Results, db):
     """Validation of the always-invested mode: the placebo (rank by ANOTHER fund's bubble) must be calibrated —
     rarely 'significant' where bubbles carry no information, always where they mean-revert."""
@@ -2591,6 +2604,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
+             ("بازبینی مسجل‌ها", lambda: test_settled_check(R, db)),
              ("بهینه‌سازی موازی", lambda: (test_optimizer_coverage(R), test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
              ("بهینه‌ساز: قابلیت اطمینان", lambda: test_optimizer_reliability(R, path)),
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),

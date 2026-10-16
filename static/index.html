@@ -8506,6 +8506,7 @@ async function discStudyBuild() {
       ${preset('quick', '⚡ سریع (۴ پارامتر)', 'فقط ورود، خروج، نگه‌داری و حد ضرر؛ سریع‌ترین و کم‌ابعادترین مطالعه')}
       ${preset('medium', '◐ متوسط', 'سریع + نوع حد ضرر، تعدیل حباب دائمی، فیلتر بازگشت به میانگین')}
       ${preset('full', '● کامل (همهٔ پارامترهای راهبرد و داده)', 'همهٔ پارامترهای راهبرد و داده با هم جستجو و تحلیل می‌شوند؛ فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) جستجو نمی‌شوند')}
+      ${preset('settled', '🔍 بازبینی مسجل‌ها', 'پارامترهایی که با اندازه‌گیری روی دادهٔ قبلی «مسجل» شده بودند (حالت سرمایهٔ بیکار، ساعت جلسه، فقط قیمت تازه، گروه ریزش) دوباره با دادهٔ فعلی جستجو می‌شوند، همراه با قواعدی که هر حالت را تعیین می‌کند تا هیچ حالتی با قواعد تنظیم‌نشده قضاوت نشود. در گزارش برای هر کدام نوشته می‌شود «تأیید»، «رد» یا «نامطمئن».')}
       ${preset('everything', '⚠ همه، با فرض‌های اجرایی', 'علاوه بر همهٔ پارامترها، اسپرد، کارمزد و سقف حجم هم جستجو می‌شوند. هشدار: بهینه‌ساز ارزان‌ترین هزینه را برمی‌گزیند و این یافته نیست؛ فقط برای دیدن اندازهٔ اثر هزینه‌هاست.')}
       ${preset('reset', '↻ دامنه‌های پیش‌فرض', 'برگرداندن مقدارهای هر پارامتر به دامنهٔ پیش‌فرض')}
       ${preset('all', '☑ همه را جستجو کن', 'همهٔ پارامترهای راهبرد و داده (بدون فرض‌های اجرایی) تیک می‌خورند')}
@@ -8587,7 +8588,7 @@ function discStudyPresetDims(k, sp) {
   const mode = document.getElementById('disc-entrymode').value;
   const strip = ['entry_discount_pct', 'exit_discount_pct', 'index_entry_pct', 'index_exit_pct'];
   const base = (sp.presets[k] || []).filter(d => !strip.includes(d));
-  return (k === 'full' || k === 'everything') ? sp.presets[k] : discStudyEntryDims(mode).concat(base);
+  return (k === 'full' || k === 'everything' || k === 'settled') ? sp.presets[k] : discStudyEntryDims(mode).concat(base);
 }
 
 function discStudyPreset(k) {
@@ -9040,6 +9041,16 @@ function renderDiscStudy(res, p) {
   const impHtml = res.importance.map(x => `<tr><td style="text-align:start">${x.label}</td>
       <td style="min-width:200px"><div style="height:8px;background:#4fa3ff;width:${((x.eta_train || 0) / mxI * 100).toFixed(0)}%;border-radius:2px;display:inline-block"></div> <bdi dir="ltr">${((x.eta_train || 0) * 100).toFixed(0)}%</bdi></td>
       <td style="min-width:200px"><div style="height:8px;background:#e0a030;width:${((x.eta_hold || 0) / mxI * 100).toFixed(0)}%;border-radius:2px;display:inline-block"></div> <bdi dir="ltr">${((x.eta_hold || 0) * 100).toFixed(0)}%</bdi></td><td>${x.n_active}</td></tr>`).join('');
+  // settled parameters re-checked on this data
+  const scv = {kept: ['var(--green)', '✔ تأیید'], overturned: ['var(--red)', '✖ رد'], unclear: ['var(--yellow, #e0a800)', '~ نامطمئن']};
+  const settledHtml = (res.settled_check || []).length ? `<div class="dv-sec"><div class="disc-h">🔍 بازبینی پارامترهای مسجل با همین داده</div>
+    <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">پارامتر</th><th>مقدار مسجل</th>
+      <th style="text-align:start">دلیل قبلی</th><th>همهٔ مقدارها (امتیاز آموزش / بازده آزمون)</th><th>نتیجه</th><th style="text-align:start">توضیح</th></tr></thead><tbody>
+    ${res.settled_check.map(c => `<tr><td style="text-align:start">${c.label}${c.empirical ? '' : ' <span style="color:var(--muted);font-size:10px">(ساختاری)</span>'}</td>
+      <td>${dsVal(c.dim, c.settled_value)}</td><td style="text-align:start;font-size:10px">${c.reason}</td>
+      <td style="font-size:10px">${c.rows.map(r => `${dsVal(c.dim, r.value)}: ${dsPct(r.train_mean, 1)} / ${dsPct(r.hold_mean, 1)}`).join(' · ')}</td>
+      <td style="color:${(scv[c.verdict] || [''])[0]}"><b>${(scv[c.verdict] || ['', c.verdict])[1]}</b></td><td style="text-align:start;font-size:10px">${c.why}</td></tr>`).join('')}
+    </tbody></table></div></div>` : '';
   // marginal tables
   const order = res.importance.map(x => x.dim);
   const mx = Math.max(1, ...Object.values(res.marginals).flat().map(r => Math.abs(r.hold_mean || 0)));
@@ -9088,6 +9099,7 @@ function renderDiscStudy(res, p) {
       ${res.recommended ? `<div class="dv-note">${res.recommended.same_as_best ? 'برنده خودش در یک ناحیهٔ پایدار است (میانگین همسایه‌هایش هم بهترین است).' : 'ردیف «پیشنهادی»: به‌جای تکیه بر یک نقطهٔ اوج، ترکیبی که همسایه‌هایش هم خوب‌اند — برای استفادهٔ واقعی امن‌تر از «برنده» است.'}</div>` : ''}
       ${res.findings.length ? `<ul style="margin:6px 0 0;padding-inline-start:18px;font-size:12px;line-height:1.9">${res.findings.map(f => `<li>${f}</li>`).join('')}</ul>` : ''}</div>
 
+    ${settledHtml}
     <div class="dv-sec"><div class="disc-h">اهمیت پارامترها — هر پارامتر چند درصد از تغییرات نتیجه را توضیح می‌دهد</div>
       <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">پارامتر</th><th>روی امتیاز آموزش (آبی)</th><th>روی بازدهٔ آزمون (نارنجی)</th><th>نمونهٔ فعال</th></tr></thead><tbody>${impHtml}</tbody></table></div>
       <div class="dv-note">اگر هر دو ستون برای پارامتری نزدیک صفر است، تغییرش بی‌اثر است. اگر فقط آبی بزرگ است و نارنجی صفر، اثرِ ظاهری فقط روی گذشته بوده (برازش).</div></div>
