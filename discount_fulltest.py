@@ -2081,10 +2081,11 @@ def test_settled_check(R: Results, db):
     out = S.run_study(db, None, None, None, None, base=_base(fill_mode="hold", fill_max_rel_pct=0.3), space=space,
                       n_samples=60, blocks=4, max_seconds=40, min_trades=1, workers=1)
     sc = {c["dim"]: c for c in out.get("settled_check") or []}
-    R.add("بهینه‌ساز", "بازبینی مسجل‌ها: هر پارامتر مسجلِ اندازه‌گیری‌شده که جستجو شد حکم «تأیید / رد / نامطمئن» می‌گیرد",
-          set(sc) == {"fill_mode", "require_fresh"} and all(c["verdict"] in ("kept", "overturned", "unclear") for c in sc.values())
+    R.add("بهینه‌ساز", "بازبینی مسجل‌ها: هر پارامتر مسجلِ اندازه‌گیری‌شده که جستجو شد حکم «تأیید / رد / نامطمئن / بی‌اثر» می‌گیرد، بر پایهٔ اجرای جفتی",
+          set(sc) == {"fill_mode", "require_fresh"} and all(c["verdict"] in ("kept", "overturned", "unclear", "no_effect") for c in sc.values())
+          and all(c.get("pairs") for c in sc.values())
           and "settled" in S.PRESETS and all(d in S.DIMS for d in S.PRESETS["settled"]),
-          str({d: c["verdict"] for d, c in sc.items()}))
+          str({d: (c["verdict"], c.get("pairs")) for d, c in sc.items()}))
 
 
 def test_validation_hold(R: Results, db):

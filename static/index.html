@@ -9042,13 +9042,14 @@ function renderDiscStudy(res, p) {
       <td style="min-width:200px"><div style="height:8px;background:#4fa3ff;width:${((x.eta_train || 0) / mxI * 100).toFixed(0)}%;border-radius:2px;display:inline-block"></div> <bdi dir="ltr">${((x.eta_train || 0) * 100).toFixed(0)}%</bdi></td>
       <td style="min-width:200px"><div style="height:8px;background:#e0a030;width:${((x.eta_hold || 0) / mxI * 100).toFixed(0)}%;border-radius:2px;display:inline-block"></div> <bdi dir="ltr">${((x.eta_hold || 0) * 100).toFixed(0)}%</bdi></td><td>${x.n_active}</td></tr>`).join('');
   // settled parameters re-checked on this data
-  const scv = {kept: ['var(--green)', '✔ تأیید'], overturned: ['var(--red)', '✖ رد'], unclear: ['var(--yellow, #e0a800)', '~ نامطمئن']};
+  const scv = {kept: ['var(--green)', '✔ تأیید'], overturned: ['var(--red)', '✖ رد'], unclear: ['var(--yellow, #e0a800)', '~ نامطمئن'], no_effect: ['var(--muted)', '○ بی‌اثر']};
   const settledHtml = (res.settled_check || []).length ? `<div class="dv-sec"><div class="disc-h">🔍 بازبینی پارامترهای مسجل با همین داده</div>
     <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">پارامتر</th><th>مقدار مسجل</th>
-      <th style="text-align:start">دلیل قبلی</th><th>همهٔ مقدارها (امتیاز آموزش / بازده آزمون)</th><th>نتیجه</th><th style="text-align:start">توضیح</th></tr></thead><tbody>
+      <th style="text-align:start">دلیل قبلی</th><th>همهٔ مقدارها (امتیاز آموزش / بازده آزمون)</th><th>اجرای جفتی: تغییر نسبت به مقدار مسجل (آموزش / آزمون)</th><th>نتیجه</th><th style="text-align:start">توضیح</th></tr></thead><tbody>
     ${res.settled_check.map(c => `<tr><td style="text-align:start">${c.label}${c.empirical ? '' : ' <span style="color:var(--muted);font-size:10px">(ساختاری)</span>'}</td>
       <td>${dsVal(c.dim, c.settled_value)}</td><td style="text-align:start;font-size:10px">${c.reason}</td>
       <td style="font-size:10px">${c.rows.map(r => `${dsVal(c.dim, r.value)}: ${dsPct(r.train_mean, 1)} / ${dsPct(r.hold_mean, 1)}`).join(' · ')}</td>
+      <td style="font-size:10px">${(c.pairs || []).map(x => `${dsVal(c.dim, x.value)}: ${dsPct(x.d_train, 2)} / ${dsPct(x.d_hold, 2)} <span style="color:var(--muted)">(${x.n} جفت${x.same ? '، ' + x.same + ' یکسان' : ''})</span>`).join(' · ') || '—'}</td>
       <td style="color:${(scv[c.verdict] || [''])[0]}"><b>${(scv[c.verdict] || ['', c.verdict])[1]}</b></td><td style="text-align:start;font-size:10px">${c.why}</td></tr>`).join('')}
     </tbody></table></div></div>` : '';
   // marginal tables

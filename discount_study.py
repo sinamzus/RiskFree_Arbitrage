@@ -778,12 +778,44 @@ class Study:
         self.db_raw = _RawCache(db, D._warmup_start(self.start, warm_p) if self.start else None)
         self._setup()
 
-    def _settled_check(self, marg: dict) -> list[dict]:
+    def _settled_pairs(self, d, sv, qual, n_top: int = 8, until: float | None = None) -> list[dict]:
+        """Paired comparison: the best configurations that use the settled value, re-run with ONLY ``d`` changed to
+        each other value. Marginal means mix every other parameter in (different configurations behind each value)
+        and so carry noise of several points; a pair differs in this one parameter alone."""
+        seeds = [r for r in sorted(qual, key=lambda r: -r["score"]) if r["cfg"].get(d) == sv][:n_top]
+        hold_of = lambda r: r["hold"]["portfolio_return_pct"] or 0.0          # noqa: E731
+        out = []
+        for v in self.space[d]:
+            if v == sv:
+                continue
+            dt, dh = [], []
+            for s in seeds:
+                if until is not None and time.time() > until:
+                    break
+                cand = dict(s["cfg"])
+                cand[d] = v
+                cand = self._complete(cand)
+                if not _valid(cand):
+                    continue
+                r = self.evaluate(cand, "settled")
+                if r is None:
+                    continue
+                dt.append(r["score"] - s["score"])
+                dh.append(hold_of(r) - hold_of(s))
+            if dt:
+                out.append({"value": v, "n": len(dt), "d_train": _num(_mean(dt), 3), "d_hold": _num(_mean(dh), 3),
+                            "better_train": sum(1 for x in dt if x > 1e-6), "better_hold": sum(1 for x in dh if x > 1e-6),
+                            "same": sum(1 for a, b in zip(dt, dh) if abs(a) <= 1e-6 and abs(b) <= 1e-6)})
+        return out
+
+    def _settled_check(self, marg: dict, qual: list | None = None) -> list[dict]:
         """For every settled parameter that was searched: is its settled value (the engine's default) still the
-        best? Compared on the marginal means of both the training score and the hold-out return; 0.5 point is the
-        margin within which values count as equal."""
+        best? Judged on paired runs (the best configurations with only this parameter changed) when there are any,
+        otherwise on the marginal means; in both cases on the training score and the hold-out return, with 0.5 point
+        as the margin within which values count as equal."""
         dflt = D.DiscountParams()
         out = []
+        until = self.tb0 + self.max_seconds * 1.3 if getattr(self, "tb0", None) else None
         for d in SETTLED_EMPIRICAL:              # (the others are settled by construction, not by a measurement)
             rows = marg.get(d)
             if not rows or d not in self.space:
@@ -792,21 +824,37 @@ class Study:
             me = next((r for r in rows if r["value"] == sv), None)
             if me is None:
                 continue
-            others = [r for r in rows if r is not me]
-            bt = max(others, key=lambda r: r["train_mean"] or -1e9)
-            bh = max(others, key=lambda r: r["hold_mean"] or -1e9)
-            gt = (bt["train_mean"] or 0) - (me["train_mean"] or 0)
-            gh = (bh["hold_mean"] or 0) - (me["hold_mean"] or 0)
+            pairs = self._settled_pairs(d, sv, qual, until=until) if qual else []
+            if pairs:
+                n = sum(x["n"] for x in pairs)
+                if all(x["same"] == x["n"] for x in pairs):
+                    out.append({"dim": d, "label": DIMS[d]["label"], "settled_value": sv, "reason": SETTLED[d],
+                                "empirical": True, "verdict": "no_effect", "rows": rows, "pairs": pairs,
+                                "why": f"در {n} اجرای جفتی (همان ترکیب، فقط این پارامتر عوض شد) نتیجه دقیقاً یکسان بود: "
+                                       f"روی این داده بی‌اثر است؛ مسجل‌بودنش ضرری ندارد"})
+                    continue
+                bt = max(pairs, key=lambda x: x["d_train"] or -1e9)
+                bh = max(pairs, key=lambda x: x["d_hold"] or -1e9)
+                gt, gh = bt["d_train"] or 0, bh["d_hold"] or 0
+                basis = f"{n} اجرای جفتی"
+            else:
+                others = [r for r in rows if r is not me]
+                bt = max(others, key=lambda r: r["train_mean"] or -1e9)
+                bh = max(others, key=lambda r: r["hold_mean"] or -1e9)
+                gt = (bt["train_mean"] or 0) - (me["train_mean"] or 0)
+                gh = (bh["hold_mean"] or 0) - (me["hold_mean"] or 0)
+                basis = "میانگین حاشیه‌ای"
             if gt <= 0.5 and gh <= 0.5:
-                verdict, why = "kept", "مقدار مسجل در آموزش و آزمون بهترین است یا با فاصلهٔ کمتر از ۰٫۵ نقطه هم‌تراز"
+                verdict, why = "kept", f"مقدار مسجل در آموزش و آزمون بهترین است یا با فاصلهٔ کمتر از ۰٫۵ نقطه هم‌تراز ({basis})"
             elif gt > 0.5 and gh > 0.5:
                 better = bt["value"] if bt["value"] == bh["value"] else f"{bt['value']} / {bh['value']}"
-                verdict, why = "overturned", f"مقدار {better} در هر دو دوره بهتر است (آموزش +{gt:.2f}، آزمون +{gh:.2f})"
+                verdict, why = "overturned", f"مقدار {better} در هر دو دوره بهتر است (آموزش +{gt:.2f}، آزمون +{gh:.2f}؛ {basis})"
             else:
                 verdict, why = "unclear", (f"در یک دوره مقدار دیگری بهتر است (آموزش {gt:+.2f}، آزمون {gh:+.2f} نقطه "
-                                           f"نسبت به مقدار مسجل)")
+                                           f"نسبت به مقدار مسجل؛ {basis})")
             out.append({"dim": d, "label": DIMS[d]["label"], "settled_value": sv, "reason": SETTLED[d],
-                        "empirical": d in SETTLED_EMPIRICAL, "verdict": verdict, "why": why, "rows": rows})
+                        "empirical": d in SETTLED_EMPIRICAL, "verdict": verdict, "why": why, "rows": rows,
+                        "pairs": pairs})
         return out
 
     def _fit_workers(self, shared_bytes: int = 0) -> None:
@@ -1252,7 +1300,7 @@ class Study:
                                  "hold_pos_pct": _num(sum(1 for x in gs_h[v] if x > 0) / len(gs_h[v]) * 100, 1)})
             marg[d] = rows
         imp.sort(key=lambda x: -((x["eta_train"] or 0) + (x["eta_hold"] or 0)))
-        settled_check = self._settled_check(marg)
+        settled_check = self._settled_check(marg, qual)
 
         # --- pair heat maps for the three most important dims -------------------------------------
         pairs = []
