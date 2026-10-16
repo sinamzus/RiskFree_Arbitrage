@@ -8507,6 +8507,7 @@ async function discStudyBuild() {
       ${preset('medium', '◐ متوسط', 'سریع + نوع حد ضرر، تعدیل حباب دائمی، فیلتر بازگشت به میانگین')}
       ${preset('full', '● کامل (همهٔ پارامترهای راهبرد و داده)', 'همهٔ پارامترهای راهبرد و داده با هم جستجو و تحلیل می‌شوند؛ فرض‌های اجرایی (اسپرد، کارمزد، سقف حجم) جستجو نمی‌شوند')}
       ${preset('settled', '🔍 بازبینی مسجل‌ها', 'پارامترهایی که با اندازه‌گیری روی دادهٔ قبلی «مسجل» شده بودند (حالت سرمایهٔ بیکار، ساعت جلسه، فقط قیمت تازه، گروه ریزش) دوباره با دادهٔ فعلی جستجو می‌شوند، همراه با قواعدی که هر حالت را تعیین می‌کند تا هیچ حالتی با قواعد تنظیم‌نشده قضاوت نشود. در گزارش برای هر کدام نوشته می‌شود «تأیید»، «رد» یا «نامطمئن».')}
+      ${preset('slow', '🐢 لبهٔ کند', 'فقط «همیشه سرمایه‌گذاری» با جابه‌جایی کم: حداقل برتری ۱ تا ۵ نقطه، حداقل نگه‌داری ۱ تا ۱۰ روز، دورهٔ معمولِ خود صندوق ۱۰ تا ۶۰ روز. مطالعهٔ سیگنال نشان داد سیگنالِ «نسبت به معمول خود صندوق» فقط در افق ۵ تا ۱۰ روز بیش از هزینهٔ جابه‌جایی پیش‌بینی می‌کند؛ این preset همان را می‌سنجد (با دامنه‌های خودش؛ «↻ دامنه‌های پیش‌فرض» آن‌ها را برمی‌گرداند).')}
       ${preset('everything', '⚠ همه، با فرض‌های اجرایی', 'علاوه بر همهٔ پارامترها، اسپرد، کارمزد و سقف حجم هم جستجو می‌شوند. هشدار: بهینه‌ساز ارزان‌ترین هزینه را برمی‌گزیند و این یافته نیست؛ فقط برای دیدن اندازهٔ اثر هزینه‌هاست.')}
       ${preset('reset', '↻ دامنه‌های پیش‌فرض', 'برگرداندن مقدارهای هر پارامتر به دامنهٔ پیش‌فرض')}
       ${preset('all', '☑ همه را جستجو کن', 'همهٔ پارامترهای راهبرد و داده (بدون فرض‌های اجرایی) تیک می‌خورند')}
@@ -8588,7 +8589,7 @@ function discStudyPresetDims(k, sp) {
   const mode = document.getElementById('disc-entrymode').value;
   const strip = ['entry_discount_pct', 'exit_discount_pct', 'index_entry_pct', 'index_exit_pct'];
   const base = (sp.presets[k] || []).filter(d => !strip.includes(d));
-  return (k === 'full' || k === 'everything' || k === 'settled') ? sp.presets[k] : discStudyEntryDims(mode).concat(base);
+  return (k === 'full' || k === 'everything' || k === 'settled' || k === 'slow') ? sp.presets[k] : discStudyEntryDims(mode).concat(base);
 }
 
 function discStudyPreset(k) {
@@ -8599,6 +8600,10 @@ function discStudyPreset(k) {
   else if (k === 'all') st.on = Object.fromEntries(sp.dims.map(d => [d.key, !d.assumption && !d.settled]));
   else if (k === 'none') st.on = Object.fromEntries(sp.dims.map(d => [d.key, false]));
   else st.on = Object.fromEntries(sp.dims.map(d => [d.key, discStudyPresetDims(k, sp).includes(d.key)]));
+  // a preset with its own value ranges / fixed values (e.g. the slow edge)
+  const pv = (sp.preset_values || {})[k], pf = (sp.preset_fixed || {})[k];
+  if (pv) { st.vals = Object.assign({}, st.vals || {}); Object.entries(pv).forEach(([d, a]) => { st.vals[d] = a.join(','); }); }
+  if (pf) { st.fix = Object.assign({}, st.fix || {}); Object.entries(pf).forEach(([d, v]) => { st.fix[d] = String(v); }); }
   discStudySave(st);
   discStudyBuild();
 }

@@ -2088,6 +2088,24 @@ def test_settled_check(R: Results, db):
           str({d: (c["verdict"], c.get("pairs")) for d, c in sc.items()}))
 
 
+def test_slow_preset(R: Results, db):
+    """The slow-edge preset: its own value ranges, every searched parameter active in "always invested", and a study
+    with it runs and only ever switches slowly."""
+    pv, pf = S.PRESET_VALUES["slow"], S.PRESET_FIXED["slow"]
+    info = S.space_info()
+    space = {d: list(pv[d]) for d in S.PRESETS["slow"]}
+    ok_def = (set(pv) == set(S.PRESETS["slow"]) and pf.get("fill_mode") == "hold"
+              and info.get("preset_values", {}).get("slow") == pv and info.get("preset_fixed", {}).get("slow") == pf
+              and all(S._active(d, {"fill_mode": "hold", "crash_drop_pct": 1.0}) for d in space))
+    out = S.run_study(db, None, None, None, None, base=_base(fill_mode="hold", fill_max_rel_pct=0.3), space=space,
+                      n_samples=25, blocks=4, max_seconds=40, min_trades=1, workers=1)
+    cfg = out["best"]["cfg"]
+    ok_run = (cfg.get("fill_mode") == "hold" and cfg.get("fill_switch_pct") in pv["fill_switch_pct"]
+              and cfg.get("fill_min_hold_min") in pv["fill_min_hold_min"])
+    R.add("بهینه‌ساز", "preset «لبهٔ کند»: دامنه‌های خودش، همه فعال در «همیشه سرمایه‌گذاری»، و جستجو اجرا می‌شود",
+          ok_def and ok_run, f"best={ {k: cfg.get(k) for k in space} }")
+
+
 def test_validation_hold(R: Results, db):
     """Validation of the always-invested mode: the placebo (rank by ANOTHER fund's bubble) must be calibrated —
     rarely 'significant' where bubbles carry no information, always where they mean-revert."""
@@ -2447,6 +2465,16 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             on = pg.evaluate("[...document.querySelectorAll('#ds-dims [data-dim]')].filter(c=>c.checked).map(c=>c.dataset.dim)")
             R.add("مرورگر", "در حالت «همیشه سرمایه‌گذاری» پیش‌تنظیم سریع پارامترهای همان حالت را تیک می‌زند",
                   set(on) == {"fill_max_rel_pct", "fill_switch_pct", "fill_min_hold_min"}, str(on))
+            pg.click("text=🐢 لبهٔ کند"); pg.wait_for_timeout(300)
+            on = pg.evaluate("[...document.querySelectorAll('#ds-dims [data-dim]')].filter(c=>c.checked).map(c=>c.dataset.dim)")
+            sw = pg.evaluate("document.querySelector('#ds-dims [data-vals=fill_switch_pct]').value")
+            pay = pg.evaluate("discStudyPayload()")
+            R.add("مرورگر", "preset «لبهٔ کند» پارامترها، دامنه‌های خودش و «همیشه سرمایه‌گذاری» ثابت را می‌گذارد",
+                  set(on) == set(S.PRESETS["slow"]) and sw == "1,1.5,2,3,4,5"
+                  and pay["space"].get("fill_min_hold_min") == [1440, 2880, 7200, 10080, 14400]
+                  and pay["fixedDims"].get("fill_mode") == "hold", f"{on} | {sw} | {pay.get('fixedDims')}")
+            pg.click("text=↻ دامنه‌های پیش‌فرض"); pg.wait_for_timeout(200)
+            pg.click("text=✕ پاک کردن مقدارهای ثابت"); pg.wait_for_timeout(200)
             pg.click("#ds-cancel"); pg.select_option("#disc-fillmode", "off")
             pg.click("#disc-opt-btn"); pg.wait_for_selector("#disc-study-cfg.visible #ds-dims tbody tr")
             R.add("مرورگر", "دکمهٔ بهینه‌سازی یک پنجرهٔ انتخاب پارامتر باز می‌کند و هنوز چیزی اجرا نشده",
@@ -2605,7 +2633,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("نگه‌داری تا کاندیدای بهتر", lambda: test_hold(R, db)),
              ("واقع‌بینی اجرا (حجم تا لحظه، تأخیر)", lambda: test_realism(R, db)),
              ("اعتبارسنجی حالت «همیشه سرمایه‌گذاری»", lambda: test_validation_hold(R, db)),
-             ("بازبینی مسجل‌ها", lambda: test_settled_check(R, db)),
+             ("بازبینی مسجل‌ها", lambda: (test_settled_check(R, db), test_slow_preset(R, db))),
              ("بهینه‌سازی موازی", lambda: (test_optimizer_coverage(R), test_window_marks(R, db), test_fast_replay(R, path), test_parallel_study(R, db))),
              ("بهینه‌ساز: قابلیت اطمینان", lambda: test_optimizer_reliability(R, path)),
              ("مطالعهٔ حجم", lambda: test_volume_study(R, db)),

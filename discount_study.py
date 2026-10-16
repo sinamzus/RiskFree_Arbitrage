@@ -131,6 +131,16 @@ SETTLED_EMPIRICAL = ("fill_mode", "session_mode", "require_fresh", "crash_scope"
 PRESETS["settled"] = list(SETTLED_EMPIRICAL) + ["session_start", "session_end", "entry_discount_pct", "exit_discount_pct", "max_hold_days",
                                                "fill_exit_rel_pct", "fill_max_rel_pct", "fill_switch_pct",
                                                "fill_min_hold_min", "baseline_days", "crash_drop_pct"]
+# the slow edge: the signal study found the bubble against the fund's own norm predictive only over 5-10 days, and only
+# then above the cost of a switch — so "always invested" with a high switch threshold and a hold of days, nothing fast.
+# A preset may bring its own value ranges (wider than the general ones) and the values it fixes.
+PRESETS["slow"] = ["baseline_days", "fill_max_rel_pct", "fill_switch_pct", "fill_min_hold_min", "crash_drop_pct"]
+PRESET_VALUES = {"slow": {"baseline_days": [10, 20, 30, 40, 60],
+                          "fill_max_rel_pct": [-1.0, -0.5, -0.3, 0.0],
+                          "fill_switch_pct": [1.0, 1.5, 2.0, 3.0, 4.0, 5.0],
+                          "fill_min_hold_min": [1440, 2880, 7200, 10080, 14400],
+                          "crash_drop_pct": [0.0, 1.0, 1.5]}}
+PRESET_FIXED = {"slow": {"fill_mode": "hold"}}
 
 OBJECTIVES = {
     "robust": "پایدار: میانگین بازدهِ بلوک‌ها − ½ انحراف معیارشان (پیش‌فرض)",
@@ -1895,4 +1905,4 @@ def space_info() -> dict:
     return {"dims": [{"key": k, "label": DIMS[k]["label"], "kind": DIMS[k]["kind"], "choices": DIMS[k]["choices"],
                       "assumption": bool(DIMS[k].get("assumption")), "settled": bool(DIMS[k].get("settled")),
                       "settled_why": SETTLED.get(k)} for k in ORDER],
-            "presets": PRESETS, "objectives": OBJECTIVES}
+            "presets": PRESETS, "preset_values": PRESET_VALUES, "preset_fixed": PRESET_FIXED, "objectives": OBJECTIVES}
