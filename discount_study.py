@@ -406,6 +406,8 @@ class Study:
         any mode / state of the study are dropped. Both lists are reported."""
         modes = self.space.get("entry_mode") or [self.base.entry_mode]
         need = set()
+        if all(f == "hold" for f in (self.space.get("fill_mode") or [self.base.fill_mode])):
+            modes = []                  # "always invested" has no entry/exit thresholds: nothing to add, all to drop
         if any(m in ("fund", "both") for m in modes):
             need |= {"entry_discount_pct", "exit_discount_pct"}
         if any(m in ("index", "both") for m in modes):
@@ -589,6 +591,14 @@ class Study:
             self.tm["evals"] += 1
             self.tm["eval_s"] += dt_ - (self.tm["load_s"] - n0)      # simulation only (data loading counted apart)
 
+    def _enough(self, c: dict, n_trades, minimum) -> bool:
+        """Does a configuration have enough trades to be judged? Not asked of "always invested": its result is the
+        whole capital held all the time, not a sample of trades, and few switches is exactly what a slow
+        configuration does (a minimum would throw out the slowest ones and bias the search to fast switching)."""
+        if (c.get("fill_mode") or self.base.fill_mode) == "hold":
+            return True
+        return (n_trades or 0) >= minimum
+
     def _evaluate(self, cfg: dict, src: str = "random", base_override: D.DiscountParams | None = None):
         base = base_override or self.base
         c = _normalize(cfg, base)
@@ -633,7 +643,7 @@ class Study:
                                                "avg_exposure_pct")},
                "hold_t": ho.get("t_stat"),
                "blocks": blocks, "robust": robust, "score": score,
-               "ok": tr["trade_count"] >= self.min_trades}
+               "ok": self._enough(c, tr["trade_count"], self.min_trades)}
         if base_override is None:
             self.by_key[key] = rec
             self.records.append(rec)
@@ -1107,7 +1117,7 @@ class Study:
             if m < self.min_trades:
                 self.min_trades = m
                 for r in self.records:
-                    r["ok"] = r["train"]["trade_count"] >= m
+                    r["ok"] = self._enough(r["cfg"], r["train"]["trade_count"], m)
                 qual = [r for r in random_recs if r["ok"]]
         if len(random_recs) < 3:
             if self.truncated or not self._time_left() or total >= 3:
@@ -1365,7 +1375,8 @@ class Study:
         wf = []
         B = self.blocks_n
         for j in range(2, B):
-            elig = [r for r in pool if sum(b["n"] for b in r["blocks"][:j]) >= max(5, self.min_trades * j // max(1, self.T))]
+            elig = [r for r in pool if self._enough(r["cfg"], sum(b["n"] for b in r["blocks"][:j]),
+                                                    max(5, self.min_trades * j // max(1, self.T)))]
             if not elig:
                 continue
             pick = max(elig, key=lambda r: _mean([b["ret"] for b in r["blocks"][:j]]) -

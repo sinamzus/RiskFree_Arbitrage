@@ -2104,6 +2104,20 @@ def test_slow_preset(R: Results, db):
               and cfg.get("fill_min_hold_min") in pv["fill_min_hold_min"])
     R.add("بهینه‌ساز", "preset «لبهٔ کند»: دامنه‌های خودش، همه فعال در «همیشه سرمایه‌گذاری»، و جستجو اجرا می‌شود",
           ok_def and ok_run, f"best={ {k: cfg.get(k) for k in space} }")
+    # "always invested": no trade minimum (it would throw out exactly the slow configurations) and no entry/exit
+    # thresholds added to the search; a normal entry/exit strategy keeps both
+    hold = S.run_study(db, None, None, None, None, base=_base(fill_mode="hold", fill_max_rel_pct=0.3),
+                       space={"fill_switch_pct": [0.8, 5.0, 50.0]}, n_samples=10, blocks=4, max_seconds=30,
+                       min_trades=10 ** 6, workers=1)
+    st = S.Study(db, None, None, None, None, _base(fill_mode="off"), {"max_hold_days": [1, 3]}, n_samples=4, blocks=4,
+                 min_trades=10 ** 6, workers=1)
+    R.add("بهینه‌ساز", "در «همیشه سرمایه‌گذاری» حداقل معامله کنار گذاشته می‌شود و آستانه‌های ورود/خروج جستجو نمی‌شوند؛ "
+          "در حالت عادی هر دو می‌مانند",
+          hold["setup"]["n_qualified"] >= hold["setup"]["n_random"] == 3 and not hold["setup"]["auto_added"]
+          and "entry_discount_pct" not in hold["setup"]["searched"]
+          and not st._enough({"fill_mode": "off"}, 999, 10 ** 6) and "entry_discount_pct" in st.space,
+          f"qualified={hold['setup']['n_qualified']}/{hold['setup']['n_random']}, auto={hold['setup']['auto_added']}, "
+          f"searched={hold['setup']['searched']}")
 
 
 def test_validation_hold(R: Results, db):
