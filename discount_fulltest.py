@@ -1896,7 +1896,8 @@ def test_signal_study(R: Results, workdir: str):
 def _stray_world(path: str) -> str:
     """Three gold funds over four days: a calm book (bid 0.1 % under the NAV, ask 0.1 % over) and, on the second day
     of the first fund, three planted stray orders with known answers — a sell order 2.5 % under the NAV that stays
-    20 s and is cancelled; one 1.5 % under that is taken by a trade within 1 s; a buy order 2 % over that stays 45 s."""
+    20 s and is cancelled; one 1.5 % under that is taken by a trade within 1 s; a buy order 2 % over that stays 45 s.
+    On the third day every fund's asks fall 1.5 % under the NAV together for 30 s: a market move, not a stray order."""
     import tse_gold as G
     from tools.import_nav_dump import _SCHEMA
     if os.path.exists(path):
@@ -1947,6 +1948,11 @@ def _stray_world(path: str) -> str:
                 book += [row(110000, k + 1, thin_a(k, calm(k)[:3])) for k in range(1, 5)]
                 book += [row(110045, k + 1, calm(k)) for k in range(5)]
                 trades.append([999, 100000, round(nav * 0.985, 1), 300, 0])
+            if d == days[2]:
+                # a market-wide fall the NAV has not caught up with yet: EVERY fund's asks 1.5 % under its NAV for 30 s
+                thin_b = lambda k, ask: [round(nav * (0.96 - k * 0.001), 1), 50, 1] + ask  # noqa: E731
+                book += [row(103000, k + 1, thin_b(k, [round(nav * (0.985 + k * 0.001), 1), 400, 1])) for k in range(5)]
+                book += [row(103030, k + 1, calm(k)) for k in range(5)]
             G.store_day(db, sid, d, "trades", f"S{sid}", trades)
             G.store_day(db, sid, d, "book", f"S{sid}", book)
     return path
@@ -1963,24 +1969,32 @@ def test_stray_orders(R: Results, workdir: str):
     row = lambda side, x: next(r for s in out["sides"] if s["side"] == side for r in s["rows"] if r["x"] == x)  # noqa: E731
     lat = lambda r, L: next(z for z in r["latency"] if z["L"] == L)  # noqa: E731
     a1, a2, a3, b1 = row("ask", 1.0), row("ask", 2.0), row("ask", 3.0), row("bid", 1.0)
+    i1, i2, ib = a1["idio"], a2["idio"], b1["idio"]
     R.add(g, "سفارش‌های پرتِ کاشته‌شده دقیقاً پیدا می‌شوند (تعداد، عمر، معامله‌شده یا لغوشده)",
-          a1["n"] == 2 and a2["n"] == 1 and a3["n"] == 0 and b1["n"] == 1 and a2["median_life_s"] == 20
-          and b1["median_life_s"] == 45 and a1["ended"]["taken"] == 50.0 and a1["ended"]["cancelled"] == 50.0,
-          f"ask1={a1['n']} ask2={a2['n']} ask3={a3['n']} bid1={b1['n']} life2={a2.get('median_life_s')} "
-          f"lifeB={b1.get('median_life_s')} ended={a1.get('ended')}")
+          i1["n"] == 2 and i2["n"] == 1 and a3["n"] == 0 and ib["n"] == 1 and i2["median_life_s"] == 20
+          and ib["median_life_s"] == 45 and i1["ended"]["taken"] == 50.0 and i1["ended"]["cancelled"] == 50.0,
+          f"ask1={i1['n']} ask2={i2['n']} ask3={a3['n']} bid1={ib['n']} life2={i2.get('median_life_s')} "
+          f"lifeB={ib.get('median_life_s')} ended={i1.get('ended')}")
+    R.add(g, "حرکت کل بازار (همهٔ صندوق‌ها با هم ارزان در برابر NAV عقب‌مانده) سفارش پرت شمرده نمی‌شود",
+          a1["n"] == 5 and i1["n"] == 2 and a1["idio_pct"] == 40.0 and b1["n"] == 1
+          and a1["rel_1d"]["mean_pct"] < a1["real_1d"]["mean_pct"],
+          f"همه: {a1['n']}، مخصوص صندوق: {i1['n']} ({a1.get('idio_pct')}٪) · واقعی ۱ روز {a1['real_1d']['mean_pct']}٪ "
+          f"ولی نسبت به گروه {a1['rel_1d']['mean_pct']}٪")
     R.add(g, "تأخیر واکنش: فقط سفارشی که هنوز در صف است قابل برداشتن است",
-          lat(a1, 0)["n"] == 2 and lat(a1, 2)["n"] == 1 and lat(a1, 10)["n"] == 1 and lat(a1, 30)["n"] == 0
-          and lat(b1, 30)["n"] == 1 and lat(b1, 60)["n"] == 0,
-          str([(z["L"], z["n"]) for z in a1["latency"]]) + " | " + str([(z["L"], z["n"]) for z in b1["latency"]]))
-    e2 = lat(a2, 10)
+          lat(i1, 0)["n"] == 2 and lat(i1, 2)["n"] == 1 and lat(i1, 10)["n"] == 1 and lat(i1, 30)["n"] == 0
+          and lat(ib, 30)["n"] == 1 and lat(ib, 60)["n"] == 0,
+          str([(z["L"], z["n"]) for z in i1["latency"]]) + " | " + str([(z["L"], z["n"]) for z in ib["latency"]]))
+    e2 = lat(i2, 10)
     want = 1 / 0.975 - 1 - 0.0024
-    real = a2["real_1h"]["mean_pct"]
+    real = i2["real_1h"]["mean_pct"]
+    rel = i2["rel_1h"]["mean_pct"]
     R.add(g, "سود کاغذی و واقعی: خرید ۲٫۵٪ زیر NAV و فروش یک ساعت بعد به صف خرید (۰٫۱٪ زیر NAV)، منهای کارمزد",
           e2["edge_pct"] is not None and abs(e2["edge_pct"] / 100 - want) < 2e-4
-          and real is not None and abs(real / 100 - (0.999 / 0.975 - 1 - 0.0024)) < 3e-4,
-          f"لبه {e2['edge_pct']}٪ (انتظار {want * 100:.3f}) · واقعی {real}٪")
-    R.add(g, "دفتر آرام هیچ سفارش پرتی نمی‌سازد (صندوق‌های ۲ و ۳)",
-          all(r["fund"] in ("S1",) or r["n"] == 0 for r in out["per_fund"]), str(out["per_fund"]))
+          and real is not None and abs(real / 100 - (0.999 / 0.975 - 1 - 0.0024)) < 3e-4
+          and rel is not None and abs(rel - real) < 0.05,
+          f"لبه {e2['edge_pct']}٪ (انتظار {want * 100:.3f}) · واقعی {real}٪ · نسبت به گروه {rel}٪")
+    R.add(g, "دفتر آرام هیچ سفارش پرتی نمی‌سازد (صندوق‌های ۲ و ۳: فقط همان حرکت کل بازار)",
+          all(r["fund"] == "S1" or r["idio"] == 0 for r in out["per_fund"]), str(out["per_fund"]))
     # resumable and parallel: every fund is kept on disk once done (an interrupted run resumes), and the parallel
     # run gives exactly the serial result
     import shutil as _sh
@@ -2625,7 +2639,7 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             st_tabs = pg.locator("#disc-val table[data-stray]").count()
             st_rows = pg.locator("#disc-val table[data-stray='ask'] tbody tr").count()
             R.add("مرورگر", "سفارش‌های پرت: دکمه اجرا می‌شود و نتیجه (فروش ارزان / خرید گران بر حسب فاصله) نمایش داده می‌شود",
-                  st_tabs == 2 and st_rows == 4 and "سفارش‌های پرت" in pg.locator("#disc-val .dv-head").inner_text(),
+                  st_tabs == 2 and st_rows == 8 and "سفارش‌های پرت" in pg.locator("#disc-val .dv-head").inner_text(),
                   f"{st_tabs} جدول، {st_rows} ردیف")
             pg.locator("#disc-res-bar .dres-tab").last.locator(".dres-x").click()
             pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()

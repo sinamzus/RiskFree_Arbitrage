@@ -6942,54 +6942,60 @@ function renderDiscStray(r) {
   const S = r.setup || {}, v = r.verdict || {}, L0 = S.ref_latency;
   const pc = (x, d = 2) => x == null ? '—' : discLtr((x >= 0 ? '+' : '') + (+x).toFixed(d) + '%');
   const mr = x => x == null ? '—' : discLtr((x / 1e6).toLocaleString('en-US', {maximumFractionDigits: 0})) + ' م';
+  const tt = z => z && z.mean_pct != null ? `${pc(z.mean_pct)} <span style="color:var(--muted);font-size:10px">t ${z.t ?? '—'}</span>` : '—';
   const lats = S.latencies || [];
-  const sideTbl = sd => {
-    const rows = sd.rows.map(x => {
-      if (!x.n) return `<tr><td>${x.x}٪</td><td>0</td><td colspan="${8 + lats.length}" style="color:var(--muted)">دیده نشد</td></tr>`;
-      const lr = (x.latency || []).find(z => z.L === L0) || {};
-      const rh = x.real_1h || {}, rd = x.real_1d || {};
-      return `<tr><td>${x.x}٪</td><td>${x.n}</td><td>${x.per_month}</td><td>${x.median_life_s} ث</td>
-        <td>${x.ended.taken}٪ / ${x.ended.cancelled}٪</td><td>${pc(x.mean_dev_pct)}</td><td>${mr(x.median_depth_rial)}</td>
-        ${lats.map(L => { const z = (x.latency || []).find(q => q.L === L) || {}; return `<td>${z.alive_pct ?? '—'}٪</td>`; }).join('')}
-        <td><b>${pc(lr.profit_year_pct_capital)}</b></td><td>${pc(lr.edge_pct)} <span style="color:var(--muted);font-size:10px">(${pc(lr.edge_switch_pct)})</span></td>
-        <td title="${rh.n || 0} بار، ${rh.win_pct ?? '—'}٪ سودده">${pc(rh.mean_pct)} <span style="color:var(--muted);font-size:10px">t ${rh.t ?? '—'}</span></td>
-        <td title="${rd.n || 0} بار، ${rd.win_pct ?? '—'}٪ سودده"><b>${pc(rd.mean_pct)}</b> <span style="color:var(--muted);font-size:10px">t ${rd.t ?? '—'}</span></td></tr>`;
-    }).join('');
-    return `<div class="disc-h" style="margin-top:10px">${sd.label}</div>
-      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl" data-stray="${sd.side}"><thead><tr>
-      <th title="دست‌کم این‌قدر دورتر از قیمت معمول (NAV × (۱ + معمولِ خود صندوق))">فاصله</th><th>تعداد</th><th>در ماه</th><th>عمر میانه</th>
-      <th title="معامله شد (کسی برداشت) / لغو شد">معامله / لغو</th><th title="بیشترین فاصلهٔ سر صف از قیمت معمول، میانگین">فاصلهٔ میانگین</th>
-      <th title="ارزش سفارش‌های آن‌سوی آستانه در لحظهٔ پیدایش (میلیون ریال)">عمق میانه</th>
-      ${lats.map(L => `<th title="سهم سفارش‌هایی که ${L} ثانیه بعد هنوز در صف بودند">زنده پس از ${L} ث</th>`).join('')}
-      <th title="سود کاغذی سالانه با واکنش ${L0} ثانیه‌ای، به درصد سرمایه (حداکثر ${mr(S.cap_rial)} هر بار)">سود سالانه (${L0} ث)</th>
-      <th title="لبهٔ هر بار بعد از کارمزد؛ داخل پرانتز: اگر پولش از فروش صندوق دیگری به صف خرید بیاید (یک نیم‌اسپرد بیشتر)">لبه (با جابه‌جایی)</th>
-      <th title="نتیجهٔ واقعی: حباب یک ساعت بعد با قیمتی که می‌شد بست (صف خرید برای خرید ارزان)، منهای کارمزد">واقعی ۱ ساعت</th>
-      <th title="همان، یک روز معاملاتی بعد">واقعی ۱ روز</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const line = (x, lab, isIdio) => {
+    if (!x || !x.n) return `<tr${isIdio ? ' style="background:var(--card2, rgba(127,127,127,.06))"' : ''}><td>${lab}</td><td>0</td><td colspan="${11 + lats.length}" style="color:var(--muted)">دیده نشد</td></tr>`;
+    const lr = (x.latency || []).find(z => z.L === L0) || {};
+    return `<tr${isIdio ? ' style="background:var(--card2, rgba(127,127,127,.06))"' : ''}><td>${lab}</td><td>${x.n}</td><td>${x.per_month}</td><td>${x.median_life_s} ث</td>
+      <td>${x.ended.taken}٪ / ${x.ended.cancelled}٪</td><td>${pc(x.mean_dev_pct)}</td><td>${pc(x.mean_rel_dev_pct)}</td><td>${mr(x.median_depth_rial)}</td>
+      ${lats.map(L => { const z = (x.latency || []).find(q => q.L === L) || {}; return `<td>${z.alive_pct ?? '—'}٪</td>`; }).join('')}
+      <td>${lr.per_day ?? '—'}</td><td>${pc(lr.edge_pct)} <span style="color:var(--muted);font-size:10px">(${pc(lr.edge_switch_pct)})</span></td>
+      <td>${tt(x.real_1d)}</td><td>${tt(x.rel_1h)}</td><td><b>${tt(x.rel_1d)}</b></td></tr>`;
   };
+  const sideTbl = sd => `<div class="disc-h" style="margin-top:10px">${sd.label}</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl" data-stray="${sd.side}"><thead><tr>
+      <th title="دست‌کم این‌قدر دورتر از قیمت معمول (NAV × (۱ + معمولِ خود صندوق)). سطر رنگی: فقط موردهایی که نسبت به کل گروه هم همین‌قدر دورند (مخصوص همان صندوق، نه حرکت کل بازار)">فاصله</th>
+      <th>تعداد</th><th>در ماه</th><th>عمر میانه</th>
+      <th title="معامله شد (کسی برداشت) / لغو شد">معامله / لغو</th><th title="فاصلهٔ سر صف از قیمت معمول، میانگین">فاصله</th>
+      <th title="همان فاصله منهای فاصلهٔ کل گروه در همان دقیقه: نزدیک صفر = همهٔ صندوق‌ها با هم (NAV از بازار عقب است)">نسبت به گروه</th>
+      <th title="ارزش سفارش‌های آن‌سوی آستانه در لحظهٔ پیدایش (میلیون ریال)">عمق میانه</th>
+      ${lats.map(L => `<th title="سهم موردهایی که ${L} ثانیه بعد هنوز در صف بودند">زنده پس از ${L} ث</th>`).join('')}
+      <th title="تعداد در روز که ${L0} ثانیه بعد هنوز قابل برداشتن بود">در روز (${L0} ث)</th>
+      <th title="لبهٔ کاغذی هر بار بعد از کارمزد با واکنش ${L0} ثانیه‌ای؛ داخل پرانتز: اگر پولش از فروش صندوق دیگری به صف خرید بیاید">لبهٔ کاغذی</th>
+      <th title="نتیجهٔ واقعی یک روز بعد (حباب با قیمتی که می‌شد بست، منهای کارمزد). t از میانگین‌های روزانه">واقعی ۱ روز</th>
+      <th title="همان یک ساعت بعد، منهای تغییر حباب کل گروه: آنچه جابه‌جایی با صندوق دیگری از گروه نگه می‌داشت">نسبت به گروه ۱ ساعت</th>
+      <th title="همان یک روز بعد، منهای تغییر حباب کل گروه — مهم‌ترین ستون">نسبت به گروه ۱ روز</th></tr></thead><tbody>
+      ${sd.rows.map(x => line(x, x.x + '٪', false) + line(x.idio, x.x + '٪ مخصوص صندوق' + (x.idio_pct != null ? ` (${x.idio_pct}٪)` : ''), true)).join('')}
+      </tbody></table></div>`;
   const askRef = ((r.sides || []).find(sd => sd.side === 'ask') || {rows: []}).rows.find(x => x.x === 1) || {};
-  const hist = (askRef.life_buckets || []).map(b => `<td>${b.n}</td>`).join('');
-  const histH = (askRef.life_buckets || []).map(b => `<th>${b.label}</th>`).join('');
-  const pf = (r.per_fund || []).filter(f => f.n).slice(0, 15).map(f => `<tr><td style="text-align:start">${f.fund}</td><td>${f.n}</td><td>${f.alive_ref}</td>
-      <td>${mr(f.profit_ref)}</td><td>${f.median_life ?? '—'} ث</td></tr>`).join('');
+  const ai = askRef.idio || {};
+  const hist = (ai.life_buckets || []).map(b => `<td>${b.n}</td>`).join('');
+  const histH = (ai.life_buckets || []).map(b => `<th>${b.label}</th>`).join('');
+  const pf = (r.per_fund || []).filter(f => f.n).slice(0, 15).map(f => `<tr><td style="text-align:start">${f.fund}</td><td>${f.n}</td><td>${f.idio ?? '—'}</td>
+      <td>${f.alive_ref}</td><td>${f.median_life ?? '—'} ث</td></tr>`).join('');
   const exs = (r.examples || []).map(e => `<tr><td style="text-align:start">${e.fund}</td><td>${gregIntToJalaliStr(e.date)}</td>
       <td>${discLtr(String(e.time).padStart(6, '0').replace(/(..)(..)(..)/, '$1:$2:$3'))}</td><td>${e.side === 'ask' ? 'فروش ارزان' : 'خرید گران'}</td>
-      <td>${pc(e.dev_pct)}</td><td>${e.life_s} ث</td><td>${{taken: 'معامله شد', cancelled: 'لغو شد', close: 'تا پایان بازار'}[e.ended] || e.ended}</td>
-      <td>${mr(e.depth_rial)}</td><td>${pc(e.realised_1d_pct)}</td></tr>`).join('');
+      <td>${pc(e.dev_pct)}</td><td>${pc(e.rel_dev_pct)}</td><td>${e.life_s} ث</td><td>${{taken: 'معامله شد', cancelled: 'لغو شد', close: 'تا پایان بازار'}[e.ended] || e.ended}</td>
+      <td>${mr(e.depth_rial)}</td><td>${pc(e.realised_1d_pct)}</td><td>${pc(e.realised_rel_1d_pct)}</td></tr>`).join('');
+  const su = r.suspects || {};
   panel.innerHTML = `<div class="dv-head ${v.overall}">🎣 سفارش‌های پرت — ${v.headline || ''}</div>
     <div class="dv-note">${S.funds} صندوق · ${S.days} روز (${gregIntToJalaliStr((S.period || [])[0])} تا ${gregIntToJalaliStr((S.period || [])[1])})
       · صف‌ها ثانیه‌به‌ثانیه از دادهٔ خام TSE · قیمت معمول = NAV معلوم در همان لحظه (حداکثر ${S.max_nav_age_min} دقیقه کهنه) × (۱ + معمولِ ${S.norm_days} روزهٔ خود صندوق)
       · کارمزد رفت‌وبرگشت ${pc(S.fees_round_trip_pct)} · نیم‌اسپرد میانه ${pc(S.median_half_spread_pct, 3)} · حداکثر برداشت هر بار ${mr(S.cap_rial)} ریال
+      · ${S.workers} هسته${S.funds_from_cache ? '، ' + S.funds_from_cache + ' صندوق از اجرای قبل' : ''}
       ${(S.skipped || []).length ? '· بدون دادهٔ TSE یا NAV ریزدانه: ' + S.skipped.join('، ') : ''}</div>
+    ${su.n ? `<div class="dv-note" style="margin-top:4px">⚠ ${su.n} مورد با فاصلهٔ بیش از ${su.max_dev_pct}٪ از قیمت معمول کنار گذاشته شد (به احتمال زیاد خطای داده، مثلاً NAV نادرست): ${(su.funds || []).join('، ')}</div>` : ''}
     ${(r.sides || []).map(sideTbl).join('')}
-    ${histH ? `<div class="disc-h" style="margin-top:10px">عمر فروشنده‌های ارزان (دست‌کم ۱٪ زیر قیمت معمول)</div>
+    ${histH ? `<div class="disc-h" style="margin-top:10px">عمر فروشنده‌های ارزانِ مخصوص صندوق (دست‌کم ۱٪)</div>
       <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr>${histH}</tr></thead><tbody><tr>${hist}</tr></tbody></table></div>` : ''}
     ${pf ? `<div class="disc-h" style="margin-top:10px">بر حسب صندوق (فروش ارزان، دست‌کم ۱٪)</div>
-      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">صندوق</th><th>تعداد</th>
-      <th>زنده پس از ${L0} ث</th><th>سود کاغذی (${L0} ث)</th><th>عمر میانه</th></tr></thead><tbody>${pf}</tbody></table></div>` : ''}
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">صندوق</th><th>همه</th><th>مخصوص صندوق</th>
+      <th>زنده پس از ${L0} ث</th><th>عمر میانه</th></tr></thead><tbody>${pf}</tbody></table></div>` : ''}
     ${exs ? `<div class="disc-h" style="margin-top:10px">دورترین نمونه‌ها (دست‌کم ۱٪)</div>
       <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">صندوق</th><th>تاریخ</th><th>ساعت</th>
-      <th>نوع</th><th>فاصله از معمول</th><th>عمر</th><th>پایان</th><th>عمق</th><th>واقعی ۱ روز</th></tr></thead><tbody>${exs}</tbody></table></div>` : ''}
-    <div class="dv-note" style="margin-top:6px">«زنده پس از L ثانیه» یعنی سفارش هنوز در صف بود؛ چه کسی آن را برداشت معلوم نیست، پس برداشتن با تأخیر L فقط وقتی شمرده می‌شود که سفارش تا آن لحظه مانده باشد. «واقعی» مهم‌ترین ستون است: سفارش پرت ممکن است آگاهانه باشد (NAV در حال تغییر است) و ارزانی‌اش واقعی نباشد.</div>`;
+      <th>نوع</th><th>فاصله از معمول</th><th>نسبت به گروه</th><th>عمر</th><th>پایان</th><th>عمق</th><th>واقعی ۱ روز</th><th>نسبت به گروه ۱ روز</th></tr></thead><tbody>${exs}</tbody></table></div>` : ''}
+    <div class="dv-note" style="margin-top:6px">وقتی قیمت طلا تند حرکت می‌کند، قیمت همهٔ صندوق‌ها با هم جابه‌جا می‌شود ولی NAV هر چند دقیقه یک بار می‌رسد؛ پس همه با هم «ارزان» یا «گران» دیده می‌شوند. این سفارش پرت نیست و جابه‌جایی بین صندوق‌ها از آن سودی نمی‌برد. «مخصوص صندوق» فقط موردهایی است که نسبت به کل گروه هم دورند، و «نسبت به گروه» نتیجه را منهای حرکت کل گروه می‌سنجد. آمارهٔ t از میانگین‌های روزانه است (موردهای یک روز مستقل نیستند).</div>`;
 }
 
 let discSigTimer = null;

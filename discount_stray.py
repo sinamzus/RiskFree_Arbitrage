@@ -74,7 +74,7 @@ def _take(levels: list, cap_rial: float) -> tuple[float, float]:
     return units, (cost / units if units > 0 else 0.0)
 
 
-STRAY_VERSION = 1          # bump when an episode's fields or meaning change (invalidates the per-fund cache)
+STRAY_VERSION = 2          # bump when an episode's fields or meaning change (invalidates the per-fund cache)
 
 
 class _Nav:
@@ -121,7 +121,7 @@ def _fund_study(db, sid: int, lab: str, start, end, cfg: dict) -> dict | None:
     nv = _Nav(db, sid, cfg["max_age"])
     if not days or not nv.ok:
         return None
-    spreads, used_days = [], []
+    spreads, used_days, series = [], [], {}
     trades = {d: sorted((_sec(r[1]), float(r[2]), float(r[3])) for r in (G.load_day(db, sid, d, "trades") or [])
                         if not r[4] and r[2] > 0 and r[3] > 0) for d in days}
     # the fund's own norm: median of its daily median bubble (trades at a current NAV) over the previous days
@@ -156,6 +156,7 @@ def _fund_study(db, sid: int, lab: str, start, end, cfg: dict) -> dict | None:
         nav_at = nv.day(d)
         nd_ = norm[d]
         last_s = None
+        mins: dict[int, list] = {}
 
         def close(key, s_end, how=None):
             e = open_.pop(key)
@@ -185,6 +186,17 @@ def _fund_study(db, sid: int, lab: str, start, end, cfg: dict) -> dict | None:
             if s % 60 == 0 and len(spreads) < 20000:
                 spreads.append((ba - bb) / (ba + bb))
             fair = nav * (1.0 + nd_)
+            # per minute: the cheapest ask and the dearest bid against fair, and the last mid bubble
+            a_dev, b_dev, mid_b = ba / fair - 1.0, bb / fair - 1.0, (ba + bb) / 2.0 / nav - 1.0
+            mv = mins.get(s // 60)
+            if mv is None:
+                mins[s // 60] = [a_dev, b_dev, mid_b, a_dev, b_dev, mid_b, mid_b]
+            else:
+                mv[0] = min(mv[0], a_dev)
+                mv[1] = max(mv[1], b_dev)
+                mv[2], mv[3], mv[4] = mid_b, a_dev, b_dev
+                mv[5] = min(mv[5], mid_b)
+                mv[6] = max(mv[6], mid_b)
             if not open_ and ba > fair * (1 - x_min / 100.0) and bb < fair * (1 + x_min / 100.0):
                 return
             bids = sorted(([bp, bv] for bp, bv, _a, _b in levels.values() if bp > 0 and bv > 0), key=lambda z: -z[0])
@@ -201,7 +213,8 @@ def _fund_study(db, sid: int, lab: str, start, end, cfg: dict) -> dict | None:
                         if e is None:
                             e = open_[key] = {"fund": lab, "sid": sid, "date": d, "side": side, "x": x,
                                               "start": s, "thr": thr, "fair": fair, "nav": nav, "norm": nd_,
-                                              "states": [], "best_dev": 0.0}
+                                              "states": [], "best_dev": 0.0,
+                                              "dev0": (book[0][0] / fair - 1.0) * 100}
                         dev = (book[0][0] / fair - 1.0) * 100
                         if abs(dev) > abs(e["best_dev"]):
                             e["best_dev"] = dev
@@ -226,6 +239,7 @@ def _fund_study(db, sid: int, lab: str, start, end, cfg: dict) -> dict | None:
             last_s = s
         for key in list(open_):
             close(key, max(w1, last_s or w1), "close")
+        series[str(d)] = [[m] + [round(v, 5) for v in vals] for m, vals in sorted(mins.items())]
     # what happened afterwards (1 hour, 1 trading day), at the price the position could be closed at
     _outcomes(db, sid, days, fund_eps, nv, latencies, ref_latency, cap, fees)
     eps = [{"fund": e["fund"], "date": e["date"], "side": e["side"], "x": e["x"], "start": e["start"],
@@ -233,8 +247,9 @@ def _fund_study(db, sid: int, lab: str, start, end, cfg: dict) -> dict | None:
             "depth_rial": round(sum(p_ * v for p_, v in e["states"][0][1])) if e["states"] else 0,
             "cap": {str(L): {k: (round(v, 6) if k == "edge" else round(v, 2)) for k, v in c.items()}
                     for L, c in e["cap"].items()},
-            "real_1h": e.get("real_1h"), "real_1d": e.get("real_1d")} for e in fund_eps]
-    return {"fund": lab, "episodes": eps, "spreads": spreads, "days": used_days}
+            "real_1h": e.get("real_1h"), "real_1d": e.get("real_1d"), "dev0": round(e["dev0"], 4),
+            "s_in": e["start"] + ref_latency, "exits": e.get("exits", {})} for e in fund_eps]
+    return {"fund": lab, "episodes": eps, "spreads": spreads, "days": used_days, "series": series}
 
 
 def _cache_path(db, sid: int, start, end, cfg: dict):
@@ -287,7 +302,8 @@ def _worker(task):
 
 def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress: dict | None = None,
                     thresholds=THRESHOLDS, latencies=LATENCIES, ref_latency: int = 10, norm_days: int = 20,
-                    cap_rial: float | None = None, max_examples: int = 20, workers: int = 0) -> dict:
+                    cap_rial: float | None = None, max_examples: int = 20, workers: int = 0,
+                    max_dev_pct: float = 10.0) -> dict:
     t0 = time.time()
 
     def prog(**kw):
@@ -354,6 +370,10 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
         n_days_all.update(r["days"])
     if not used_funds:
         raise ValueError("برای صندوق‌های انتخابی دادهٔ TSE (صف و معاملات) یا NAV ریزدانه (feed) وجود ندارد.")
+    g_at = _group_series([results[sid] for sid, _l in funds if results.get(sid)])
+    _relative(episodes, g_at)
+    suspect = [e for e in episodes if abs(e["best_dev"]) > max_dev_pct]
+    episodes = [e for e in episodes if abs(e["best_dev"]) <= max_dev_pct]
     n_days = len(n_days_all)
     half_spread = statistics.median(spreads) if spreads else 0.0
     out_sides = []
@@ -361,22 +381,35 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
         rows = []
         for x in thresholds:
             E = [e for e in episodes if e["side"] == side and e["x"] == x]
-            rows.append(_summarise(E, x, latencies, ref_latency, cap, fees, half_spread, n_days, p.initial_capital))
+            row = _summarise(E, x, latencies, ref_latency, cap, fees, half_spread, n_days, p.initial_capital)
+            # fund-specific: cheaper / dearer than the whole group by x too (not a market move the NAV lags behind)
+            Ei = [e for e in E if e.get("rel_dev") is not None and
+                  (e["rel_dev"] <= -x if side == "ask" else e["rel_dev"] >= x)]
+            row["idio"] = _summarise(Ei, x, latencies, ref_latency, cap, fees, half_spread, n_days, p.initial_capital)
+            row["idio_pct"] = round(len(Ei) / len(E) * 100, 1) if E else None
+            rows.append(row)
         out_sides.append({"side": side, "label": slab, "rows": rows})
     x_ref = 1.0 if 1.0 in thresholds else thresholds[0]
     per_fund = []
     for lab in used_funds:
         E = [e for e in episodes if e["fund"] == lab and e["side"] == "ask" and e["x"] == x_ref]
         cap_e = [e for e in E if e["cap"].get(ref_latency)]
-        per_fund.append({"fund": lab, "n": len(E), "alive_ref": len(cap_e),
+        n_idio = sum(1 for e in E if e.get("rel_dev") is not None and e["rel_dev"] <= -x_ref)
+        per_fund.append({"fund": lab, "n": len(E), "idio": n_idio, "alive_ref": len(cap_e),
                          "profit_ref": round(sum(e["cap"][ref_latency]["profit"] for e in cap_e)),
                          "median_life": statistics.median([e["life"] for e in E]) if E else None})
     per_fund.sort(key=lambda r: -r["profit_ref"])
     ex = sorted((e for e in episodes if e["x"] == x_ref), key=lambda e: -abs(e["best_dev"]))[:max_examples]
     examples = [{"fund": e["fund"], "date": e["date"], "time": _hms(e["start"]), "side": e["side"],
                  "dev_pct": round(e["best_dev"], 3), "life_s": e["life"], "ended": e["ended"],
-                 "depth_rial": e["depth_rial"], "realised_1d_pct": e.get("real_1d")} for e in ex]
-    verdict = _verdict(out_sides, x_ref, ref_latency, p.initial_capital)
+                 "depth_rial": e["depth_rial"], "realised_1d_pct": e.get("real_1d"),
+                 "rel_dev_pct": e.get("rel_dev"), "realised_rel_1d_pct": e.get("rel_1d")} for e in ex]
+    sus = sorted(suspect, key=lambda e: -abs(e["best_dev"]))
+    suspects = {"n": len(suspect), "max_dev_pct": max_dev_pct,
+                "funds": sorted({e["fund"] for e in suspect}),
+                "examples": [{"fund": e["fund"], "date": e["date"], "time": _hms(e["start"]), "side": e["side"],
+                              "dev_pct": round(e["best_dev"], 2), "life_s": e["life"]} for e in sus[:10]]}
+    verdict = _verdict(out_sides, x_ref, ref_latency, n_days)
     return {"setup": {"funds": len(used_funds), "skipped": skipped, "days": n_days, "thresholds": thresholds,
                       "latencies": latencies, "ref_latency": ref_latency, "norm_days": norm_days,
                       "cap_rial": cap, "fees_round_trip_pct": round(fees * 100, 3),
@@ -384,7 +417,7 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
                       "period": [min(n_days_all), max(n_days_all)] if n_days_all else None,
                       "workers": workers, "funds_from_cache": n_cached,
                       "seconds": round(time.time() - t0, 1)},
-            "sides": out_sides, "per_fund": per_fund, "examples": examples, "verdict": verdict}
+            "sides": out_sides, "per_fund": per_fund, "examples": examples, "suspects": suspects, "verdict": verdict}
 
 
 def _outcomes(db, sid, days, eps, nv: _Nav, latencies, ref_latency: int, cap: float, fees: float) -> None:
@@ -444,13 +477,28 @@ def _outcomes(db, sid, days, eps, nv: _Nav, latencies, ref_latency: int, cap: fl
             b_out = lv[0][0] / nav - 1.0
             r = ((1 + b_out) / (1 + b_in) - 1.0 if e["side"] == "ask" else (1 + b_in) / (1 + b_out) - 1.0) - fees
             e[f"real_{tag}"] = round(r * 100, 4)
-        e.pop("look", None)
+        e["exits"] = {tag: [d, s] for tag, d, s in e.pop("look", [])}
+
+
+def _daily_t(E, key):
+    """Mean and t-statistic of ``key`` over episodes, the t from DAILY means (episodes of one day are not
+    independent: one market move makes many of them)."""
+    by: dict[int, list] = {}
+    for e in E:
+        v = e.get(key)
+        if v is not None:
+            by.setdefault(e["date"], []).append(v)
+    vals = [v for vs in by.values() for v in vs]
+    daily = [statistics.mean(vs) for vs in by.values()]
+    t = _tstat(daily)
+    return {"n": len(vals), "days": len(daily), "mean_pct": round(statistics.mean(vals), 3) if vals else None,
+            "t": round(t, 2) if t is not None else None,
+            "win_pct": round(sum(1 for z in vals if z > 0) / len(vals) * 100, 1) if vals else None}
 
 
 def _summarise(E, x, latencies, ref_latency, cap, fees, half_spread, n_days, capital) -> dict:
     n = len(E)
     months = max(1e-9, n_days / 21.0)               # ~21 trading days a month
-    years = max(1e-9, n_days / 240.0)               # ~240 trading days a year
     row = {"x": x, "n": n, "per_month": round(n / months, 1) if n_days else None}
     if not n:
         return row
@@ -459,6 +507,8 @@ def _summarise(E, x, latencies, ref_latency, cap, fees, half_spread, n_days, cap
     row["life_buckets"] = [{"label": lab, "n": sum(1 for v in lives if lo <= v <= hi)} for lo, hi, lab in LIFE_BUCKETS]
     row["ended"] = {k: round(sum(1 for e in E if e["ended"] == k) / n * 100, 1) for k in ("taken", "cancelled", "close")}
     row["mean_dev_pct"] = round(statistics.mean(e["best_dev"] for e in E), 3)
+    rd = [e["rel_dev"] for e in E if e.get("rel_dev") is not None]
+    row["mean_rel_dev_pct"] = round(statistics.mean(rd), 3) if rd else None
     row["median_depth_rial"] = round(statistics.median(e["depth_rial"] for e in E))
     lat = []
     for L in latencies:
@@ -466,35 +516,99 @@ def _summarise(E, x, latencies, ref_latency, cap, fees, half_spread, n_days, cap
         prof = sum(c["profit"] for c in C)
         rial = sum(c["rial"] for c in C)
         lat.append({"L": L, "alive_pct": round(len(C) / n * 100, 1), "n": len(C), "rial": round(rial),
+                    "per_day": round(len(C) / n_days, 2) if n_days else None,
                     "edge_pct": round(prof / rial * 100, 3) if rial else None,
-                    "profit_rial": round(prof), "profit_year_pct_capital": round(prof / years / capital * 100, 2),
                     # in "always invested" the cash comes from selling a held fund: one more half spread
                     "edge_switch_pct": round((prof / rial - half_spread) * 100, 3) if rial else None})
     row["latency"] = lat
     for tag in ("1h", "1d"):
-        v = [e[f"real_{tag}"] for e in E if e.get(f"real_{tag}") is not None]
-        row[f"real_{tag}"] = {"n": len(v), "mean_pct": round(statistics.mean(v), 3) if v else None,
-                              "t": round(_tstat(v), 2) if _tstat(v) is not None else None,
-                              "win_pct": round(sum(1 for z in v if z > 0) / len(v) * 100, 1) if v else None}
+        row[f"real_{tag}"] = _daily_t(E, f"real_{tag}")
+        row[f"rel_{tag}"] = _daily_t(E, f"rel_{tag}")
     return row
 
 
-def _verdict(sides, x_ref, L, capital) -> dict:
+def _group_series(results: list) -> callable:
+    """g(d, s) -> medians over the funds, in the minute of s (day d), of: the last mid bubble, the cheapest ask and the
+    dearest bid against fair, the lowest and the highest mid bubble, or None when fewer than 3 funds were quoted by then. A fund whose book
+    did not change in that minute counts with its last state (it was still quoted there)."""
+    per_day: dict[int, list] = {}
+    for r in results:
+        for d, rows in (r.get("series") or {}).items():
+            per_day.setdefault(int(d), []).append(rows)
+    g = {}
+    for d in list(per_day):
+        funds = per_day.pop(d)
+        mins = sorted({row[0] for rows in funds for row in rows})
+        idx = [0] * len(funds)
+        last = [None] * len(funds)
+        day = {}
+        for m in mins:
+            vals = []
+            for k, rows in enumerate(funds):
+                if idx[k] < len(rows) and rows[idx[k]][0] == m:
+                    _m, a, b, c, la, lb, lo, hi = rows[idx[k]]
+                    vals.append((c, a, b, lo, hi))
+                    last[k] = (c, la, lb, c, c)
+                    idx[k] += 1
+                elif last[k] is not None:
+                    vals.append(last[k])
+            if vals:
+                day[m] = (len(vals),) + tuple(statistics.median(v[i] for v in vals) for i in range(5))
+        g[d] = (sorted(day), day)
+
+    def at(d, s, min_funds: int = 3):
+        t = g.get(int(d))
+        if not t:
+            return None
+        j = bisect.bisect_right(t[0], int(s) // 60) - 1
+        if j < 0:
+            return None
+        v = t[1][t[0][j]]
+        if v[0] < min_funds:
+            return None
+        return v[1:]
+    return at
+
+
+def _relative(episodes, g_at) -> None:
+    """Per episode: its distance from fair relative to the group's at that minute (a market-wide move the NAV lags
+    behind makes every fund look cheap at once: relative ≈ 0), and the realised result minus the group's own bubble
+    change (what a switch against another fund of the group would have kept)."""
+    for e in episodes:
+        g0 = g_at(e["date"], e["start"])
+        e["rel_dev"] = round(e["dev0"] - (g0[1] if e["side"] == "ask" else g0[2]) * 100, 4) if g0 else None
+        gi = g_at(e["date"], e["s_in"])
+        # the group at entry: its lowest mid in that minute for a buy (a market-wide dip is in it), highest for a sale
+        g_in = (gi[3] if e["side"] == "ask" else gi[4]) if gi else None
+        for tag in ("1h", "1d"):
+            r = e.get(f"real_{tag}")
+            ex = (e.get("exits") or {}).get(tag)
+            go = g_at(*ex) if ex else None
+            if r is None or g_in is None or not go:
+                e[f"rel_{tag}"] = None
+                continue
+            dg = (go[0] - g_in) * 100
+            e[f"rel_{tag}"] = round(r - dg if e["side"] == "ask" else r + dg, 4)
+
+
+def _verdict(sides, x_ref, L, n_days) -> dict:
     ask = next(s for s in sides if s["side"] == "ask")
     r = next((x for x in ask["rows"] if x["x"] == x_ref), None)
     if not r or not r.get("n"):
         return {"overall": "bad", "headline": f"✖ در کل دوره هیچ سفارش فروشی {x_ref:g}٪ زیر قیمت معمول دیده نشد."}
-    lr = next((z for z in r["latency"] if z["L"] == L), {})
-    rd = r.get("real_1d") or {}
-    base = (f"سفارش فروش دست‌کم {x_ref:g}٪ ارزان‌تر از قیمت معمول: {r['n']} بار ({r['per_month']} بار در ماه)، "
-            f"عمر میانه {r['median_life_s']:g} ثانیه؛ {lr.get('alive_pct', 0):g}٪ هنوز {L} ثانیه بعد در صف بودند")
-    if not lr.get("n"):
-        return {"overall": "bad", "headline": "✖ " + base + " — با واکنش " + f"{L} ثانیه‌ای چیزی برای برداشتن نمی‌ماند."}
-    real = rd.get("mean_pct")
-    tail = (f"؛ سود کاغذی {lr['profit_year_pct_capital']:+.2f}٪ سرمایه در سال، "
-            f"نتیجهٔ واقعیِ یک روز بعد {real:+.2f}٪ به‌ازای هر بار (t={rd.get('t')})" if real is not None else "")
-    if real is not None and real > 0 and (rd.get("t") or 0) >= 2 and lr["profit_year_pct_capital"] >= 1:
-        return {"overall": "ok", "headline": "✔ " + base + tail + " — شکارشان می‌ارزد."}
-    if lr["profit_year_pct_capital"] > 0 and (real is None or real > 0):
-        return {"overall": "warn", "headline": "~ " + base + tail + " — مثبت ولی کوچک یا هنوز نامعنادار."}
-    return {"overall": "bad", "headline": "✖ " + base + tail + " — بعد از برداشتن، سودی نمی‌ماند (ارزانی واقعی نبود)."}
+    ri = r.get("idio") or {}
+    head = (f"فروش دست‌کم {x_ref:g}٪ زیر قیمت معمول: {r['n']} بار، ولی فقط {r.get('idio_pct', 0):g}٪ مخصوص همان صندوق "
+            f"(بقیه حرکت کل بازار است که NAV از آن عقب است)")
+    if not ri.get("n"):
+        return {"overall": "bad", "headline": "✖ " + head + " — سفارش پرتِ واقعی دیده نشد."}
+    lr = next((z for z in ri["latency"] if z["L"] == L), {})
+    rr = ri.get("rel_1d") or {}
+    tail = (f"؛ مخصوص صندوق: {ri['n']} بار، {lr.get('per_day', 0):g} بار در روز هنوز {L} ثانیه بعد در صف، "
+            f"نتیجهٔ واقعیِ یک روز بعد نسبت به گروه {rr.get('mean_pct') if rr.get('mean_pct') is not None else '—'}٪ "
+            f"(t روزانه={rr.get('t')})")
+    m, t = rr.get("mean_pct"), rr.get("t") or 0
+    if m is not None and m > 0 and t >= 2 and lr.get("n"):
+        return {"overall": "ok", "headline": "✔ " + head + tail + " — شکار سفارش‌های پرتِ واقعی می‌ارزد."}
+    if m is not None and m > 0:
+        return {"overall": "warn", "headline": "~ " + head + tail + " — مثبت ولی هنوز نامعنادار."}
+    return {"overall": "bad", "headline": "✖ " + head + tail + " — بعد از برداشتن، نسبت به گروه سودی نمی‌ماند."}
