@@ -1959,7 +1959,7 @@ def test_stray_orders(R: Results, workdir: str):
     g = "سفارش‌های پرت"
     db = _db(_stray_world(os.path.join(workdir, "stray.db")))
     out = ST.run_stray_study(db, ["gold"], None, None, None, _base(max_nav_age_min=5, initial_capital=5e9, position_pct=20),
-                             norm_days=0)
+                             norm_days=0, workers=1)
     row = lambda side, x: next(r for s in out["sides"] if s["side"] == side for r in s["rows"] if r["x"] == x)  # noqa: E731
     lat = lambda r, L: next(z for z in r["latency"] if z["L"] == L)  # noqa: E731
     a1, a2, a3, b1 = row("ask", 1.0), row("ask", 2.0), row("ask", 3.0), row("bid", 1.0)
@@ -1981,6 +1981,21 @@ def test_stray_orders(R: Results, workdir: str):
           f"لبه {e2['edge_pct']}٪ (انتظار {want * 100:.3f}) · واقعی {real}٪")
     R.add(g, "دفتر آرام هیچ سفارش پرتی نمی‌سازد (صندوق‌های ۲ و ۳)",
           all(r["fund"] in ("S1",) or r["n"] == 0 for r in out["per_fund"]), str(out["per_fund"]))
+    # resumable and parallel: every fund is kept on disk once done (an interrupted run resumes), and the parallel
+    # run gives exactly the serial result
+    import shutil as _sh
+    cache = os.path.join(workdir, "stray_cache")
+    again = ST.run_stray_study(db, ["gold"], None, None, None, _base(max_nav_age_min=5, initial_capital=5e9, position_pct=20),
+                               norm_days=0, workers=1)
+    _sh.rmtree(cache, ignore_errors=True)
+    par = ST.run_stray_study(db, ["gold"], None, None, None, _base(max_nav_age_min=5, initial_capital=5e9, position_pct=20),
+                             norm_days=0, workers=2)
+    R.add(g, "ادامه‌پذیر و موازی: صندوق‌های تمام‌شده روی دیسک می‌مانند و اجرای موازی همان نتیجهٔ تک‌هسته‌ای است",
+          again["setup"]["funds_from_cache"] == 3 and again["sides"] == out["sides"] and par["sides"] == out["sides"]
+          and par["setup"]["workers"] == 2 and par["setup"]["funds_from_cache"] == 0
+          and len(os.listdir(cache)) == 3,
+          f"از کش: {again['setup']['funds_from_cache']}، هسته‌ها: {par['setup']['workers']}، فایل‌ها: "
+          f"{len(os.listdir(cache)) if os.path.isdir(cache) else 0}")
 
 
 def _run_range(db, p: D.DiscountParams, start=None, end=None) -> dict:
@@ -2604,7 +2619,8 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             import discount_stray as _ST
             _sw = _db(_stray_world(os.path.join(os.path.dirname(db_path), "stray_ui.db")))
             _sr = json.loads(json.dumps(_ST.run_stray_study(_sw, ["gold"], None, None, None,
-                                                            _base(max_nav_age_min=5, position_pct=20), norm_days=0), default=str))
+                                                            _base(max_nav_age_min=5, position_pct=20), norm_days=0,
+                                                            workers=1), default=str))
             pg.evaluate("r => renderDiscStray(r)", _sr)
             st_tabs = pg.locator("#disc-val table[data-stray]").count()
             st_rows = pg.locator("#disc-val table[data-stray='ask'] tbody tr").count()

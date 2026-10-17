@@ -1951,8 +1951,9 @@ def create_app(db, scan_callback=None):
         base = _disc_params_from(_get)
         try:
             norm_days = max(0, min(120, int(float(_get("norm_days", base.baseline_days)))))
+            workers = max(0, min(64, int(float(_get("workers", 0) or 0))))
         except (TypeError, ValueError):
-            norm_days = 20
+            norm_days, workers = 20, 0
         if _stray_state["running"]:
             return jsonify({"status": "already running", "progress": _stray_state["progress"]}), 409
 
@@ -1963,7 +1964,7 @@ def create_app(db, scan_callback=None):
                 _stray_state["result"] = None
             try:
                 _stray_state["result"] = run_stray_study(db, cats, syms, start, end, base, _stray_state["progress"],
-                                                         norm_days=norm_days)
+                                                         norm_days=norm_days, workers=workers)
             except ValueError as e:
                 _stray_state["result"] = {"error": str(e)}
             except Exception:

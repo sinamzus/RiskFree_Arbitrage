@@ -74,29 +74,220 @@ def _take(levels: list, cap_rial: float) -> tuple[float, float]:
     return units, (cost / units if units > 0 else 0.0)
 
 
+STRAY_VERSION = 1          # bump when an episode's fields or meaning change (invalidates the per-fund cache)
+
+
 class _Nav:
-    """The NAV known at a timestamp (forward pointer for a time-ordered walk, bisect otherwise)."""
+    """The NAV known at an instant, only when current (its nav_time at most max_age old)."""
 
     def __init__(self, db, sid: int, max_age_s: int):
         ver = NF.version(db, sid)
         self.ok = ver is not None
         self.rep, self.best = (NF._load(db, sid, ver)[1:] if self.ok else ([], []))
+        self.nts = [NF._ts(nd, nt) if nd else None for _n, nd, nt in self.best]
         self.max_age = max_age_s
 
     def at(self, d: int, s: int):
         ts = NF._ts(d, _hms(s))
         j = bisect.bisect_right(self.rep, ts) - 1
-        if j < 0:
+        if j < 0 or self.nts[j] is None or ts - self.nts[j] > self.max_age:
             return None
-        nav, nd, nt = self.best[j]
-        if not nd or ts - NF._ts(nd, nt) > self.max_age:
-            return None                                  # not current: no reference at this instant
-        return nav
+        return self.best[j][0]
+
+    def day(self, d: int):
+        """A forward-only reader for one day (seconds must not decrease): no search per second."""
+        base = NF._ord(d) * 86400
+        rep, nts, best, age = self.rep, self.nts, self.best, self.max_age
+        st = [bisect.bisect_right(rep, base) - 1]
+
+        def at(s: int):
+            ts = base + s
+            j = st[0]
+            while j + 1 < len(rep) and rep[j + 1] <= ts:
+                j += 1
+            st[0] = j
+            if j < 0 or nts[j] is None or ts - nts[j] > age:
+                return None
+            return best[j][0]
+        return at
+
+
+def _fund_study(db, sid: int, lab: str, start, end, cfg: dict) -> dict | None:
+    """Every episode of one fund (compact, JSON-safe), a sample of its relative half spreads and its days."""
+    thresholds, latencies = cfg["thresholds"], cfg["latencies"]
+    ref_latency, cap, fees, norm_days = cfg["ref_latency"], cfg["cap"], cfg["fees"], cfg["norm_days"]
+    x_min = min(thresholds)
+    days = TD.tse_days(db, sid, start, end)
+    nv = _Nav(db, sid, cfg["max_age"])
+    if not days or not nv.ok:
+        return None
+    spreads, used_days = [], []
+    trades = {d: sorted((_sec(r[1]), float(r[2]), float(r[3])) for r in (G.load_day(db, sid, d, "trades") or [])
+                        if not r[4] and r[2] > 0 and r[3] > 0) for d in days}
+    # the fund's own norm: median of its daily median bubble (trades at a current NAV) over the previous days
+    med = {}
+    for d in days:
+        at = nv.day(d)
+        bs = [px / n - 1.0 for s, px, _v in trades[d] for n in (at(s),) if n]
+        if bs:
+            med[d] = statistics.median(bs)
+    mdays = sorted(med)
+    norm = {}
+    for j, d in enumerate(mdays):
+        if norm_days <= 0:
+            norm[d] = 0.0
+            continue
+        w = [med[x] for x in mdays[max(0, j - norm_days):j]]
+        if len(w) >= max(3, norm_days // 3):
+            norm[d] = statistics.median(w)
+    fund_eps = []
+    for d in days:
+        if d not in norm or not trades[d]:
+            continue
+        win = TD.market_window(db, d)
+        if not win:
+            continue
+        used_days.append(d)
+        w0, w1 = win
+        tr_t = [x[0] for x in trades[d]]
+        ev = sorted(G.load_day(db, sid, d, "book") or [], key=lambda r: (r[0], r[2]))
+        levels: dict[int, tuple] = {}
+        open_ = {}                              # (side, x) -> episode being built
+        nav_at = nv.day(d)
+        nd_ = norm[d]
+        last_s = None
+
+        def close(key, s_end, how=None):
+            e = open_.pop(key)
+            e["end"] = s_end
+            e["life"] = s_end - e["start"]
+            side = key[0]
+            lo, hi = bisect.bisect_left(tr_t, e["start"]), bisect.bisect_right(tr_t, s_end)
+            thr = e["thr"]
+            got = sum(v for _s, px, v in trades[d][lo:hi] if (px <= thr if side == "ask" else px >= thr))
+            e["taken_units"] = got
+            e["ended"] = how or ("taken" if got > 0 else "cancelled")
+            fund_eps.append(e)
+
+        def evaluate(s):
+            # fast path: the best quotes alone decide whether anything is near a threshold
+            ba = bb = 0.0
+            for bp, bv, ap, av in levels.values():
+                if ap > 0 and av > 0 and (ba == 0.0 or ap < ba):
+                    ba = ap
+                if bp > 0 and bv > 0 and bp > bb:
+                    bb = bp
+            if ba <= 0 or bb <= 0 or ba <= bb:
+                return
+            nav = nav_at(s)
+            if not nav:
+                return
+            if s % 60 == 0 and len(spreads) < 20000:
+                spreads.append((ba - bb) / (ba + bb))
+            fair = nav * (1.0 + nd_)
+            if not open_ and ba > fair * (1 - x_min / 100.0) and bb < fair * (1 + x_min / 100.0):
+                return
+            bids = sorted(([bp, bv] for bp, bv, _a, _b in levels.values() if bp > 0 and bv > 0), key=lambda z: -z[0])
+            asks = sorted(([ap, av] for _bp, _bv, ap, av in levels.values() if ap > 0 and av > 0), key=lambda z: z[0])
+            for x in thresholds:
+                for side in ("ask", "bid"):
+                    key = (side, x)
+                    thr = fair * (1 - x / 100.0) if side == "ask" else fair * (1 + x / 100.0)
+                    book = asks if side == "ask" else bids
+                    on = book[0][0] <= thr if side == "ask" else book[0][0] >= thr
+                    if on:
+                        beyond = [lv for lv in book if (lv[0] <= thr if side == "ask" else lv[0] >= thr)]
+                        e = open_.get(key)
+                        if e is None:
+                            e = open_[key] = {"fund": lab, "sid": sid, "date": d, "side": side, "x": x,
+                                              "start": s, "thr": thr, "fair": fair, "nav": nav, "norm": nd_,
+                                              "states": [], "best_dev": 0.0}
+                        dev = (book[0][0] / fair - 1.0) * 100
+                        if abs(dev) > abs(e["best_dev"]):
+                            e["best_dev"] = dev
+                        if not e["states"] or e["states"][-1][1] != beyond:
+                            e["states"].append((s, [list(lv) for lv in beyond], nav))
+                    elif key in open_:
+                        close(key, s)
+
+        i = 0
+        while i < len(ev):
+            s = _sec(ev[i][1])
+            while i < len(ev) and _sec(ev[i][1]) == s:
+                r = ev[i]
+                if 1 <= r[2] <= 5:
+                    levels[r[2]] = (r[3], r[4], r[6], r[7])
+                i += 1
+            if s < w0:
+                continue
+            if s > w1:
+                break
+            evaluate(s)
+            last_s = s
+        for key in list(open_):
+            close(key, max(w1, last_s or w1), "close")
+    # what happened afterwards (1 hour, 1 trading day), at the price the position could be closed at
+    _outcomes(db, sid, days, fund_eps, nv, latencies, ref_latency, cap, fees)
+    eps = [{"fund": e["fund"], "date": e["date"], "side": e["side"], "x": e["x"], "start": e["start"],
+            "life": e["life"], "ended": e["ended"], "best_dev": round(e["best_dev"], 4),
+            "depth_rial": round(sum(p_ * v for p_, v in e["states"][0][1])) if e["states"] else 0,
+            "cap": {str(L): {k: (round(v, 6) if k == "edge" else round(v, 2)) for k, v in c.items()}
+                    for L, c in e["cap"].items()},
+            "real_1h": e.get("real_1h"), "real_1d": e.get("real_1d")} for e in fund_eps]
+    return {"fund": lab, "episodes": eps, "spreads": spreads, "days": used_days}
+
+
+def _cache_path(db, sid: int, start, end, cfg: dict):
+    import hashlib
+    import json
+    from pathlib import Path
+    root = getattr(db, "path", None)
+    if root is None:
+        return None
+    key = json.dumps([STRAY_VERSION, sid, start, end, cfg, list(TD._collected_version(db, sid)),
+                      list(NF.version(db, sid) or [])], sort_keys=True, default=str)
+    return Path(root).parent / "stray_cache" / f"{sid}_{hashlib.sha1(key.encode()).hexdigest()[:16]}.json"
+
+
+def _cached_fund_study(db, sid, lab, start, end, cfg):
+    """_fund_study, kept per fund on disk: an interrupted study resumes with the funds already done."""
+    import json
+    path = _cache_path(db, sid, start, end, cfg)
+    if path is not None and path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8")), True
+        except Exception:
+            pass
+    res = _fund_study(db, sid, lab, start, end, cfg)
+    if path is not None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        except Exception:
+            pass
+    return res, False
+
+
+def _worker_init():
+    try:
+        import discount_study as S
+        S._lower_priority()
+    except Exception:
+        pass
+
+
+def _worker(task):
+    from pathlib import Path
+    from database import Database
+    db_path, sid, lab, start, end, cfg = task
+    return sid, _cached_fund_study(Database(Path(db_path)), sid, lab, start, end, cfg)
 
 
 def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress: dict | None = None,
                     thresholds=THRESHOLDS, latencies=LATENCIES, ref_latency: int = 10, norm_days: int = 20,
-                    cap_rial: float | None = None, max_examples: int = 20) -> dict:
+                    cap_rial: float | None = None, max_examples: int = 20, workers: int = 0) -> dict:
     t0 = time.time()
 
     def prog(**kw):
@@ -113,112 +304,55 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
     cap = float(cap_rial if cap_rial else p.initial_capital * p.position_pct / 100.0)
     fees = p.buy_fee + p.sell_fee
     max_age = max(1, int(p.max_nav_age_min or 5)) * 60
-    episodes = []                       # every closed episode
-    spreads = []                        # relative half spreads (for the cost of funding a buy by a sale)
-    n_days_all, used_funds, skipped = set(), [], []
-    for fi, (sid, lab) in enumerate(funds):
-        prog(phase=f"بازپخش صف‌ها: {lab}", done=fi, total=len(funds))
-        days = TD.tse_days(db, sid, start, end)
-        nv = _Nav(db, sid, max_age)
-        if not days or not nv.ok:
+    cfg = {"thresholds": thresholds, "latencies": latencies, "ref_latency": ref_latency, "cap": cap, "fees": fees,
+           "max_age": max_age, "norm_days": norm_days}
+    results, n_cached = {}, 0
+    # funds already done (an earlier, possibly interrupted, run with the same settings and data)
+    todo = []
+    for sid, lab in funds:
+        path = _cache_path(db, sid, start, end, cfg)
+        if path is not None and path.exists():
+            r, hit = _cached_fund_study(db, sid, lab, start, end, cfg)
+            results[sid] = r
+            n_cached += hit
+        else:
+            todo.append((sid, lab))
+    prog(phase=f"بازپخش صف‌ها ({n_cached} صندوق از قبل آماده)", done=len(results), total=len(funds))
+    if workers <= 0:
+        try:
+            import discount_study as S
+            workers = S._auto_workers()
+        except Exception:
+            workers = 1
+    workers = max(1, min(workers, len(todo)))
+    db_path = getattr(db, "path", None)
+    if workers > 1 and db_path is not None:
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"),
+                                 initializer=_worker_init) as ex:
+            futs = [ex.submit(_worker, (str(db_path), sid, lab, start, end, cfg)) for sid, lab in todo]
+            for f in as_completed(futs):
+                sid, (r, _hit) = f.result()
+                results[sid] = r
+                prog(phase=f"بازپخش صف‌ها ({workers} هسته)", done=len(results), total=len(funds))
+    else:
+        for sid, lab in todo:
+            prog(phase=f"بازپخش صف‌ها: {lab}", done=len(results), total=len(funds))
+            results[sid] = _cached_fund_study(db, sid, lab, start, end, cfg)[0]
+    episodes, spreads, n_days_all, used_funds, skipped = [], [], set(), [], []
+    for sid, lab in funds:
+        r = results.get(sid)
+        if not r:
             skipped.append(lab)
             continue
         used_funds.append(lab)
-        trades = {d: sorted((_sec(r[1]), float(r[2]), float(r[3])) for r in (G.load_day(db, sid, d, "trades") or [])
-                            if not r[4] and r[2] > 0 and r[3] > 0) for d in days}
-        # the fund's own norm: median of its daily median bubble (trades at a current NAV) over the previous days
-        med = {}
-        for d in days:
-            bs = [px / n - 1.0 for s, px, _v in trades[d] for n in (nv.at(d, s),) if n]
-            if bs:
-                med[d] = statistics.median(bs)
-        mdays = sorted(med)
-        norm = {}
-        for j, d in enumerate(mdays):
-            if norm_days <= 0:
-                norm[d] = 0.0
-                continue
-            w = [med[x] for x in mdays[max(0, j - norm_days):j]]
-            if len(w) >= max(3, norm_days // 3):
-                norm[d] = statistics.median(w)
-        fund_eps = []
-        for d in days:
-            if d not in norm or not trades[d]:
-                continue
-            win = TD.market_window(db, d)
-            if not win:
-                continue
-            n_days_all.add(d)
-            w0, w1 = win
-            tr_t = [x[0] for x in trades[d]]
-            ev = sorted(G.load_day(db, sid, d, "book") or [], key=lambda r: (r[0], r[2]))
-            levels: dict[int, tuple] = {}
-            open_ = {}                              # (side, x) -> episode being built
-            last_s = None
-
-            def close(key, s_end, how=None):
-                e = open_.pop(key)
-                e["end"] = s_end
-                e["life"] = s_end - e["start"]
-                side, x = key
-                lo, hi = bisect.bisect_left(tr_t, e["start"]), bisect.bisect_right(tr_t, s_end)
-                thr = e["thr"]
-                got = sum(v for _s, px, v in trades[d][lo:hi] if (px <= thr if side == "ask" else px >= thr))
-                e["taken_units"] = got
-                e["ended"] = how or ("taken" if got > 0 else "cancelled")
-                fund_eps.append(e)
-
-            def evaluate(s):
-                bids = sorted(([bp, bv] for bp, bv, _a, _b in levels.values() if bp > 0 and bv > 0), key=lambda z: -z[0])
-                asks = sorted(([ap, av] for _bp, _bv, ap, av in levels.values() if ap > 0 and av > 0), key=lambda z: z[0])
-                nav = nv.at(d, s)
-                if not bids or not asks or asks[0][0] <= bids[0][0] or not nav:
-                    return
-                if len(spreads) < 400000 and s % 60 == 0:
-                    spreads.append((asks[0][0] - bids[0][0]) / (asks[0][0] + bids[0][0]))
-                fair = nav * (1.0 + norm[d])
-                for x in thresholds:
-                    for side in ("ask", "bid"):
-                        key = (side, x)
-                        thr = fair * (1 - x / 100.0) if side == "ask" else fair * (1 + x / 100.0)
-                        book = asks if side == "ask" else bids
-                        on = book[0][0] <= thr if side == "ask" else book[0][0] >= thr
-                        if on:
-                            beyond = [lv for lv in book if (lv[0] <= thr if side == "ask" else lv[0] >= thr)]
-                            e = open_.get(key)
-                            if e is None:
-                                e = open_[key] = {"fund": lab, "sid": sid, "date": d, "side": side, "x": x,
-                                                  "start": s, "thr": thr, "fair": fair, "nav": nav, "norm": norm[d],
-                                                  "states": [], "best_dev": 0.0}
-                            dev = (book[0][0] / fair - 1.0) * 100
-                            if abs(dev) > abs(e["best_dev"]):
-                                e["best_dev"] = dev
-                            if not e["states"] or e["states"][-1][1] != beyond:
-                                e["states"].append((s, [list(lv) for lv in beyond], nav))
-                        elif key in open_:
-                            close(key, s)
-
-            i = 0
-            while i < len(ev):
-                s = _sec(ev[i][1])
-                while i < len(ev) and _sec(ev[i][1]) == s:
-                    r = ev[i]
-                    if 1 <= r[2] <= 5:
-                        levels[r[2]] = (r[3], r[4], r[6], r[7])
-                    i += 1
-                if s < w0:
-                    continue
-                if s > w1:
-                    break
-                evaluate(s)
-                last_s = s
-            for key in list(open_):
-                close(key, max(w1, last_s or w1), "close")
-        # what happened afterwards (1 hour, 1 trading day), at the price the position could be closed at
-        _outcomes(db, sid, days, fund_eps, nv, latencies, ref_latency, cap, fees)
-        episodes.extend(fund_eps)
-
-    if not episodes and not used_funds:
+        for e in r["episodes"]:
+            e["cap"] = {int(L): c for L, c in e["cap"].items()}
+            episodes.append(e)
+        spreads.extend(r["spreads"])
+        n_days_all.update(r["days"])
+    if not used_funds:
         raise ValueError("برای صندوق‌های انتخابی دادهٔ TSE (صف و معاملات) یا NAV ریزدانه (feed) وجود ندارد.")
     n_days = len(n_days_all)
     half_spread = statistics.median(spreads) if spreads else 0.0
@@ -241,14 +375,14 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
     ex = sorted((e for e in episodes if e["x"] == x_ref), key=lambda e: -abs(e["best_dev"]))[:max_examples]
     examples = [{"fund": e["fund"], "date": e["date"], "time": _hms(e["start"]), "side": e["side"],
                  "dev_pct": round(e["best_dev"], 3), "life_s": e["life"], "ended": e["ended"],
-                 "depth_rial": round(sum(p_ * v for p_, v in e["states"][0][1])) if e["states"] else 0,
-                 "realised_1d_pct": e.get("real_1d")} for e in ex]
+                 "depth_rial": e["depth_rial"], "realised_1d_pct": e.get("real_1d")} for e in ex]
     verdict = _verdict(out_sides, x_ref, ref_latency, p.initial_capital)
     return {"setup": {"funds": len(used_funds), "skipped": skipped, "days": n_days, "thresholds": thresholds,
                       "latencies": latencies, "ref_latency": ref_latency, "norm_days": norm_days,
                       "cap_rial": cap, "fees_round_trip_pct": round(fees * 100, 3),
                       "median_half_spread_pct": round(half_spread * 100, 4), "max_nav_age_min": max_age // 60,
                       "period": [min(n_days_all), max(n_days_all)] if n_days_all else None,
+                      "workers": workers, "funds_from_cache": n_cached,
                       "seconds": round(time.time() - t0, 1)},
             "sides": out_sides, "per_fund": per_fund, "examples": examples, "verdict": verdict}
 
@@ -325,7 +459,7 @@ def _summarise(E, x, latencies, ref_latency, cap, fees, half_spread, n_days, cap
     row["life_buckets"] = [{"label": lab, "n": sum(1 for v in lives if lo <= v <= hi)} for lo, hi, lab in LIFE_BUCKETS]
     row["ended"] = {k: round(sum(1 for e in E if e["ended"] == k) / n * 100, 1) for k in ("taken", "cancelled", "close")}
     row["mean_dev_pct"] = round(statistics.mean(e["best_dev"] for e in E), 3)
-    row["median_depth_rial"] = round(statistics.median(sum(p_ * v for p_, v in e["states"][0][1]) for e in E if e["states"]))
+    row["median_depth_rial"] = round(statistics.median(e["depth_rial"] for e in E))
     lat = []
     for L in latencies:
         C = [e["cap"][L] for e in E if L in e["cap"]]
