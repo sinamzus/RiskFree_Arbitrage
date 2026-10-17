@@ -333,6 +333,7 @@ WEB_MAP = {
     "partbasis": ("participation_basis", "day", "day"), "delay": ("exec_delay_snaps", "3", 3),
     "fillmode": ("fill_mode", "best", "best"), "fillmax": ("fill_max_rel_pct", "0.15", 0.15),
     "fillexit": ("fill_exit_rel_pct", "0.45", 0.45),
+    "straypct": ("stray_pct", "2", 2.0), "straylat": ("stray_latency_s", "15", 15),
 }
 # DiscountParams fields that are deliberately not exposed in the UI
 NOT_EXPOSED: set = set()
@@ -407,6 +408,7 @@ UI_ID = {  # query key -> element id
     "sstart": "disc-sstart", "send": "disc-send", "crashdrop": "disc-crashdrop", "rallyrise": "disc-rallyrise", "crashwin": "disc-crashwin",
     "crashcool": "disc-crashcool", "crashscope": "disc-crashscope", "imin": "disc-imin", "mrlag": "disc-mrlag",
     "navmin": "disc-navmin", "ds": "disc-dataset", "grid": "disc-grid", "fillswitch": "disc-fillswitch", "fillminhold": "disc-fillminhold", "fillage": "disc-fillage", "partbasis": "disc-partbasis", "delay": "disc-delay", "fillmode": "disc-fillmode", "fillmax": "disc-fillmax", "fillexit": "disc-fillexit",
+    "straypct": "disc-straypct", "straylat": "disc-straylat",
 }
 
 
@@ -1995,6 +1997,23 @@ def test_stray_orders(R: Results, workdir: str):
           f"لبه {e2['edge_pct']}٪ (انتظار {want * 100:.3f}) · واقعی {real}٪ · نسبت به گروه {rel}٪")
     R.add(g, "دفتر آرام هیچ سفارش پرتی نمی‌سازد (صندوق‌های ۲ و ۳: فقط همان حرکت کل بازار)",
           all(r["fund"] == "S1" or r["idio"] == 0 for r in out["per_fund"]), str(out["per_fund"]))
+    # the catcher inside the backtest: on an 11-minute grid (09:30, 10:00, 10:30 are not on it) the planted 2.5 % order is seen only
+    # through the added instant 09:30:10 — bought with the strategy's own entry limit (average price ≤ fair − 0.3 %:
+    # the cheap level and what the limit still allows); the 1.5 % order and the
+    # market-wide fall are not added; with a 30-second reaction the order is gone
+    def bt(**kw):
+        pp = _base(dataset="tse", tse_grid_sec=660, fill_mode="hold", fill_max_rel_pct=-0.3, baseline_days=0,
+                   max_nav_age_min=5, position_pct=20, initial_capital=5e7, participation_pct=0, crash_drop_pct=0,
+                   half_spread_pct=0.0, **kw)
+        return D.run_discount_backtest(db, ["gold"], None, None, None, pp)
+    off, on, slow = bt(stray_pct=0), bt(stray_pct=2, stray_latency_s=10), bt(stray_pct=2, stray_latency_s=30)
+    tr = on["trades"]
+    R.add(g, "شکارچی در بک‌تست: سفارش پرتِ بین دو لحظهٔ شبکه با تأخیر واکنش خریده می‌شود (میانگین قیمت در حد خرید راهبرد)",
+          not off["trades"] and not slow["trades"] and len(tr) == 1 and tr[0]["symbol"] == "S1"
+          and tr[0]["entry_date"] == 20260105 and tr[0]["entry_time"] == 93010
+          and tr[0]["entry_price"] <= 11000 * 0.997 + 0.01 and tr[0]["volume"] >= 500,
+          f"خاموش: {len(off['trades'])} · روشن: {[(t['symbol'], t['entry_time'], t['entry_price'], t['volume']) for t in tr]} · "
+          f"تأخیر ۳۰ ث: {len(slow['trades'])}")
     # resumable and parallel: every fund is kept on disk once done (an interrupted run resumes), and the parallel
     # run gives exactly the serial result
     import shutil as _sh
@@ -2119,7 +2138,9 @@ def test_optimizer_coverage(R: Results):
     import re as _re
     dflt = asdict(D.DiscountParams())
     # the capital: volume study; the data: a choice; the NAV age: a fixed rule (only a current NAV is traded)
-    not_dims = {"initial_capital", "dataset", "tse_grid_sec", "max_nav_age_days", "max_nav_age_min"}
+    # the stray-order catcher: a data overlay (instants added to the TSE grid) set in the form, not searched
+    not_dims = {"initial_capital", "dataset", "tse_grid_sec", "max_nav_age_days", "max_nav_age_min",
+                "stray_pct", "stray_latency_s"}
     miss = [f for f in dflt if f not in S.DIMS and f not in not_dims]
     off = [f"{d}={dflt[d]}" for d in S.ORDER if dflt[d] not in S.DIMS[d]["choices"]]
     html = _html()

@@ -1774,6 +1774,8 @@ def create_app(db, scan_callback=None):
             participation_basis=("day" if str(get("partbasis") or d.participation_basis) == "day" else "sofar"),
             dataset=(str(get("ds") or d.dataset) if str(get("ds") or d.dataset) in ("tse", "hybrid") else "dump"),
             tse_grid_sec=max(30, min(3600, int(_f("grid", d.tse_grid_sec)))),
+            stray_pct=max(0.0, _f("straypct", d.stray_pct)),
+            stray_latency_s=max(0, int(_f("straylat", d.stray_latency_s))),
             exec_delay_snaps=max(0, min(20, int(_f("delay", d.exec_delay_snaps)))),
             require_fresh=_b("fresh", d.require_fresh),
             max_nav_age_days=int(_f("navage", d.max_nav_age_days)),

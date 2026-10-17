@@ -373,6 +373,47 @@ def _load_raw(db, symbol_id: int, start: int | None, end: int | None, grid_sec: 
     return rows, book
 
 
+def add_instants(db, symbol_id: int, raw: list[tuple], book: "Book", instants: list[tuple[int, int]]):
+    """(raw, book) with extra instants (date, HHMMSS) inserted between the grid's: the real book at that second
+    (replayed from the event stream), its mid, the volume traded so far that day and the dump's NAV then (the feed
+    overlay replaces it afterwards). Instants already on the grid, outside the collected days or with a one-sided
+    book are skipped. ``raw`` is not modified (it may be a cached list)."""
+    have = {(r[0], r[1]) for r in raw}
+    days = set(r[0] for r in raw)
+    want = sorted((d, t) for d, t in instants if d in days and (d, t) not in have)
+    if not want:
+        return raw, book
+    navs = db.get_nav_intraday(symbol_id, None, None)
+    nkey = [(r[0], r[1]) for r in navs]
+    tape: dict[int, tuple] = {}
+    add = []
+    for d, t in want:
+        if d not in tape:
+            tr = sorted((_sec(r[1]), r[3]) for r in (G.load_day(db, symbol_id, d, "trades") or [])
+                        if not r[4] and r[2] > 0 and r[3] > 0)
+            cum, acc = [], 0
+            for _s, v in tr:
+                acc += v
+                cum.append(acc)
+            tape[d] = ([x[0] for x in tr], cum)
+        bids, asks = book.at(d, t)
+        if not bids or not asks or asks[0][0] <= bids[0][0]:
+            continue
+        j = bisect.bisect_right(nkey, (d, t)) - 1
+        if j < 0:
+            continue
+        _dd, _tt, nav, nav_d, _px, _v, nav_t = navs[j]
+        if not nav or nav <= 0:
+            continue
+        secs, cum = tape[d]
+        k = bisect.bisect_right(secs, _sec(t)) - 1
+        add.append((d, t, nav, nav_d or 0, (bids[0][0] + asks[0][0]) / 2.0, cum[k] if k >= 0 else 0, nav_t or 0))
+        book[(d, t)] = (bids, asks)
+    if not add:
+        return raw, book
+    return sorted(list(raw) + add, key=lambda r: (r[0], r[1])), book
+
+
 class Book(dict):
     """{(date, time): (bids, asks)} at the dataset's own instants, plus ``at(date, time)``: the real book at ANY
     instant — e.g. the instant a held fund is sold to fund a switch. Such an instant is another fund's snapshot, so

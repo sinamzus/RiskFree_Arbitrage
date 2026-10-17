@@ -2457,6 +2457,10 @@ td.disc-obc { cursor: help; }
         <input id="disc-fillage" type="number" step="5" min="1" value="90" style="width:70px"></div>
       <div class="bbt-field" title="فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد؛ ۰ = فقط وقتی در/زیر معمولِ خودش است (صندوقِ گران‌شده خریده نمی‌شود)."><label>پر کردن: حداکثر حباب نسبی ٪</label>
         <input id="disc-fillmax" type="number" step="0.1" value="-0.3" style="width:70px"></div>
+      <div class="bbt-field" title="شکار سفارش فروشِ پرت (فقط دیتاست TSE): لحظه‌هایی که سفارش فروشِ مخصوص یک صندوق (نه حرکت کل بازار) دست‌کم این درصد زیر قیمت معمولش و زیر کل گروه بود و پس از «تأخیر واکنش» هنوز در صف بود، به شبکهٔ زمانی اضافه می‌شوند؛ همان راهبرد با قواعد خودش (حد خرید، برتری جابه‌جایی، حداقل نگه‌داری) تصمیم می‌گیرد. ۰ = خاموش. اجرای اول برای همهٔ صندوق‌ها صف‌ها را ثانیه‌به‌ثانیه بازپخش می‌کند (چند دقیقه؛ بعد از روی دیسک)."><label>شکار سفارش پرت: فاصله ٪ (۰ = خاموش)</label>
+        <select id="disc-straypct" style="width:90px"><option value="0" selected title="بک‌تست فقط لحظه‌های شبکهٔ زمانی را می‌بیند">خاموش</option><option value="1" title="سفارش فروشِ مخصوص صندوق دست‌کم ۱٪ زیر قیمت معمول و زیر گروه (حدود ۱۸۰ بار در ماه در ۳۱ صندوق؛ لبهٔ یک‌روزه کوچک)">۱٪</option><option value="2" title="دست‌کم ۲٪ زیر قیمت معمول و زیر گروه (حدود ۲۰ بار در ماه؛ لبهٔ یک‌روزه حدود ۱٪)">۲٪</option><option value="3" title="دست‌کم ۳٪ زیر قیمت معمول و زیر گروه (حدود ۷ بار در ماه)">۳٪</option></select></div>
+      <div class="bbt-field" title="چند ثانیه پس از ظاهر شدن سفارش پرت، شکارچی آن را می‌بیند و می‌خرد (فقط اگر هنوز در صف باشد)."><label>شکار: تأخیر واکنش (ثانیه)</label>
+        <input id="disc-straylat" type="number" step="1" min="0" value="10" style="width:70px"></div>
       <div class="bbt-field" title="پوزیشن پارک‌شده وقتی فروخته می‌شود که حبابش نسبت به معمولِ خودش به این درصد (یا بیشتر) برسد (سودبردن)."><label>پر کردن: فروش وقتی حباب نسبی ≥ ٪</label>
         <input id="disc-fillexit" type="number" step="0.1" value="0.3" style="width:70px"></div>
       <div class="bbt-field" title="فیلتر ریزش بازار: اگر میانگین قیمتِ صندوق‌های گروه در «پنجرهٔ ریزش» بیش از این‌قدر درصد افت کرده باشد، ورودِ جدید موقتاً متوقف می‌شود (خروج‌ها و پوزیشن‌های باز دست نمی‌خورند). در ریزش، «تخفیف از NAV» اغلب ظاهری است (قیمت زودتر از NAV می‌افتد). ۰ = خاموش. برای داده‌ای با اسنپ‌شات‌های کم، مقدار را بزرگ‌تر از نوسان عادی بگذارید."><label>فیلتر ریزش: افت گروه ≥ ٪</label>
@@ -6736,7 +6740,7 @@ function discParams() {
     hold: v('disc-hold'), stop: v('disc-stop'), stopmode: v('disc-stopmode'), base: v('disc-base'),
     entrymode: v('disc-entrymode'), ientry: v('disc-ientry'), iexit: v('disc-iexit'),
     imin: v('disc-imin'), mrlag: v('disc-mrlag'),
-    fillmode: v('disc-fillmode'), fillswitch: v('disc-fillswitch'), fillminhold: v('disc-fillminhold'), fillage: v('disc-fillage'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'),
+    fillmode: v('disc-fillmode'), fillswitch: v('disc-fillswitch'), fillminhold: v('disc-fillminhold'), fillage: v('disc-fillage'), fillmax: v('disc-fillmax'), fillexit: v('disc-fillexit'), straypct: v('disc-straypct'), straylat: v('disc-straylat'),
     crashdrop: v('disc-crashdrop'), rallyrise: v('disc-rallyrise'), crashwin: v('disc-crashwin'), crashcool: v('disc-crashcool'), crashscope: v('disc-crashscope'),
     mrcenter: v('disc-mrcenter'), mrwin: v('disc-mrwin'), mrmin: v('disc-mrmin'), mrhor: v('disc-mrhor'),
     spread: v('disc-spread'), part: v('disc-part'), partbasis: v('disc-partbasis'), delay: v('disc-delay'),
@@ -8851,7 +8855,7 @@ function discClockHtml(c) {
 const DISC_REL_IDS = ['disc-entrymode', 'disc-entry', 'disc-exit', 'disc-ientry', 'disc-iexit', 'disc-imin', 'disc-hold',
   'disc-stop', 'disc-stopmode', 'disc-fillexit', 'disc-fillswitch', 'disc-fillminhold', 'disc-fillage', 'disc-fillmax',
   'disc-mrwin', 'disc-mrhor', 'disc-mrmin', 'disc-mrlag', 'disc-crashwin', 'disc-crashcool', 'disc-crashscope',
-  'disc-sstart', 'disc-send', 'disc-partbasis', 'disc-navage'];
+  'disc-sstart', 'disc-send', 'disc-partbasis', 'disc-navage', 'disc-straypct', 'disc-straylat'];
 function discRelevance() {
   const g = id => document.getElementById(id);
   if (!g('disc-fillmode')) return;
@@ -8873,6 +8877,8 @@ function discRelevance() {
   if (val('disc-smode') !== 'fixed') why(['disc-sstart', 'disc-send'], 'ساعت جلسه خودکار است');
   if (!(+val('disc-part') > 0)) why(['disc-partbasis'], 'سقف حجم نامحدود (۰) است');
   if (+val('disc-navmin') > 0) why(['disc-navage'], 'سن NAV به دقیقه سنجیده می‌شود (سقف دقیقه‌ای فعال است)');
+  if (val('disc-dataset') !== 'tse') why(['disc-straypct', 'disc-straylat'], 'فقط دیتاست TSE صف‌ها را ثانیه‌به‌ثانیه دارد');
+  else if (!(+val('disc-straypct') > 0)) why(['disc-straylat'], 'شکار سفارش پرت خاموش است');
   DISC_REL_IDS.forEach(id => {
     const el = g(id); if (!el) return;
     const dis = !!off[id];

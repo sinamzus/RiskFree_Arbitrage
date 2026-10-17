@@ -322,6 +322,26 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
     max_age = max(1, int(p.max_nav_age_min or 5)) * 60
     cfg = {"thresholds": thresholds, "latencies": latencies, "ref_latency": ref_latency, "cap": cap, "fees": fees,
            "max_age": max_age, "norm_days": norm_days}
+    results, n_cached, workers = _fund_results(db, funds, start, end, cfg, workers, prog)
+    episodes, spreads, n_days_all, used_funds, skipped = [], [], set(), [], []
+    for sid, lab in funds:
+        r = results.get(sid)
+        if not r:
+            skipped.append(lab)
+            continue
+        used_funds.append(lab)
+        for e in r["episodes"]:
+            e = dict(e)
+            e["cap"] = {int(L): c for L, c in e["cap"].items()}
+            episodes.append(e)
+        spreads.extend(r["spreads"])
+        n_days_all.update(r["days"])
+    return _report(db, funds, results, episodes, spreads, n_days_all, used_funds, skipped, cfg, p, n_cached, workers,
+                   max_dev_pct, max_examples, norm_days, t0)
+
+
+def _fund_results(db, funds, start, end, cfg, workers, prog) -> tuple[dict, int, int]:
+    """{sid: per-fund result}: from the disk cache when done before, else computed (in parallel when possible)."""
     results, n_cached = {}, 0
     # funds already done (an earlier, possibly interrupted, run with the same settings and data)
     todo = []
@@ -342,6 +362,9 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
             workers = 1
     workers = max(1, min(workers, len(todo)))
     db_path = getattr(db, "path", None)
+    import multiprocessing as _mp
+    if _mp.current_process().daemon:
+        workers = 1                           # inside a worker of another pool (the optimizer): no child processes
     if workers > 1 and db_path is not None:
         import multiprocessing as mp
         from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -356,18 +379,13 @@ def run_stray_study(db, cats, symbols, start, end, p: D.DiscountParams, progress
         for sid, lab in todo:
             prog(phase=f"بازپخش صف‌ها: {lab}", done=len(results), total=len(funds))
             results[sid] = _cached_fund_study(db, sid, lab, start, end, cfg)[0]
-    episodes, spreads, n_days_all, used_funds, skipped = [], [], set(), [], []
-    for sid, lab in funds:
-        r = results.get(sid)
-        if not r:
-            skipped.append(lab)
-            continue
-        used_funds.append(lab)
-        for e in r["episodes"]:
-            e["cap"] = {int(L): c for L, c in e["cap"].items()}
-            episodes.append(e)
-        spreads.extend(r["spreads"])
-        n_days_all.update(r["days"])
+    return results, n_cached, workers
+
+
+def _report(db, funds, results, episodes, spreads, n_days_all, used_funds, skipped, cfg, p, n_cached, workers,
+            max_dev_pct, max_examples, norm_days, t0) -> dict:
+    thresholds, latencies, ref_latency = cfg["thresholds"], cfg["latencies"], cfg["ref_latency"]
+    cap, fees, max_age = cfg["cap"], cfg["fees"], cfg["max_age"]
     if not used_funds:
         raise ValueError("برای صندوق‌های انتخابی دادهٔ TSE (صف و معاملات) یا NAV ریزدانه (feed) وجود ندارد.")
     g_at = _group_series([results[sid] for sid, _l in funds if results.get(sid)])
@@ -612,3 +630,52 @@ def _verdict(sides, x_ref, L, n_days) -> dict:
     if m is not None and m > 0:
         return {"overall": "warn", "headline": "~ " + head + tail + " — مثبت ولی هنوز نامعنادار."}
     return {"overall": "bad", "headline": "✖ " + head + tail + " — بعد از برداشتن، نسبت به گروه سودی نمی‌ماند."}
+
+
+# --------------------------------------------------------------------------- #
+#  Stray orders inside the backtest                                            #
+# --------------------------------------------------------------------------- #
+
+_INSTANTS: dict = {}
+
+
+def stray_instants(db, norm_days: int, pct: float, latency_s: int) -> dict[int, list[tuple[int, int]]]:
+    """{fund: [(date, HHMMSS)]}: the instants at which a FUND-SPECIFIC cheap sell order — at least ``pct`` % under
+    the fund's fair price (NAV known then × (1 + its own norm)) and that far under the whole group too — had already
+    been in the queue for ``latency_s`` seconds. The backtest adds these instants to its time grid: the strategy sees
+    the book there with its own rules (a market-wide move the NAV lags behind is not one of them). Computed over every
+    fund with TSE data (the group) from the per-fund cache of the stray-order study, with fixed settings so the cache
+    is shared by every backtest."""
+    if pct <= 0:
+        return {}
+    xs = [x for x in THRESHOLDS if x <= pct]
+    if not xs:
+        return {}
+    x = max(xs)
+    key = (TD._dbkey(db), int(norm_days), float(pct), int(latency_s), TD._global_version(db))
+    hit = _INSTANTS.get(key)
+    if hit is not None:
+        return hit
+    names = db.get_nav_symbol_map()
+    funds = [(sid, names.get(sid, f"#{sid}")) for sid in sorted(TD._tse_sids(db))]
+    cfg = {"thresholds": list(THRESHOLDS), "latencies": list(LATENCIES), "ref_latency": 10, "cap": 2e9,
+           "fees": 0.0025, "max_age": 300, "norm_days": int(norm_days)}
+    results, _n, _w = _fund_results(db, funds, None, None, cfg, 0, lambda **kw: None)
+    eps = []
+    for sid, _lab in funds:
+        r = results.get(sid)
+        for e in (r or {}).get("episodes", []):
+            if e["side"] == "ask" and e["x"] == x:
+                e = dict(e, sid=sid)
+                eps.append(e)
+    _relative(eps, _group_series([r for r in results.values() if r]))
+    out: dict[int, set] = {}
+    for e in eps:
+        if (e.get("rel_dev") is not None and e["rel_dev"] <= -x and e["best_dev"] <= -pct
+                and abs(e["best_dev"]) <= 10.0 and e["life"] > latency_s):
+            out.setdefault(e["sid"], set()).add((e["date"], _hms(e["start"] + latency_s)))
+    res = {sid: sorted(v) for sid, v in out.items()}
+    if len(_INSTANTS) > 16:
+        _INSTANTS.pop(next(iter(_INSTANTS)))
+    _INSTANTS[key] = res
+    return res

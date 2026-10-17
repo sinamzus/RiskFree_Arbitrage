@@ -143,6 +143,11 @@ class DiscountParams:
                                         # tse = TSE trades + order book on a time grid (real bid/ask, depth) |
                                         # hybrid = signal from the dump's snapshots, execution against the TSE book
     tse_grid_sec: int = 600             # tse: sampling step of the book / tape (seconds)
+    stray_pct: float = 0.0              # tse: 0 = off. Stray sell orders: the instants at which a fund-specific sell order
+                                        # at least this % under the fund's fair price (and under the whole group) had
+                                        # been in the queue for stray_latency_s seconds are added to the time grid —
+                                        # the strategy sees the book there (between two grid instants) with its own rules
+    stray_latency_s: int = 10           # reaction delay of the stray-order catcher (seconds)
     exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
     max_nav_age_days: int = 2           # ignore snapshots whose NAV is older than this (calendar days; -1 = off);
@@ -296,9 +301,14 @@ def _raw_for(db, sid: int, start: int | None, end: int | None, p: "DiscountParam
         real = getattr(db, "_db", db)
         if p.dataset == "tse":
             raw, book = TD.load_raw(real, sid, None, None, p.tse_grid_sec)
+            ex = _stray_extra(real, sid, p)
+            if ex:                            # stray sell orders: their instants added to the grid
+                raw, book = TD.add_instants(real, sid, raw, book, ex)
         else:
             raw, book = TD.load_hybrid(real, sid, None, None)
-        raw = _feed_nav(real, sid, raw, (p.dataset, p.tse_grid_sec if p.dataset == "tse" else 0))
+        raw = _feed_nav(real, sid, raw, (p.dataset, p.tse_grid_sec if p.dataset == "tse" else 0,
+                                         p.stray_pct if p.dataset == "tse" else 0,
+                                         p.stray_latency_s if p.dataset == "tse" and p.stray_pct > 0 else 0))
         if start or end:
             ds = [r[0] for r in raw]
             a = _bs.bisect_left(ds, start) if start else 0
@@ -306,6 +316,15 @@ def _raw_for(db, sid: int, start: int | None, end: int | None, p: "DiscountParam
             raw = raw[a:b]
         return _dedupe(raw), book
     return _dedupe(_feed_nav(db, sid, db.get_nav_intraday(sid, start, end), ("dump", start, end))), None
+
+
+def _stray_extra(db, sid: int, p: "DiscountParams") -> list:
+    """[(date, HHMMSS)] the stray-order catcher adds to this fund's TSE grid (empty when off)."""
+    if p.dataset != "tse" or p.stray_pct <= 0:
+        return []
+    import discount_stray as ST
+    real = getattr(db, "_db", db)
+    return ST.stray_instants(real, p.baseline_days, p.stray_pct, p.stray_latency_s).get(sid) or []
 
 
 NAV_SOURCE: dict = {}       # fund -> statistics of the NAV source of its latest load (see nav_feed.overlay)
@@ -493,7 +512,8 @@ def _load_ex(db, sid: int, start: int | None, end: int | None, p: DiscountParams
     raw_all, book = _raw_for(db, sid, _warmup_start(start, p), end, p)
     t1 = _time.time()
     pstats: dict = {}
-    rows_all, day_vol = _prep(raw_all, p, pstats, start or 0)
+    extra = set(_stray_extra(db, sid, p))
+    rows_all, day_vol = _prep(raw_all, p, pstats, start or 0, extra)
     _LOAD_T["raw"] += t1 - t0
     _LOAD_T["prep"] += _time.time() - t1
     if start:
@@ -738,7 +758,8 @@ def _in_session(p: DiscountParams, win: tuple[int, int] | None, t: int) -> bool:
     return win is not None and win[0] <= t <= win[1]
 
 
-def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_from: int = 0):
+def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_from: int = 0,
+          extra: set | None = None):
     """Raw DB rows -> (rows, day_vol).
 
     rows: [(ordinal, date, time, fair, last, fresh, nav_raw)] — only in-session
@@ -747,6 +768,8 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
     previous ``baseline_days`` trading days (past data only; snapshots during the
     warm-up, before enough history exists, are dropped).  baseline_days = 0 → fair = NAV.
     day_vol: {date: total volume traded that day}.
+    ``extra``: (date, time) of instants added to the grid for stray sell orders — tradable (fresh = 2: the book
+    changed), but never part of the fund's norm (a stray order would pull it down).
     """
     base_rows = []
     day_vol = _DayVol()
@@ -760,7 +783,7 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
         vol = vol or 0
         if vol > day_vol.get(d, 0):
             day_vol[d] = vol
-        fresh = vol > prev_vol
+        fresh = 2 if extra and (d, t) in extra else vol > prev_vol
         prev_vol = max(prev_vol, vol)
         day_vol.cum[(d, t)] = prev_vol                # volume traded up to this snapshot (known at that moment)
         if not _in_session(p, windows.get(d), t):
@@ -808,7 +831,7 @@ def _prep(raw: list[tuple], p: DiscountParams, stats: dict | None = None, count_
     # rolling median over the previous baseline_days trading days
     per_day: dict[int, list[float]] = {}
     for o, d, t, nav, last, fr in base_rows:
-        if fr:
+        if fr and fr != 2:                    # (an added stray-order instant never shapes the norm)
             per_day.setdefault(d, []).append(last / nav - 1.0)
     days = sorted(per_day)
     daily = [statistics.median(per_day[d]) for d in days]
