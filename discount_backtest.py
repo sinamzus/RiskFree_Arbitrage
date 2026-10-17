@@ -101,10 +101,13 @@ CATEGORIES = {
 #  Parameters & results                                                        #
 # --------------------------------------------------------------------------- #
 
+# The defaults are the configuration the studies settled on (TSE book on a 10-minute grid; always invested; switch
+# to a fund at least 1 point cheaper against its own 20-day norm, held at least 2 days, bought only below its norm −0.3;
+# a fifth of the capital per fund; no new entry/switch for 2 hours after a 1.5 % group fall).
 @dataclass
 class DiscountParams:
     initial_capital: float = 10_000_000_000   # rials, one shared pool
-    position_pct: float = 50.0          # max % of the CURRENT capital in one position
+    position_pct: float = 20.0          # max % of the CURRENT capital in one position
     entry_discount_pct: float = 0.50    # buy when price ≤ NAV·(1−this/100)
     exit_discount_pct: float = 0.0      # sell when price ≥ NAV·(1−this/100); <0 = wait for premium
     max_hold_days: int = 10             # calendar days; 0 = no limit
@@ -119,10 +122,10 @@ class DiscountParams:
     mr_lag: int = 8                     # snapshots between the AR(1) pairs (≈ 1 hour)
     fill_mode: str = "hold"             # off | best (park idle cash in the best-ranked fund) | hold (always invested: the
                                         #   parker IS the strategy; a position is sold ONLY to switch into a better candidate)
-    fill_switch_pct: float = 0.8        # hold: switch only if the candidate's bubble is this many % points below the held fund's
-    fill_min_hold_min: int = 60         # hold: a holding cannot be switched out before it was held this many minutes (0 = off)
+    fill_switch_pct: float = 1.0        # hold: switch only if the candidate's bubble is this many % points below the held fund's
+    fill_min_hold_min: int = 2880       # hold: a holding cannot be switched out before it was held this many minutes (0 = off)
     fill_quote_age_min: int = 90        # a fund's latest quote counts as "current" (candidate / sellable) for this many minutes
-    fill_max_rel_pct: float = 0.1       # park only into a fund trading at or below its own norm + this %
+    fill_max_rel_pct: float = -0.3      # park only into a fund trading at or below its own norm + this %
     fill_exit_rel_pct: float = 0.3      # sell a parked position once it trades this % above its norm
     crash_drop_pct: float = 1.5         # 0 = off. Market-fall filter: no NEW entry while the group's average price fell ≥ this %
     crash_window_min: int = 30          # look-back (minutes) over which the group's price change is measured
@@ -132,14 +135,14 @@ class DiscountParams:
                                         # price ROSE ≥ this % (same window, cooldown and group as the fall filter)
     stop_loss_pct: float = 0.0          # 0 = off; meaning depends on stop_mode
     stop_mode: str = "nav_widen"        # nav_widen | nav_level | price
-    baseline_days: int = 0              # per-fund typical discount window (trading days); 0 = off
+    baseline_days: int = 20             # per-fund typical discount window (trading days); 0 = off
     half_spread_pct: float = 0.02       # assumed half bid-ask spread (each side)
     participation_pct: float = 10.0     # max share of the volume we can trade; 0 = unlimited
     participation_basis: str = "sofar"  # sofar = volume traded UP TO the snapshot (known then) | day = the whole day's volume (look-ahead)
-    dataset: str = "dump"               # dump = the NAV dump's snapshots (price = last, assumed spread) |
+    dataset: str = "tse"                # dump = the NAV dump's snapshots (price = last, assumed spread) |
                                         # tse = TSE trades + order book on a time grid (real bid/ask, depth) |
                                         # hybrid = signal from the dump's snapshots, execution against the TSE book
-    tse_grid_sec: int = 300             # tse: sampling step of the book / tape (seconds)
+    tse_grid_sec: int = 600             # tse: sampling step of the book / tape (seconds)
     exec_delay_snaps: int = 0           # orders fill at the fund's N-th next fresh snapshot (same day) instead of the signal's; 0 = instantly
     require_fresh: bool = True          # only trade on snapshots where volume grew
     max_nav_age_days: int = 2           # ignore snapshots whose NAV is older than this (calendar days; -1 = off);

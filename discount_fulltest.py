@@ -176,7 +176,8 @@ def _base(**kw) -> D.DiscountParams:
                          position_pct=10.0, fill_mode="off", fill_switch_pct=0.5, fill_max_rel_pct=0.0,
                          crash_drop_pct=0.0, crash_window_min=30, crash_cooldown_min=30, crash_scope="category",
                          mr_center="off", mr_min_score=70.0, mr_lag=4, max_nav_age_min=30,
-                         buy_fee=0.0012, sell_fee=0.0012, participation_basis="day", exec_delay_snaps=0)
+                         buy_fee=0.0012, sell_fee=0.0012, participation_basis="day", exec_delay_snaps=0,
+                         fill_min_hold_min=60, dataset="dump", tse_grid_sec=300)
     return replace(p, **kw) if kw else p
 
 
@@ -1262,7 +1263,9 @@ def test_tse_dataset(R: Results, db_path: str):
     for t in rhy["trades"][:12]:
         for side, d, tm, px in (("buy", t["entry_date"], t["entry_time"], t["entry_price"]),
                                 ("sell", t["exit_date"], t["exit_time"], t["exit_price"])):
-            r = cl.get(f"/api/disc/trade_moment?focus={t['symbol']}&date={d}&time={tm}&cats=gold&base={t['base_pct']}")
+            r = cl.get("/api/disc/trade_moment", query_string={       # as the page sends it: with the run's parameters
+                "focus": t["symbol"], "date": d, "time": tm, "cats": "gold", "base": t["base_pct"],
+                "params": json.dumps(rhy["params"], default=str)})
             j = r.get_json() or {}
             if r.status_code != 200 or not j.get("book"):
                 bad.append(f"{t['symbol']} {side}: {r.status_code} {j.get('error')}")
@@ -2422,6 +2425,20 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             pg.goto(f"http://localhost:{port}/")
             pg.wait_for_timeout(2500)
             pg.evaluate("document.getElementById('loading').classList.add('hidden')")
+            # the page opens with the settled configuration (TSE book, 10-minute grid, slow always-invested switching)
+            dfl = pg.evaluate("""() => ({ds: document.getElementById('disc-dataset').value, grid: document.getElementById('disc-grid').value,
+                gridShown: getComputedStyle(document.getElementById('disc-gridf')).display !== 'none',
+                spreadOff: document.getElementById('disc-spread').disabled,
+                v: ['disc-pos', 'disc-fillmode', 'disc-fillswitch', 'disc-fillminhold', 'disc-fillmax', 'disc-base', 'disc-crashdrop']
+                     .map(i => document.getElementById(i).value)})""")
+            R.add("مرورگر", "صفحه با تنظیم نهایی باز می‌شود: TSE، شبکهٔ ۱۰ دقیقه، همیشه سرمایه‌گذاری، برتری ۱، نگه‌داری ۲ روز، معمول ۲۰ روز",
+                  dfl["ds"] == "tse" and dfl["grid"] == "600" and dfl["gridShown"] and dfl["spreadOff"]
+                  and dfl["v"] == ["20", "hold", "1", "2880", "-0.3", "20", "1.5"], str(dfl))
+            # the rest of this test was written against the NAV-file world and the earlier form values
+            pg.select_option("#disc-dataset", "dump")
+            for fid, fv in (("#disc-pos", "50"), ("#disc-fillswitch", "0.8"), ("#disc-fillminhold", "60"),
+                            ("#disc-fillmax", "0.1"), ("#disc-base", "0"), ("#disc-spread", "0.02")):
+                pg.fill(fid, fv)
             pg.fill("#disc-capital", "5000"); pg.fill("#disc-part", "0"); pg.fill("#disc-mintrades", "10")
             sel = pg.evaluate("discSelectedIds().length")
             R.add("مرورگر", "صندوق‌های فعال انتخاب شده‌اند", sel > 0, f"{sel} صندوق")

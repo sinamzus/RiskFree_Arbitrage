@@ -2406,11 +2406,11 @@ td.disc-obc { cursor: help; }
         <input id="disc-symbols" type="text" placeholder="مثلاً: کمند, #2276" style="width:200px"></div>
       <div class="bbt-field" title="بک‌تست روی کدام داده؟ «دادهٔ لحظه‌ای NAV»: اسنپ‌شات‌های فایل NAV؛ قیمت = آخرین معامله و اسپرد فرضی. «سیگنال از دادهٔ NAV، معامله با اردربوک»: همان اسنپ‌شات‌های فایل NAV برای تصمیم، ولی خرید و فروش با قیمت و عمق واقعی صف‌ها در همان لحظه (اردربوک TSE). «TSE: تیک و اردربوک»: معاملات و اردربوک واقعی بورس (از «📥 دادهٔ TSE»)؛ خرید و فروش با قیمت واقعی صف‌ها و محدود به عمق صف؛ NAV همچنان از فایل NAV. فقط روزهایی که دادهٔ TSE جمع شده استفاده می‌شوند."><label>دیتاست بک‌تست</label>
         <select id="disc-dataset" style="width:190px" onchange="discDatasetChanged()">
-          <option value="dump" selected>دادهٔ لحظه‌ای NAV (فایل)</option>
+          <option value="dump">دادهٔ لحظه‌ای NAV (فایل)</option>
           <option value="hybrid">سیگنال از دادهٔ NAV، معامله با اردربوک TSE</option>
-          <option value="tse">TSE: تیک و اردربوک</option></select></div>
-      <div class="bbt-field" id="disc-gridf" style="display:none" title="فقط دیتاست TSE: اردربوک و معاملات هر چند ثانیه یک بار نمونه‌برداری شوند. کوچک‌تر = دقیق‌تر ولی کندتر (به‌خصوص برای بهینه‌سازی). بار اول برای هر روز ساخته و ذخیره می‌شود."><label>شبکهٔ زمانی TSE</label>
-        <select id="disc-grid" style="width:110px"><option value="60">۱ دقیقه</option><option value="120">۲ دقیقه</option><option value="300" selected>۵ دقیقه</option><option value="600">۱۰ دقیقه</option><option value="900">۱۵ دقیقه</option></select></div>
+          <option value="tse" selected>TSE: تیک و اردربوک</option></select></div>
+      <div class="bbt-field" id="disc-gridf" title="فقط دیتاست TSE: اردربوک و معاملات هر چند ثانیه یک بار نمونه‌برداری شوند. کوچک‌تر = دقیق‌تر ولی کندتر (به‌خصوص برای بهینه‌سازی). بار اول برای هر روز ساخته و ذخیره می‌شود."><label>شبکهٔ زمانی TSE</label>
+        <select id="disc-grid" style="width:110px"><option value="60">۱ دقیقه</option><option value="120">۲ دقیقه</option><option value="300">۵ دقیقه</option><option value="600" selected>۱۰ دقیقه</option><option value="900">۱۵ دقیقه</option></select></div>
       <div class="bbt-field" title="تاریخ شروع (شمسی) — خالی = از اولین داده"><label>از تاریخ</label>
         <input id="disc-start" type="text" readonly placeholder="از ابتدای داده" onclick="jpOpen(this)" style="width:130px;cursor:pointer"></div>
       <div class="bbt-field" title="تاریخ پایان (شمسی، شامل همان روز) — خالی = تا آخرین داده"><label>تا تاریخ</label>
@@ -2418,7 +2418,7 @@ td.disc-obc { cursor: help; }
       <div class="bbt-field" title="سرمایهٔ اولیهٔ کل حساب، به میلیون ریال (۱۰۰۰۰ = ده میلیارد ریال). همهٔ صندوق‌ها از همین یک حساب خرید می‌کنند."><label>سرمایه اولیه (میلیون ریال)</label>
         <input id="disc-capital" type="number" step="1000" min="1" value="10000" style="width:130px"></div>
       <div class="bbt-field" title="هر پوزیشن جدید حداکثر این درصد از «سرمایهٔ همان لحظه» (نقد + بهای پوزیشن‌های باز) است؛ پس با رشد یا افت سرمایه، اندازه هم تغییر می‌کند (مرکب)."><label>حداکثر سهم هر پوزیشن ٪ از سرمایهٔ آن لحظه</label>
-        <input id="disc-pos" type="number" step="1" min="0.1" max="100" value="50" style="width:90px"></div>
+        <input id="disc-pos" type="number" step="1" min="0.1" max="100" value="20" style="width:90px"></div>
     </div>
 
     <div class="bbt-group-h">۲) قواعد ورود و تغییر پوزیشن</div>
@@ -2450,13 +2450,13 @@ td.disc-obc { cursor: help; }
       <div class="bbt-field" title="پر کردن سرمایهٔ بیکار: وقتی نقد بی‌کار مانده، آن را در «بهترین» صندوق (کمترین حباب نسبت به معمولِ خودش) می‌گذارد، بدون اینکه جلوی معاملهٔ سیگنال‌دار را بگیرد: هر وقت ورودِ عادی نقد لازم داشت، پارک‌شده‌ها فروخته می‌شوند. همان قواعد زمان/حد ضرر/فیلترها اعمال می‌شود. «خاموش» = رفتار قبلی."><label>پر کردن سرمایهٔ بیکار</label>
         <select id="disc-fillmode" style="width:230px"><option value="off">خاموش</option><option value="best">با بهترین صندوق (کمترین حباب نسبی)</option><option value="hold" selected>همیشه سرمایه‌گذاری؛ فقط با کاندیدای بهتر بفروش</option></select></div>
       <div class="bbt-field" title="فقط برای حالت «همیشه سرمایه‌گذاری»: صندوقِ نگه‌داری‌شده فقط وقتی فروخته می‌شود که صندوق دیگری حبابش (نسبت به معمولِ خودش) دست‌کم این‌قدر نقطهٔ درصد پایین‌تر باشد و نقد برای خریدش نباشد. در این حالت سیگنال فروش، زمان نگه‌داری و حد ضرر وجود ندارد؛ فقط جابه‌جایی به کاندیدای بهتر یا پایان داده. هزینهٔ رفت‌وبرگشت (کارمزد + اسپرد) حدود ۰٫۳۵٪ است؛ کمتر از آن جابه‌جایی ضرر است."><label>نگه‌داری: حداقل برتری برای جابه‌جایی ٪</label>
-        <input id="disc-fillswitch" type="number" step="0.1" min="0" value="0.8" style="width:70px"></div>
+        <input id="disc-fillswitch" type="number" step="0.1" min="0" value="1" style="width:70px"></div>
       <div class="bbt-field" title="فقط حالت «همیشه سرمایه‌گذاری»: صندوقِ خریده‌شده تا این‌قدر دقیقه برای جابه‌جایی فروخته نمی‌شود. در بک‌تست اولیه ۱۳ از ۵۵ معامله همان روز خریده و فروخته شدند و ۱۰ تا زیان‌ده بودند؛ مثلاً ۲۴۰ یا ۱۴۴۰ جلوی این جابه‌جایی‌های پشت‌سرهم را می‌گیرد. ۰ = خاموش."><label>نگه‌داری: حداقل زمان پیش از جابه‌جایی (دقیقه)</label>
-        <input id="disc-fillminhold" type="number" step="30" min="0" value="60" style="width:70px"></div>
+        <input id="disc-fillminhold" type="number" step="30" min="0" value="2880" style="width:70px"></div>
       <div class="bbt-field" title="قیمتِ آخرِ هر صندوق تا این‌قدر دقیقه «جاری» حساب می‌شود: برای کاندیدا شدن و برای فروخته شدن در جابه‌جایی (فروش با آخرین قیمتِ شناخته‌شده انجام می‌شود). عدد کوچک‌تر = واقع‌بینانه‌تر ولی جابه‌جایی کمتر."><label>عمر قیمت جاری (دقیقه)</label>
         <input id="disc-fillage" type="number" step="5" min="1" value="90" style="width:70px"></div>
       <div class="bbt-field" title="فقط صندوقی خریده می‌شود که حبابش نسبت به معمولِ خودش حداکثر این درصد باشد؛ ۰ = فقط وقتی در/زیر معمولِ خودش است (صندوقِ گران‌شده خریده نمی‌شود)."><label>پر کردن: حداکثر حباب نسبی ٪</label>
-        <input id="disc-fillmax" type="number" step="0.1" value="0.1" style="width:70px"></div>
+        <input id="disc-fillmax" type="number" step="0.1" value="-0.3" style="width:70px"></div>
       <div class="bbt-field" title="پوزیشن پارک‌شده وقتی فروخته می‌شود که حبابش نسبت به معمولِ خودش به این درصد (یا بیشتر) برسد (سودبردن)."><label>پر کردن: فروش وقتی حباب نسبی ≥ ٪</label>
         <input id="disc-fillexit" type="number" step="0.1" value="0.3" style="width:70px"></div>
       <div class="bbt-field" title="فیلتر ریزش بازار: اگر میانگین قیمتِ صندوق‌های گروه در «پنجرهٔ ریزش» بیش از این‌قدر درصد افت کرده باشد، ورودِ جدید موقتاً متوقف می‌شود (خروج‌ها و پوزیشن‌های باز دست نمی‌خورند). در ریزش، «تخفیف از NAV» اغلب ظاهری است (قیمت زودتر از NAV می‌افتد). ۰ = خاموش. برای داده‌ای با اسنپ‌شات‌های کم، مقدار را بزرگ‌تر از نوسان عادی بگذارید."><label>فیلتر ریزش: افت گروه ≥ ٪</label>
@@ -2470,7 +2470,7 @@ td.disc-obc { cursor: help; }
       <div class="bbt-field" title="گروهی که میانگین قیمتش سنجیده می‌شود: «دستهٔ صندوق» = فقط صندوق‌های هم‌دسته (طلا با طلا)، «همهٔ صندوق‌ها» = همهٔ صندوق‌های انتخاب‌شده."><label>گروه ریزش</label>
         <select id="disc-crashscope" style="width:150px"><option value="category" selected>دستهٔ صندوق</option><option value="all">همهٔ صندوق‌ها</option></select></div>
       <div class="bbt-field" title="هر صندوق ممکن است دائماً بالا یا پایین NAV معامله شود (حباب دائمی). با این گزینه سیگنال‌ها نسبت به «حباب معمول همان صندوق» سنجیده می‌شوند: NAV × (1 + میانهٔ تخفیف همین چند روز گذشتهٔ صندوق). فقط از روزهای قبل استفاده می‌شود. ۰ = خاموش (مقایسه مستقیم با NAV)."><label>تعدیل حباب دائمی: میانهٔ چند روز قبل</label>
-        <input id="disc-base" type="number" step="1" min="0" value="0" style="width:80px"></div>
+        <input id="disc-base" type="number" step="1" min="0" value="20" style="width:80px"></div>
       <div class="bbt-field" title="فیلتر شایستگی: امتیاز بازگشت به میانگینِ سری حباب هر صندوق در N روز گذشته محاسبه می‌شود (۰ تا ۱۰۰ = درصدِ شکافی که انتظار می‌رود در افق مشخص بسته شود). صندوقی که امتیازش کمتر از حداقل باشد تا وقتی دوباره بالا بیاید معامله نمی‌شود. مرکز: صفر، میانگین حباب همان دسته، یا میانگین حبابِ خود صندوق (از N روز قبل از پنجرهٔ امتیازدهی)."><label>فیلتر بازگشت به میانگین</label>
         <select id="disc-mrcenter" style="width:260px">
           <option value="off" selected>خاموش</option>
@@ -2490,7 +2490,7 @@ td.disc-obc { cursor: help; }
     <div class="bbt-group-h">۳) اجرا، کارمزد و فیلتر NAV</div>
     <div class="bbt-group">
       <div class="bbt-field" id="disc-spreadf" title="نیم‌اسپردِ فرضی هر طرف، فقط برای «دادهٔ لحظه‌ای NAV» که اردربوک ندارد. خرید = قیمت×(1+این)، فروش = قیمت×(1−این). در دیتاست‌های اردربوک غیرفعال است: خرید از صف فروش و فروش به صف خرید واقعی انجام می‌شود."><label>نیم‌اسپرد فرضی ٪</label>
-        <input id="disc-spread" type="number" step="0.01" value="0.02" style="width:70px"></div>
+        <input id="disc-spread" type="number" step="0.01" value="0" style="width:70px"></div>
       <div class="bbt-field" title="سقف حجم معامله به‌صورت درصدی از حجم کل همان روز؛ ۰ = نامحدود"><label>سهم از حجم روز ٪</label>
         <input id="disc-part" type="number" step="0.5" value="10" style="width:70px"></div>
       <div class="bbt-field" title="«حجم تا همان لحظه»: سقف سهم از حجمِ واقعاً معامله‌شده تا لحظهٔ سیگنال (در همان لحظه معلوم است، واقع‌بینانه). «کل حجم روز»: از حجم کل آن روز (که هنوز معلوم نیست؛ خوش‌بینانه). فقط وقتی «سهم از حجم روز» صفر نیست اثر دارد."><label>مبنای سقف حجم</label>
@@ -8796,8 +8796,11 @@ function discDatasetChanged() {
   if (g) g.style.display = ds === 'tse' ? '' : 'none';
   const sp = document.getElementById('disc-spread'), sf = document.getElementById('disc-spreadf');
   if (sp) sp.disabled = ds !== 'dump';                  // order-book datasets: real asks / bids, no assumed spread
+  if (sp && ds === 'dump' && !(+sp.value > 0)) sp.value = '0.02';   // the NAV file has no book: assume a typical spread
   if (sf) sf.style.opacity = ds !== 'dump' ? '0.45' : '';
 }
+// the default dataset is TSE: show its grid and grey the assumed spread from the start
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', discDatasetChanged); else setTimeout(discDatasetChanged, 0);
 async function discTseOpen() {
   discNewTab('tse', 'دادهٔ TSE', {reuse: true});
   const el = document.getElementById('disc-tse');
