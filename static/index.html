@@ -2540,6 +2540,7 @@ td.disc-obc { cursor: help; }
       </div>
       <div class="dt-grp "><span class="dt-h">تحلیل</span>
         <button class="scan-btn" id="disc-sig-btn" onclick="discSignal()" title="مطالعهٔ مستقل از استراتژی: آیا حباب (خام، نسبت به معمولِ خود صندوق، تغییر آن) بازده نسبی آیندهٔ قیمت را در افق ۱ ساعت، ۱ روز و ۵ روز پیش‌بینی می‌کند؟ و آیا تخفیف با بالا رفتن قیمت بسته می‌شود یا با پایین آمدن NAV؟">🎯 قدرت پیش‌بینی سیگنال</button>
+        <button class="scan-btn" id="disc-stray-btn" onclick="discStray()" title="سفارش‌های پرت: صف‌ها ثانیه‌به‌ثانیه از دادهٔ خام TSE بازپخش می‌شوند. چند بار سفارشی خیلی ارزان‌تر (یا خریداری خیلی گران‌تر) از قیمت معمول صندوق در صف آمد، چند ثانیه ماند، معامله شد یا لغو، و اگر با تأخیر ۲، ۵، ۱۰، ۳۰ یا ۶۰ ثانیه برداشته می‌شد بعد از کارمزد چقدر سود می‌داد (کاغذی و واقعیِ یک ساعت / یک روز بعد).">🎣 سفارش‌های پرت</button>
         <button class="scan-btn" id="disc-opt-btn" onclick="discOptimize()" title="مطالعهٔ جامعِ همهٔ پارامترهای مدل: جستجوی متوازن، اهمیت و رفتار هر پارامتر، آزمون خارج از نمونه، پایداری اطراف برنده، walk-forward و حساسیت به فرض‌های اجرایی">🔧 بهینه‌سازی و مطالعهٔ جامع</button>
         <button class="scan-btn" id="disc-val-btn" onclick="discValidate()" title="تشخیص اینکه ضعف نتیجه از اجرا/هزینه، ایدهٔ سیگنال یا پارامتر است">🔬 اعتبارسنجی</button>
         <div class="bbt-field" title="تعداد دنیاهای جایگشتی برای p-value (بیشتر = دقیق‌تر ولی کندتر؛ سقف زمان ۶۰ ثانیه)"><label>جایگشت‌های اعتبارسنجی</label>
@@ -6897,6 +6898,100 @@ async function discValidate() {
 }
 
 let discVolTimer = null;
+let discStrayTimer = null;
+
+async function discStray() {
+  const p = discCheckSel(); if (!p) return;
+  const btn = document.getElementById('disc-stray-btn');
+  const r = await fetch('/api/disc/stray', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(p)
+  }).catch(() => null);
+  if (!r?.ok) { showError('مطالعهٔ سفارش‌های پرت شروع نشد (شاید یک اجرا در حال انجام است).'); return; }
+  btn.disabled = true; btn.textContent = '⏳ سفارش‌های پرت ...';
+  const tab = discNewTab('stray', 'سفارش‌های پرت');
+  discTabSet(tab, 'سفارش‌های پرت', true);
+  const panel = document.getElementById('disc-val');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="ob-p">⏳ شروع ...</div>';
+  if (discStrayTimer) clearInterval(discStrayTimer);
+  const poll = async () => {
+    const st = await fetch('/api/disc/stray/status').catch(() => null);
+    if (!st?.ok) return;
+    const j = await st.json();
+    const pr = j.progress || {};
+    if (j.running) {
+      if (discTabCur() && discTabCur().id === tab.id)
+        panel.innerHTML = `<div class="ob-p">⏳ ${pr.phase || ''} ${pr.total ? '— ' + (pr.done || 0) + '/' + pr.total : ''}</div>`;
+      return;
+    }
+    clearInterval(discStrayTimer); discStrayTimer = null;
+    btn.disabled = false; btn.textContent = '🎣 سفارش‌های پرت';
+    discTabSet(tab, 'سفارش‌های پرت', false);
+    if (!discTabExists(tab.id)) return;
+    discTabActivate(tab.id);
+    if (!j.result || j.result.error) { panel.innerHTML = `<div class="dv-head bad">خطا: ${(j.result || {}).error || 'نامشخص'}</div>`; return; }
+    renderDiscStray(j.result);
+  };
+  discStrayTimer = setInterval(poll, 1500);
+  poll();
+}
+
+function renderDiscStray(r) {
+  const panel = document.getElementById('disc-val');
+  panel.style.display = 'block';
+  const S = r.setup || {}, v = r.verdict || {}, L0 = S.ref_latency;
+  const pc = (x, d = 2) => x == null ? '—' : discLtr((x >= 0 ? '+' : '') + (+x).toFixed(d) + '%');
+  const mr = x => x == null ? '—' : discLtr((x / 1e6).toLocaleString('en-US', {maximumFractionDigits: 0})) + ' م';
+  const lats = S.latencies || [];
+  const sideTbl = sd => {
+    const rows = sd.rows.map(x => {
+      if (!x.n) return `<tr><td>${x.x}٪</td><td>0</td><td colspan="${8 + lats.length}" style="color:var(--muted)">دیده نشد</td></tr>`;
+      const lr = (x.latency || []).find(z => z.L === L0) || {};
+      const rh = x.real_1h || {}, rd = x.real_1d || {};
+      return `<tr><td>${x.x}٪</td><td>${x.n}</td><td>${x.per_month}</td><td>${x.median_life_s} ث</td>
+        <td>${x.ended.taken}٪ / ${x.ended.cancelled}٪</td><td>${pc(x.mean_dev_pct)}</td><td>${mr(x.median_depth_rial)}</td>
+        ${lats.map(L => { const z = (x.latency || []).find(q => q.L === L) || {}; return `<td>${z.alive_pct ?? '—'}٪</td>`; }).join('')}
+        <td><b>${pc(lr.profit_year_pct_capital)}</b></td><td>${pc(lr.edge_pct)} <span style="color:var(--muted);font-size:10px">(${pc(lr.edge_switch_pct)})</span></td>
+        <td title="${rh.n || 0} بار، ${rh.win_pct ?? '—'}٪ سودده">${pc(rh.mean_pct)} <span style="color:var(--muted);font-size:10px">t ${rh.t ?? '—'}</span></td>
+        <td title="${rd.n || 0} بار، ${rd.win_pct ?? '—'}٪ سودده"><b>${pc(rd.mean_pct)}</b> <span style="color:var(--muted);font-size:10px">t ${rd.t ?? '—'}</span></td></tr>`;
+    }).join('');
+    return `<div class="disc-h" style="margin-top:10px">${sd.label}</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl" data-stray="${sd.side}"><thead><tr>
+      <th title="دست‌کم این‌قدر دورتر از قیمت معمول (NAV × (۱ + معمولِ خود صندوق))">فاصله</th><th>تعداد</th><th>در ماه</th><th>عمر میانه</th>
+      <th title="معامله شد (کسی برداشت) / لغو شد">معامله / لغو</th><th title="بیشترین فاصلهٔ سر صف از قیمت معمول، میانگین">فاصلهٔ میانگین</th>
+      <th title="ارزش سفارش‌های آن‌سوی آستانه در لحظهٔ پیدایش (میلیون ریال)">عمق میانه</th>
+      ${lats.map(L => `<th title="سهم سفارش‌هایی که ${L} ثانیه بعد هنوز در صف بودند">زنده پس از ${L} ث</th>`).join('')}
+      <th title="سود کاغذی سالانه با واکنش ${L0} ثانیه‌ای، به درصد سرمایه (حداکثر ${mr(S.cap_rial)} هر بار)">سود سالانه (${L0} ث)</th>
+      <th title="لبهٔ هر بار بعد از کارمزد؛ داخل پرانتز: اگر پولش از فروش صندوق دیگری به صف خرید بیاید (یک نیم‌اسپرد بیشتر)">لبه (با جابه‌جایی)</th>
+      <th title="نتیجهٔ واقعی: حباب یک ساعت بعد با قیمتی که می‌شد بست (صف خرید برای خرید ارزان)، منهای کارمزد">واقعی ۱ ساعت</th>
+      <th title="همان، یک روز معاملاتی بعد">واقعی ۱ روز</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  };
+  const askRef = ((r.sides || []).find(sd => sd.side === 'ask') || {rows: []}).rows.find(x => x.x === 1) || {};
+  const hist = (askRef.life_buckets || []).map(b => `<td>${b.n}</td>`).join('');
+  const histH = (askRef.life_buckets || []).map(b => `<th>${b.label}</th>`).join('');
+  const pf = (r.per_fund || []).filter(f => f.n).slice(0, 15).map(f => `<tr><td style="text-align:start">${f.fund}</td><td>${f.n}</td><td>${f.alive_ref}</td>
+      <td>${mr(f.profit_ref)}</td><td>${f.median_life ?? '—'} ث</td></tr>`).join('');
+  const exs = (r.examples || []).map(e => `<tr><td style="text-align:start">${e.fund}</td><td>${gregIntToJalaliStr(e.date)}</td>
+      <td>${discLtr(String(e.time).padStart(6, '0').replace(/(..)(..)(..)/, '$1:$2:$3'))}</td><td>${e.side === 'ask' ? 'فروش ارزان' : 'خرید گران'}</td>
+      <td>${pc(e.dev_pct)}</td><td>${e.life_s} ث</td><td>${{taken: 'معامله شد', cancelled: 'لغو شد', close: 'تا پایان بازار'}[e.ended] || e.ended}</td>
+      <td>${mr(e.depth_rial)}</td><td>${pc(e.realised_1d_pct)}</td></tr>`).join('');
+  panel.innerHTML = `<div class="dv-head ${v.overall}">🎣 سفارش‌های پرت — ${v.headline || ''}</div>
+    <div class="dv-note">${S.funds} صندوق · ${S.days} روز (${gregIntToJalaliStr((S.period || [])[0])} تا ${gregIntToJalaliStr((S.period || [])[1])})
+      · صف‌ها ثانیه‌به‌ثانیه از دادهٔ خام TSE · قیمت معمول = NAV معلوم در همان لحظه (حداکثر ${S.max_nav_age_min} دقیقه کهنه) × (۱ + معمولِ ${S.norm_days} روزهٔ خود صندوق)
+      · کارمزد رفت‌وبرگشت ${pc(S.fees_round_trip_pct)} · نیم‌اسپرد میانه ${pc(S.median_half_spread_pct, 3)} · حداکثر برداشت هر بار ${mr(S.cap_rial)} ریال
+      ${(S.skipped || []).length ? '· بدون دادهٔ TSE یا NAV ریزدانه: ' + S.skipped.join('، ') : ''}</div>
+    ${(r.sides || []).map(sideTbl).join('')}
+    ${histH ? `<div class="disc-h" style="margin-top:10px">عمر فروشنده‌های ارزان (دست‌کم ۱٪ زیر قیمت معمول)</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr>${histH}</tr></thead><tbody><tr>${hist}</tr></tbody></table></div>` : ''}
+    ${pf ? `<div class="disc-h" style="margin-top:10px">بر حسب صندوق (فروش ارزان، دست‌کم ۱٪)</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">صندوق</th><th>تعداد</th>
+      <th>زنده پس از ${L0} ث</th><th>سود کاغذی (${L0} ث)</th><th>عمر میانه</th></tr></thead><tbody>${pf}</tbody></table></div>` : ''}
+    ${exs ? `<div class="disc-h" style="margin-top:10px">دورترین نمونه‌ها (دست‌کم ۱٪)</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th style="text-align:start">صندوق</th><th>تاریخ</th><th>ساعت</th>
+      <th>نوع</th><th>فاصله از معمول</th><th>عمر</th><th>پایان</th><th>عمق</th><th>واقعی ۱ روز</th></tr></thead><tbody>${exs}</tbody></table></div>` : ''}
+    <div class="dv-note" style="margin-top:6px">«زنده پس از L ثانیه» یعنی سفارش هنوز در صف بود؛ چه کسی آن را برداشت معلوم نیست، پس برداشتن با تأخیر L فقط وقتی شمرده می‌شود که سفارش تا آن لحظه مانده باشد. «واقعی» مهم‌ترین ستون است: سفارش پرت ممکن است آگاهانه باشد (NAV در حال تغییر است) و ارزانی‌اش واقعی نباشد.</div>`;
+}
+
 let discSigTimer = null;
 
 async function discSignal() {

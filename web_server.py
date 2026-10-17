@@ -1934,6 +1934,53 @@ def create_app(db, scan_callback=None):
         threading.Thread(target=_run, daemon=True, name="disc-signal").start()
         return jsonify({"status": "started"})
 
+    _stray_state = {"running": False, "progress": {}, "result": None}
+    _stray_lock = threading.Lock()
+
+    @app.route("/api/disc/stray", methods=["GET", "POST"])
+    def api_disc_stray():
+        """Stray orders: how often the book shows a fund far cheaper / dearer than its norm, how long it stays, and
+        whether catching it (after a reaction delay) pays — replayed second by second from the TSE event stream."""
+        from discount_stray import run_stray_study
+        body = request.get_json(silent=True) or {}
+
+        def _get(name, default=None):
+            return body[name] if name in body else request.args.get(name, default)
+
+        cats, syms, start, end = _disc_sel(_get)
+        base = _disc_params_from(_get)
+        try:
+            norm_days = max(0, min(120, int(float(_get("norm_days", base.baseline_days)))))
+        except (TypeError, ValueError):
+            norm_days = 20
+        if _stray_state["running"]:
+            return jsonify({"status": "already running", "progress": _stray_state["progress"]}), 409
+
+        def _run():
+            with _stray_lock:
+                _stray_state["running"] = True
+                _stray_state["progress"] = {"phase": "شروع", "done": 0, "total": 0}
+                _stray_state["result"] = None
+            try:
+                _stray_state["result"] = run_stray_study(db, cats, syms, start, end, base, _stray_state["progress"],
+                                                         norm_days=norm_days)
+            except ValueError as e:
+                _stray_state["result"] = {"error": str(e)}
+            except Exception:
+                logger.exception("stray-order study failed")
+                _stray_state["result"] = {"error": "stray-order study failed"}
+            finally:
+                with _stray_lock:
+                    _stray_state["running"] = False
+
+        threading.Thread(target=_run, daemon=True, name="disc-stray").start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/disc/stray/status")
+    def api_disc_stray_status():
+        return jsonify({"running": _stray_state["running"], "progress": _stray_state["progress"],
+                        "result": _stray_state["result"]})
+
     @app.route("/api/disc/signal/status")
     def api_disc_signal_status():
         return jsonify({"running": _sig_state["running"], "progress": _sig_state["progress"],
@@ -2193,7 +2240,8 @@ def create_app(db, scan_callback=None):
         root = Path(__file__).resolve().parent
         state = {"backtest": _disc_last.get("backtest"), "stats": _disc_last.get("stats"),
                  "study": _disc_opt_state.get("result"), "validation": _val_state.get("result"),
-                 "verify": _disc_last.get("verify"), "signal": _sig_state.get("result")}
+                 "verify": _disc_last.get("verify"), "signal": _sig_state.get("result"),
+                 "stray": _stray_state.get("result")}
         state = {k: v for k, v in state.items() if v and not (isinstance(v, dict) and v.get("error"))}
         if not state:
             return jsonify({"ok": False, "message": "هنوز نتیجه‌ای نیست: ابتدا بک‌تست یا بهینه‌سازی را اجرا کنید."}), 400

@@ -1893,6 +1893,96 @@ def test_signal_study(R: Results, workdir: str):
           f"{bn['verdict']['headline']} · {raw(bn, '1h')}")
 
 
+def _stray_world(path: str) -> str:
+    """Three gold funds over four days: a calm book (bid 0.1 % under the NAV, ask 0.1 % over) and, on the second day
+    of the first fund, three planted stray orders with known answers — a sell order 2.5 % under the NAV that stays
+    20 s and is cancelled; one 1.5 % under that is taken by a trade within 1 s; a buy order 2 % over that stays 45 s."""
+    import tse_gold as G
+    from tools.import_nav_dump import _SCHEMA
+    if os.path.exists(path):
+        os.remove(path)
+    con = sqlite3.connect(path)
+    con.executescript(_SCHEMA)
+    con.execute("CREATE TABLE IF NOT EXISTS nav_symbol_map (symbol_id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, matches INTEGER DEFAULT 0)")
+    con.execute("CREATE TABLE IF NOT EXISTS nav_symbol_category (symbol_id INTEGER PRIMARY KEY, category TEXT NOT NULL, source TEXT DEFAULT 'auto', score REAL DEFAULT 0)")
+    con.execute("CREATE TABLE IF NOT EXISTS nav_feed (symbol_id INTEGER NOT NULL, rdate INTEGER NOT NULL, rtime INTEGER NOT NULL, "
+                "nav REAL NOT NULL, nav_date INTEGER DEFAULT 0, nav_time INTEGER DEFAULT 0, event TEXT DEFAULT '')")
+    days = [20260104, 20260105, 20260106, 20260107]
+    hm = lambda s: (s // 3600) * 10000 + (s // 60 % 60) * 100 + s % 60  # noqa: E731
+    for sid in (1, 2, 3):
+        nav = 10000.0 * (1 + sid / 10)
+        con.execute("INSERT INTO nav_symbol_map VALUES (?,?,1)", (sid, f"S{sid}"))
+        con.execute("INSERT INTO nav_symbol_category VALUES (?,?,'manual',1)", (sid, "gold"))
+        for d in days:
+            con.execute("INSERT INTO nav_intraday (symbol_id,date,time,nav,nav_date,nav_time,last,close,vol) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (sid, d, 100000, nav, d, 100000, nav, nav, 1000))
+            for s in range(8 * 3600 + 50 * 60, 12 * 3600 + 40 * 60, 120):
+                con.execute("INSERT INTO nav_feed (symbol_id,rdate,rtime,nav,nav_date,nav_time) VALUES (?,?,?,?,?,?)",
+                            (sid, d, hm(s), nav, d, hm(s)))
+    con.commit()
+    con.close()
+    db = _db(path)
+    G.ensure_schema(db)
+    for sid in (1, 2, 3):
+        nav = 10000.0 * (1 + sid / 10)
+        calm = lambda k: [round(nav * (0.999 - k * 0.001), 1), 1000, 3, round(nav * (1.001 + k * 0.001), 1), 1000, 3]  # noqa: E731
+        for d in days:
+            ref = [0]
+
+            def row(t, lvl, vals):
+                ref[0] += 1
+                return [ref[0], t, lvl] + vals
+            book = [row(90000, k + 1, calm(k)) for k in range(5)]
+            trades = [[i + 1, hm(9 * 3600 + i * 60), round(nav, 1), 100, 0] for i in range(211)]
+            if sid == 1 and d == days[1]:
+                # (on a real exchange a sell order under the best bid trades at once: a stray order can only stay
+                # while the other side is thin and far — so the bids drop to 4 % under the NAV, and the asks rise)
+                thin_b = lambda k, ask: [round(nav * (0.96 - k * 0.001), 1), 50, 1] + ask  # noqa: E731
+                thin_a = lambda k, bid: bid + [round(nav * (1.04 + k * 0.001), 1), 50, 1]  # noqa: E731
+                for t0, t1, px, vol in ((93000, 93020, 0.975, 500), (100000, 100001, 0.985, 300)):
+                    book += [row(t0, 1, thin_b(0, [round(nav * px, 1), vol, 1]))]
+                    book += [row(t0, k + 1, thin_b(k, calm(k)[3:])) for k in range(1, 5)]
+                    book += [row(t1, k + 1, calm(k)) for k in range(5)]
+                book += [row(110000, 1, [round(nav * 1.02, 1), 400, 1] + thin_a(0, [])[0:3])]
+                book += [row(110000, k + 1, thin_a(k, calm(k)[:3])) for k in range(1, 5)]
+                book += [row(110045, k + 1, calm(k)) for k in range(5)]
+                trades.append([999, 100000, round(nav * 0.985, 1), 300, 0])
+            G.store_day(db, sid, d, "trades", f"S{sid}", trades)
+            G.store_day(db, sid, d, "book", f"S{sid}", book)
+    return path
+
+
+def test_stray_orders(R: Results, workdir: str):
+    """The stray-order study finds the planted orders exactly: lifetime, how they ended, what each reaction delay
+    could still take, and the realised result."""
+    import discount_stray as ST
+    g = "سفارش‌های پرت"
+    db = _db(_stray_world(os.path.join(workdir, "stray.db")))
+    out = ST.run_stray_study(db, ["gold"], None, None, None, _base(max_nav_age_min=5, initial_capital=5e9, position_pct=20),
+                             norm_days=0)
+    row = lambda side, x: next(r for s in out["sides"] if s["side"] == side for r in s["rows"] if r["x"] == x)  # noqa: E731
+    lat = lambda r, L: next(z for z in r["latency"] if z["L"] == L)  # noqa: E731
+    a1, a2, a3, b1 = row("ask", 1.0), row("ask", 2.0), row("ask", 3.0), row("bid", 1.0)
+    R.add(g, "سفارش‌های پرتِ کاشته‌شده دقیقاً پیدا می‌شوند (تعداد، عمر، معامله‌شده یا لغوشده)",
+          a1["n"] == 2 and a2["n"] == 1 and a3["n"] == 0 and b1["n"] == 1 and a2["median_life_s"] == 20
+          and b1["median_life_s"] == 45 and a1["ended"]["taken"] == 50.0 and a1["ended"]["cancelled"] == 50.0,
+          f"ask1={a1['n']} ask2={a2['n']} ask3={a3['n']} bid1={b1['n']} life2={a2.get('median_life_s')} "
+          f"lifeB={b1.get('median_life_s')} ended={a1.get('ended')}")
+    R.add(g, "تأخیر واکنش: فقط سفارشی که هنوز در صف است قابل برداشتن است",
+          lat(a1, 0)["n"] == 2 and lat(a1, 2)["n"] == 1 and lat(a1, 10)["n"] == 1 and lat(a1, 30)["n"] == 0
+          and lat(b1, 30)["n"] == 1 and lat(b1, 60)["n"] == 0,
+          str([(z["L"], z["n"]) for z in a1["latency"]]) + " | " + str([(z["L"], z["n"]) for z in b1["latency"]]))
+    e2 = lat(a2, 10)
+    want = 1 / 0.975 - 1 - 0.0024
+    real = a2["real_1h"]["mean_pct"]
+    R.add(g, "سود کاغذی و واقعی: خرید ۲٫۵٪ زیر NAV و فروش یک ساعت بعد به صف خرید (۰٫۱٪ زیر NAV)، منهای کارمزد",
+          e2["edge_pct"] is not None and abs(e2["edge_pct"] / 100 - want) < 2e-4
+          and real is not None and abs(real / 100 - (0.999 / 0.975 - 1 - 0.0024)) < 3e-4,
+          f"لبه {e2['edge_pct']}٪ (انتظار {want * 100:.3f}) · واقعی {real}٪")
+    R.add(g, "دفتر آرام هیچ سفارش پرتی نمی‌سازد (صندوق‌های ۲ و ۳)",
+          all(r["fund"] in ("S1",) or r["n"] == 0 for r in out["per_fund"]), str(out["per_fund"]))
+
+
 def _run_range(db, p: D.DiscountParams, start=None, end=None) -> dict:
     return D.run_discount_backtest(db, None, None, start, end, p)
 
@@ -2507,6 +2597,21 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             rg_rows = pg.locator("#disc-val table[data-regime='before'] tbody tr").count()
             R.add("مرورگر", "قدرت پیش‌بینی سیگنال: جدول‌های «بر حسب وضع بازار» (پیش از لحظه / در طول افق) نشان داده می‌شوند",
                   rg_tabs == 2 and rg_rows >= 2, f"{rg_tabs} جدول، {rg_rows} ردیف")
+            # stray orders: the button runs the study (here: no fine-grained NAV → a clear message), and a real result
+            # (the planted-orders world) renders its tables
+            pg.click("#disc-stray-btn"); pg.wait_for_selector("#disc-val .dv-head", timeout=60000)
+            pg.wait_for_function("!document.getElementById('disc-stray-btn').disabled", timeout=60000)
+            import discount_stray as _ST
+            _sw = _db(_stray_world(os.path.join(os.path.dirname(db_path), "stray_ui.db")))
+            _sr = json.loads(json.dumps(_ST.run_stray_study(_sw, ["gold"], None, None, None,
+                                                            _base(max_nav_age_min=5, position_pct=20), norm_days=0), default=str))
+            pg.evaluate("r => renderDiscStray(r)", _sr)
+            st_tabs = pg.locator("#disc-val table[data-stray]").count()
+            st_rows = pg.locator("#disc-val table[data-stray='ask'] tbody tr").count()
+            R.add("مرورگر", "سفارش‌های پرت: دکمه اجرا می‌شود و نتیجه (فروش ارزان / خرید گران بر حسب فاصله) نمایش داده می‌شود",
+                  st_tabs == 2 and st_rows == 4 and "سفارش‌های پرت" in pg.locator("#disc-val .dv-head").inner_text(),
+                  f"{st_tabs} جدول، {st_rows} ردیف")
+            pg.locator("#disc-res-bar .dres-tab").last.locator(".dres-x").click()
             pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
             grp = pg.locator(".disc-toolbar .dt-grp").count()
             R.add("مرورگر", "دکمه‌ها در گروه‌های اجرا / تحلیل / داده / آزمون / تنظیمات",
@@ -2700,6 +2805,7 @@ def run_all(ui: bool = False, progress: dict | None = None, workdir: str | None 
              ("گرم‌شدن", lambda: test_warmup(R, db)),
              ("NAV ریزدانه (feed)", lambda: test_nav_feed(R, path)),
              ("قدرت پیش‌بینی سیگنال", lambda: test_signal_study(R, tmp)),
+             ("سفارش‌های پرت", lambda: test_stray_orders(R, tmp)),
              ("جمع‌آوری دادهٔ TSE (طلا)", lambda: test_tse_collect(R, path)),
              ("بک‌تست روی دادهٔ TSE", lambda: (test_tse_dataset(R, path), test_same_instant_sales(R))),
              ("تفکیک سود NAV / حباب", lambda: test_attribution(R, db)),
