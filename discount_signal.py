@@ -20,6 +20,11 @@ Measured per signal and horizon:
   * the same IC on the future relative NAV change: a strongly NEGATIVE NAV IC with no price IC means the "discount"
     closes because the NAV catches up with the price (NAV lag), not because the price rises.
 Only the data known at each instant is used for the signal; the future only enters the measured outcome.
+
+By market regime: the same IC and executable switch, split into thirds of the group's (the funds' average) price
+move — "before": over the ``regime_days`` trading days up to the instant (known then, so a rule can use it), and
+"during": over the horizon itself (not known then; it explains WHEN the signal works, e.g. that a cheap fund lags
+while the whole group rallies, because the popular funds' premium swells).
 """
 from __future__ import annotations
 
@@ -78,7 +83,7 @@ def _hms(s: int) -> int:
 
 def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progress: dict | None = None,
                      step_min: int = 30, norm_days: int = 20, quote_age_min: int = 30,
-                     min_funds: int = 5) -> dict:
+                     min_funds: int = 5, regime_days: int = 5) -> dict:
     t0 = time.time()
 
     def prog(**kw):
@@ -145,6 +150,8 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
     # fees) and comparing, at the horizon, the cheap funds' bid with the dear funds' bid — the real gain of a switch
     sw = {(s, h): [] for s, _l in SIGNALS for h, *_r in HORIZONS}
     decomp = {h: {"cheap_price": [], "cheap_nav": [], "dear_price": [], "dear_nav": []} for h, *_r in HORIZONS}
+    # per signal / horizon: (day, group move before, group move during, IC, executable switch) for the regime split
+    reg = {(s, h): [] for s, _l in SIGNALS for h, *_r in HORIZONS}
     n_cs = 0
     for k, (d, t) in enumerate(inst):
         if k % 200 == 0:
@@ -167,6 +174,17 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
         if len(now) < min_funds:
             continue
         n_cs += 1
+        # the group's price move over the previous regime_days trading days (known at this instant)
+        trail = None
+        di0 = day_ix[d] - regime_days
+        if di0 >= 0:
+            mv = []
+            for f, r, _sig in now:
+                rp = at(f, all_days[di0], t)
+                if rp is not None and rp[4] > 0:
+                    mv.append(r[4] / rp[4] - 1.0)
+            if len(mv) >= min_funds:
+                trail = sum(mv) / len(mv)
         for h, _hl, mins, ndays in HORIZONS:
             if ndays:
                 di = day_ix[d] + ndays
@@ -204,6 +222,7 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
                 acc[(s, h)].append((d, ic, sp, nic, nsp))
                 gain = (sum(x[3] for x in srt[:q]) / q - sum(x[4] for x in srt[-q:]) / q) * 100 - fees
                 sw[(s, h)].append((d, gain))
+                reg[(s, h)].append((d, trail, mp, ic, gain))
                 if s == "raw":
                     dc = decomp[h]
                     dc["cheap_price"].append(sum(x[1] for x in srt[:q]) / q * 100)
@@ -279,6 +298,7 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
     else:
         head = "✖ هیچ‌کدام از تعریف‌های حباب بازده نسبی آیندهٔ قیمت را به‌طور معنادار پیش‌بینی نمی‌کند."
         overall = "bad"
+    regimes = _regimes(reg, tstat, regime_days)
     raw1 = next((r for s in out_sig if s["key"] == "raw" for r in s["rows"] if r["h"] == "1d"), None)
     lag = None
     if raw1 and raw1.get("nav_ic") is not None:
@@ -288,5 +308,68 @@ def run_signal_study(db, cats, symbols, start, end, p: D.DiscountParams, progres
                       "fees_round_trip_pct": round(fees, 3), "dataset": p.dataset, "min_funds": min_funds,
                       "grid_sec": p.tse_grid_sec if p.dataset == "tse" else None,
                       "period": [all_days[0], all_days[-1]], "seconds": round(time.time() - t0, 1)},
-            "signals": out_sig, "decomposition": dec, "nav_lag": lag,
+            "signals": out_sig, "decomposition": dec, "nav_lag": lag, "regimes": regimes,
             "verdict": {"overall": overall, "headline": head}}
+
+
+REGIMES = (("down", "نزولی"), ("flat", "خنثی"), ("up", "صعودی"))
+REGIME_SIGNALS = ("raw", "norm")
+REGIME_HORIZONS = ("1d", "5d", "10d")
+
+
+def _terciles(vals: list[float]):
+    v = sorted(vals)
+    if len(v) < 6:
+        return None
+    return v[len(v) // 3], v[2 * len(v) // 3]
+
+
+def _regimes(reg: dict, tstat, regime_days: int) -> dict:
+    """IC and executable switch per third of the group's move (before the instant / during the horizon)."""
+    nd = {h: ndays for h, _hl, _m, ndays in HORIZONS}
+    hl = {h: lab for h, lab, *_r in HORIZONS}
+    sl = dict(SIGNALS)
+    rows, cuts = [], {}
+    for kind, pos in (("before", 1), ("during", 2)):
+        for h in REGIME_HORIZONS:
+            # thirds of the cross-sections by the group's move (the "before" move does not depend on the horizon,
+            # but the cross-sections that have a future at this horizon do)
+            allv = [x[pos] for x in reg[("raw", h)] if x[pos] is not None]
+            c = _terciles(allv)
+            if c is None:
+                continue
+            cuts[f"{kind}:{h}"] = [round(c[0] * 100, 3), round(c[1] * 100, 3)]
+            for s in REGIME_SIGNALS:
+                for rk, rl in REGIMES:
+                    L = [x for x in reg[(s, h)] if x[pos] is not None and x[3] is not None and
+                         ((rk == "down" and x[pos] <= c[0]) or (rk == "flat" and c[0] < x[pos] <= c[1]) or
+                          (rk == "up" and x[pos] > c[1]))]
+                    if not L:
+                        continue
+                    by_ic, by_g = {}, {}
+                    for d, _b, _du, ic, g in L:
+                        by_ic.setdefault(d, []).append(ic)
+                        by_g.setdefault(d, []).append(g)
+                    ic_t = tstat([statistics.mean(v) for v in by_ic.values()], nd[h] or 1)
+                    g_t = tstat([statistics.mean(v) for v in by_g.values()], nd[h] or 1)
+                    rows.append({"kind": kind, "signal": s, "signal_label": sl[s], "h": h, "h_label": hl[h],
+                                 "regime": rk, "regime_label": rl, "n_cs": len(L), "days": len(by_ic),
+                                 "group_move_pct": round(statistics.mean(x[pos] for x in L) * 100, 3),
+                                 "ic": round(statistics.mean(x[3] for x in L), 4),
+                                 "ic_t": round(ic_t, 2) if ic_t is not None else None,
+                                 "switch_net_pct": round(statistics.mean(x[4] for x in L), 3),
+                                 "switch_t": round(g_t, 2) if g_t is not None else None})
+    # the finding in one line: for the own-norm signal, does the switch pay in a rising group and in a falling one?
+    note = None
+    get = lambda k, h, r: next((x for x in rows if x["kind"] == k and x["signal"] == "norm" and x["h"] == h  # noqa: E731
+                                and x["regime"] == r), None)
+    for k, klab in (("before", f"با صعود/نزول {regime_days} روز قبل (قابل‌استفاده در قاعده)"),
+                    ("during", "با صعود/نزول همان افق (توضیحی)")):
+        parts = []
+        for h in REGIME_HORIZONS:
+            u, dn = get(k, h, "up"), get(k, h, "down")
+            if u and dn:
+                parts.append(f"{hl[h]}: صعودی {u['switch_net_pct']:+.2f}٪ · نزولی {dn['switch_net_pct']:+.2f}٪")
+        if parts:
+            note = (note + " | " if note else "") + f"{klab} — " + "؛ ".join(parts)
+    return {"regime_days": regime_days, "cuts_pct": cuts, "rows": rows, "note": note}

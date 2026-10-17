@@ -6950,6 +6950,27 @@ function renderDiscSignal(r) {
       <td style="color:${{ok: 'var(--green)', warn: 'var(--yellow, #e0a800)', bad: 'var(--red)'}[(vb[x.verdict] || [''])[0]] || 'inherit'}">${(vb[x.verdict] || ['', '—'])[1]}</td></tr>`).join('')).join('');
   const dec = Object.values(r.decomposition || {}).map(d => `<tr><td>${d.label}</td><td>${pc(d.cheap_price)}</td><td>${pc(d.cheap_nav)}</td>
       <td>${pc(d.dear_price)}</td><td>${pc(d.dear_nav)}</td></tr>`).join('');
+  // by market regime: thirds of the group's move before the instant (usable by a rule) and during the horizon
+  const RG = r.regimes || {}, rgRows = RG.rows || [];
+  const rgCell = x => !x ? '<td>—</td>' : `<td title="${x.n_cs} مقطع در ${x.days} روز؛ حرکت میانگین گروه ${pc(x.group_move_pct)}؛ IC ${f(x.ic)} (t ${f(x.ic_t, 2)})">
+      <b style="color:${x.switch_net_pct > 0 && (x.switch_t || 0) >= 2 ? 'var(--green)' : x.switch_net_pct < 0 && (x.switch_t || 0) <= -2 ? 'var(--red)' : 'inherit'}">${pc(x.switch_net_pct)}</b>
+      <span style="color:var(--muted);font-size:10px">t ${f(x.switch_t, 1)} · IC ${f(x.ic, 2)}</span></td>`;
+  const rgTable = (kind, title) => {
+    const ks = [...new Set(rgRows.filter(x => x.kind === kind).map(x => x.signal + '|' + x.h))];
+    if (!ks.length) return '';
+    const body = ks.map(k => {
+      const [sg, h] = k.split('|');
+      const pick = rg => rgRows.find(x => x.kind === kind && x.signal === sg && x.h === h && x.regime === rg);
+      const any = pick('down') || pick('flat') || pick('up');
+      return `<tr><td style="text-align:start">${any.signal_label}</td><td>${any.h_label}</td>${rgCell(pick('down'))}${rgCell(pick('flat'))}${rgCell(pick('up'))}</tr>`;
+    }).join('');
+    return `<div class="disc-h" style="margin-top:10px">${title}</div>
+      <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl" data-regime="${kind}"><thead><tr><th style="text-align:start">سیگنال</th><th>افق</th>
+      <th>⬇ نزولی (یک‌سومِ پایین)</th><th>➡ خنثی</th><th>⬆ صعودی (یک‌سومِ بالا)</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  };
+  const rgHtml = rgRows.length ? rgTable('before', `جابه‌جایی خالص بر حسب وضع بازار <b>پیش از</b> لحظه (حرکت میانگین گروه در ${RG.regime_days} روز معاملاتی قبل؛ در لحظه معلوم است و قاعده می‌تواند از آن استفاده کند)`)
+      + rgTable('during', 'جابه‌جایی خالص بر حسب وضع بازار <b>در طول</b> افق (در لحظه معلوم نیست؛ فقط توضیح می‌دهد سیگنال کِی کار می‌کند)')
+      + `<div class="dv-note" style="margin-top:4px">هر خانه: جابه‌جایی خالص (فروش گران‌ترین یک‌پنجم به صف خرید، خرید ارزان‌ترین یک‌پنجم از صف فروش، با کارمزد)، t و IC. سبز/قرمز = معنادار (|t| ≥ ۲). مقطع‌ها بر حسب حرکت میانگین گروه به سه بخش برابر تقسیم شده‌اند.${RG.note ? '<br>' + RG.note : ''}</div>` : '';
   const lag = r.nav_lag ? `<div class="dv-note" style="margin-top:6px">⚠ <b>عقب‌ماندن NAV:</b> در افق یک روز، صندوقِ ارزان‌تر بعداً <b>NAVش</b> نسبت به بقیه پایین می‌آید، ولی قیمتش نسبت به بقیه بالا نمی‌رود. یعنی «تخفیف» بیشتر از این است که NAV هنوز به قیمت بازار نرسیده، نه اینکه صندوق واقعاً ارزان باشد.</div>` : '';
   panel.innerHTML = `<div class="dv-head ${v.overall}">🎯 قدرت پیش‌بینی سیگنال — ${v.headline || ''}</div>
     <div class="dv-note">${S.funds} صندوق · ${S.days} روز (${gregIntToJalaliStr((S.period || [])[0])} تا ${gregIntToJalaliStr((S.period || [])[1])})
@@ -6968,7 +6989,7 @@ function renderDiscSignal(r) {
       <th>نتیجه</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${dec ? `<div class="disc-h" style="margin-top:10px">حباب خام: تخفیف چطور بسته می‌شود؟ (تغییر نسبت به میانگین صندوق‌ها)</div>
     <div class="disc-tblwrap" style="max-height:none"><table class="disc-tbl"><thead><tr><th>افق</th><th>ارزان‌ترین‌ها: قیمت</th><th>ارزان‌ترین‌ها: NAV</th>
-      <th>گران‌ترین‌ها: قیمت</th><th>گران‌ترین‌ها: NAV</th></tr></thead><tbody>${dec}</tbody></table></div>` : ''}${lag}
+      <th>گران‌ترین‌ها: قیمت</th><th>گران‌ترین‌ها: NAV</th></tr></thead><tbody>${dec}</tbody></table></div>` : ''}${rgHtml}${lag}
     <div class="dv-note" style="margin-top:6px">هر مقطع فقط با داده‌ای ساخته شده که در همان لحظه معلوم بود؛ آینده فقط در نتیجهٔ سنجیده‌شده وارد می‌شود. «حباب خام» در هر مقطع همان رتبه‌بندیِ «حباب نسبت به میانگین صندوق‌ها» را می‌دهد، چون بازده‌ها هم نسبت به میانگین سنجیده می‌شوند.</div>`;
 }
 

@@ -1795,7 +1795,9 @@ def test_nav_feed(R: Results, db_path: str):
 def _signal_world(path: str, kind: str, seed: int = 21, n_funds: int = 8, days: int = 70) -> str:
     """Synthetic NAV dump for the signal study. "revert": the NAV is a random walk and the PRICE returns to it (the
     discount predicts the price). "lag": the price is a random walk and the NAV follows it two snapshots late (the
-    discount is pure NAV lag: it closes through the NAV, the price is unpredictable)."""
+    discount is pure NAV lag: it closes through the NAV, the price is unpredictable). "regime": the group alternates
+    rising / falling / flat stretches of 8 days; while it rises the premium of the popular (high-beta) funds swells,
+    otherwise it deflates — so "cheap" lags in a rally and wins in a fall."""
     from tools.import_nav_dump import _SCHEMA
     rng = random.Random(seed)
     if os.path.exists(path):
@@ -1816,13 +1818,20 @@ def _signal_world(path: str, kind: str, seed: int = 21, n_funds: int = 8, days: 
         con.execute("INSERT INTO nav_symbol_category VALUES (?,?,'manual',1)", (sid, "gold"))
         nav = px = 1000.0 * (1 + sid / 10)
         rel, hist, vol = 0.0, [], 0
-        for day in day_list:
+        beta, prem = (sid - 1) / max(1, n_funds - 1), 0.0
+        for k_day, day in enumerate(day_list):
+            regime = ("up", "down", "flat")[(k_day // 8) % 3]
             di = day.year * 10000 + day.month * 100 + day.day
             vol = 0
             for j in range(13):
                 mins = 9 * 60 + j * 15
                 t = (mins // 60) * 10000 + (mins % 60) * 100
-                if kind == "revert":
+                if kind == "regime":
+                    nav *= 1 + {"up": 0.003, "down": -0.003, "flat": 0.0}[regime] + rng.gauss(0, 0.001)
+                    prem = prem + beta * 0.002 if regime == "up" else prem * 0.9
+                    rel = 0.75 * rel + rng.gauss(0, 0.002)
+                    last = nav * (1 + prem + rel)
+                elif kind == "revert":
                     nav *= 1 + rng.gauss(0, 0.002)
                     rel = 0.75 * rel + rng.gauss(0, 0.004)
                     last = nav * (1 + rel)
@@ -1860,6 +1869,21 @@ def test_signal_study(R: Results, workdir: str):
     R.add(g, "در دنیایی که «تخفیف» فقط عقب‌ماندن NAV است، سیگنالی گزارش نمی‌شود و عقب‌ماندن NAV تشخیص داده می‌شود",
           lg["verdict"]["overall"] == "bad" and lg["nav_lag"] is True and abs(raw(lg, "1d")["ic_t"] or 0) < 2,
           f"{lg['verdict']['headline']} · {raw(lg, '1d')}")
+    # by market regime: in a world where a rally swells the popular funds' premium, "cheap" must lose while the group
+    # rises and win while it falls — both by the regime before the instant (usable) and during the horizon
+    rg = SG.run_signal_study(_db(_signal_world(os.path.join(workdir, "sig_regime.db"), "regime", days=96)), None, None,
+                             None, None, _base(max_nav_age_min=30, half_spread_pct=0.05), min_funds=5)
+    cell = lambda k, r: next((x for x in rg["regimes"]["rows"] if x["kind"] == k and x["signal"] == "raw"  # noqa: E731
+                              and x["h"] == "1d" and x["regime"] == r), {})
+    du, dd, bu, bd = cell("during", "up"), cell("during", "down"), cell("before", "up"), cell("before", "down")
+    R.add(g, "تفکیک بر حسب وضع بازار: وقتی صعود گروه حباب صندوق‌های محبوب را باد می‌کند، «ارزان» در صعود می‌بازد و در نزول می‌برد",
+          (du.get("ic") or 0) < 0 < (dd.get("ic") or 0) and (bu.get("switch_net_pct") or 0) < (bd.get("switch_net_pct") or 0)
+          and len(rg["regimes"]["rows"]) == 2 * 2 * 3 * 3 and rg["regimes"]["note"],
+          f"در طول: صعودی {du} · نزولی {dd} | پیش از: صعودی {bu.get('switch_net_pct')} · نزولی {bd.get('switch_net_pct')}")
+    rvr = rv.get("regimes", {}).get("rows", [])
+    R.add(g, "در دنیای بدون وضع بازار (قیمت به NAV برمی‌گردد)، تفکیک ساخته می‌شود و سیگنال در هر سه بخش مثبت است",
+          rvr and all((x["ic"] or 0) > 0 for x in rvr if x["signal"] == "raw" and x["h"] == "1d"),
+          str([(x["kind"], x["regime"], x["ic"]) for x in rvr if x["signal"] == "raw" and x["h"] == "1d"]))
     bn = out["bounce"]
     R.add(g, "نوسان قیمت حول NAV که از اسپرد کوچک‌تر است: IC معنادار ولی «پیش‌بینی قابل‌معامله» گزارش نمی‌شود",
           bn["verdict"]["overall"] != "ok" and (raw(bn, "1h")["ic_t"] or 0) > 2 and (raw(bn, "1h")["switch_net_pct"] or 0) < 0,
@@ -2462,6 +2486,10 @@ def test_ui_browser(R: Results, db_path: str, port: int = 5199):
             stitle = pg.locator("#disc-res-bar .dres-tab.active .dres-t").inner_text()
             R.add("مرورگر", "قدرت پیش‌بینی سیگنال در تب خودش: ۳ سیگنال × ۴ افق",
                   srows == 12 and "قدرت پیش‌بینی" in stitle, f"{srows} ردیف، «{stitle}»")
+            rg_tabs = pg.locator("#disc-val table[data-regime]").count()
+            rg_rows = pg.locator("#disc-val table[data-regime='before'] tbody tr").count()
+            R.add("مرورگر", "قدرت پیش‌بینی سیگنال: جدول‌های «بر حسب وضع بازار» (پیش از لحظه / در طول افق) نشان داده می‌شوند",
+                  rg_tabs == 2 and rg_rows >= 2, f"{rg_tabs} جدول، {rg_rows} ردیف")
             pg.locator("#disc-res-bar .dres-tab").nth(1).locator(".dres-x").click()
             grp = pg.locator(".disc-toolbar .dt-grp").count()
             R.add("مرورگر", "دکمه‌ها در گروه‌های اجرا / تحلیل / داده / آزمون / تنظیمات",
